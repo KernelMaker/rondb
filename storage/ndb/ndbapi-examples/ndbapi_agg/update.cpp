@@ -48,7 +48,11 @@ int main() {
   MYSQL mysql;
   Row row;
   mysql_init(&mysql);
+#ifdef NDEBUG
+  mysql_real_connect(&mysql, "localhost", "root", "", "", 0, mysqld_sock, 0);
+#else
   assert(mysql_real_connect(&mysql, "localhost", "root", "", "", 0, mysqld_sock, 0));
+#endif // NDEBUG
   while (true) {
     row.cint32 = g_int(gen);
     row.cint8 = g_tinyint(gen);
