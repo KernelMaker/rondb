@@ -2734,6 +2734,11 @@ Dblqh::execCREATE_TAB_REQ(Signal* signal)
     jam();
     req->hashFunctionFlag = 0;
   }
+  if (signal->length() < CreateTabReq::NewSignalLengthLDMWithTTL) {
+    jam();
+    req->ttlSec = RNIL;
+    req->ttlColumnNo = RNIL;
+  }
 
   DEB_HASH(("(%u) lqh_tab(%u) hashFunctionFlag: %u",
             instance(),
@@ -2741,7 +2746,7 @@ Dblqh::execCREATE_TAB_REQ(Signal* signal)
             req->hashFunctionFlag));
   seizeAddfragrec(signal);
   addfragptr.p->m_createTabReq = *req;
-  addfragptr.p->m_createTabReq_len = CreateTabReq::NewSignalLengthLDM;
+  addfragptr.p->m_createTabReq_len = CreateTabReq::NewSignalLengthLDMWithTTL;
 
   req = &addfragptr.p->m_createTabReq;
 
@@ -2761,6 +2766,15 @@ Dblqh::execCREATE_TAB_REQ(Signal* signal)
                       tabptr.i));
   tabptr.p->m_disk_table= 0;
   tabptr.p->m_use_new_hash_function = (req->hashFunctionFlag != 0);
+
+  // Zart
+  tabptr.p->m_ttl_sec = req->ttlSec;
+  tabptr.p->m_ttl_col_no = req->ttlColumnNo;
+  if (tabptr.i >= 17) {
+    g_eventLogger->info("Zart, [LQH]Gen Tablerec, table_id: %u, TTL sec: %u, "
+                        "TTL column no: %u", tabptr.i,
+                        tabptr.p->m_ttl_sec, tabptr.p->m_ttl_col_no);
+  }
 
   if (req->primaryTableId != RNIL)
   {
@@ -3496,6 +3510,11 @@ void Dblqh::execLQHFRAGREQ(Signal* signal)
     accreq->lhDirBits = addfragptr.p->m_lqhFragReq.lh3PageBits;
     accreq->keyLength = addfragptr.p->m_lqhFragReq.keyLength;
     accreq->hashFunctionFlag = tabptr.p->m_use_new_hash_function;
+    /*
+     * TTL
+     */
+    accreq->ttlSec = tabptr.p->m_ttl_sec;
+    accreq->ttlColumnNo = tabptr.p->m_ttl_col_no;
     /* --------------------------------------------------------------------- */
     /* Send ACCFRAGREQ, when confirmation is received send 2 * TUPFRAGREQ to */
     /* create 2 tuple fragments on this node.                                */

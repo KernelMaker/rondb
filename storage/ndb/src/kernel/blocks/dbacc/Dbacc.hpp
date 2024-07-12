@@ -398,7 +398,8 @@ typedef LocalDLCFifoList<Page8_pool, IA_Page8> LocalContainerPageList;
 /* --------------------------------------------------------------------------------- */
 #define NUM_ACC_FRAGMENT_MUTEXES 4
 struct Fragmentrec {
-  Fragmentrec() {}
+  Fragmentrec() : ttlSec(RNIL), ttlColumnNo(RNIL) {
+  }
   Uint64 tupFragptr;
   Uint32 m_magic;
   Uint32 nextPool;
@@ -687,6 +688,11 @@ struct Fragmentrec {
   };
 
   LockStats m_lockStats;
+  /*
+   * TTL
+   */
+  Uint32 ttlSec;
+  Uint32 ttlColumnNo;
 
 public:
   Uint32 getPageNumber(Uint32 bucket_number) const;

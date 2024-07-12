@@ -737,6 +737,8 @@ NdbTableImpl::init(){
   m_fully_replicated = false;
   m_use_varsized_disk_data = true;
   m_use_new_hash_function = ndbd_support_new_hash_function(NDB_VERSION_D);
+  m_ttl_sec = RNIL;
+  m_ttl_col_no = RNIL;
 
   NdbMutex_Init(&m_primary_node_mutex);
 #ifdef VM_TRACE
@@ -5019,6 +5021,13 @@ NdbDictInterface::serializeTableDesc(NdbTableImpl & impl,
   tmpTab->HashMapObjectId = impl.m_hash_map_id;
   tmpTab->HashMapVersion = impl.m_hash_map_version;
   tmpTab->TableStorageType = impl.m_storageType;
+
+  tmpTab->TTLSec = impl.m_ttl_sec;
+  tmpTab->TTLColumnNo = impl.m_ttl_col_no;
+  g_eventLogger->info("Zart, [API]serializeTableDesc, table_name: %s, "
+                       "set TTLSec: %u, TTLColumnNo: %u",
+                       impl.m_internalName.c_str(),
+                       impl.m_ttl_sec, impl.m_ttl_col_no);
 
   const char *tablespace_name= impl.m_tablespace_name.c_str();
 loop:

@@ -7992,6 +7992,7 @@ static const struct NDB_Modifier ndb_table_modifiers[] = {
     {NDB_Modifier::M_BOOL, STRING_WITH_LEN("READ_BACKUP"), 0, {0}},
     {NDB_Modifier::M_BOOL, STRING_WITH_LEN("FULLY_REPLICATED"), 0, {0}},
     {NDB_Modifier::M_STRING, STRING_WITH_LEN("PARTITION_BALANCE"), 0, {0}},
+    {NDB_Modifier::M_STRING, STRING_WITH_LEN("TTL"), 0, {0}},
     {NDB_Modifier::M_BOOL, nullptr, 0, 0, {0}}};
 
 static const char *ndb_column_modifier_prefix = "NDB_COLUMN=";
@@ -9490,6 +9491,62 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
   const NDB_Modifier *mod_read_backup = table_modifiers.get("READ_BACKUP");
   const NDB_Modifier *mod_fully_replicated =
       table_modifiers.get("FULLY_REPLICATED");
+
+  const NDB_Modifier *mod_ttl = table_modifiers.get("TTL");
+  bool found_ttl = false;
+  uint32_t ttl_sec = RNIL;
+  std::string ttl_column;
+  uint32_t ttl_column_no = RNIL;
+  if (mod_ttl->m_found) {
+    ndb_log_info("Zart, [API]find TTL in comment while "
+                 "creating %s.%s: [%lu] %s, start parsing...",
+                  dbname, tabname, mod_ttl->m_val_str.len,
+                  mod_ttl->m_val_str.str);
+    std::string ttl_comment(mod_ttl->m_val_str.str, mod_ttl->m_val_str.len);
+    std::size_t pos = ttl_comment.find('@');
+    if (pos == std::string::npos) {
+      return create.failed_illegal_create_option(
+          "Invalid TTL format, please use: 'Seconds@Column (uint@string)'");
+    } else {
+      if (pos == 0) {
+        return create.failed_illegal_create_option(
+            "Invalid TTL format, please use: 'Seconds@Column (uint@string)'");
+      }
+      for (std::size_t i = 0; i < pos; i++) {
+        if (ttl_comment.at(i) < '0' || ttl_comment.at(i) > '9') {
+          return create.failed_illegal_create_option(
+              "Invalid TTL format, please use: 'Seconds@Column (uint@string)'");
+        }
+      }
+      ttl_sec = std::stoi(std::string(mod_ttl->m_val_str.str,
+                          mod_ttl->m_val_str.len - pos + 1));
+      ttl_column = ttl_comment.substr(pos + 1);
+      for (uint i = 0; i < table->s->fields; i++) {
+        Field *const field = table->field[i];
+        if (strlen(field->field_name) == ttl_column.length() &&
+            strcmp(field->field_name, ttl_column.data()) == 0) {
+          if (field->real_type() != MYSQL_TYPE_DATETIME2) {
+            return create.failed_illegal_create_option(
+                "Invalid TTL format, column type must be DATETIME");
+          }
+          if (field->is_hidden() || !field->stored_in_db) {
+            return create.failed_illegal_create_option(
+             "Invalid TTL format, column shouldn't be hidden or vitual column");
+          }
+          found_ttl = true;
+          break;
+        }
+      }
+      if (!found_ttl) {
+          return create.failed_illegal_create_option(
+              "Invalid TTL format, column name must match a real column");
+      }
+    }
+  }
+  if (found_ttl) {
+    ndb_log_info("Zart, [API]parse TTL successfully: TTL = %d sec, TTL_COLUMN = %s",
+                  ttl_sec, ttl_column.c_str());
+  }
   NdbDictionary::Object::PartitionBalance part_bal =
       g_default_partition_balance;
   if (parsePartitionBalance(thd, mod_frags, &part_bal) == false) {
@@ -9784,7 +9841,31 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
         return create.failed_oom("Failed to add column");
       }
       if (col.getPrimaryKey()) pk_length += (field->pack_length() + 3) / 4;
+
+      if (found_ttl) {
+        if (strlen(col.getName()) == ttl_column.length() &&
+            strcmp(col.getName(), ttl_column.data()) == 0) {
+          NdbDictionary::Column* ttl_col = tab.getColumn(col.getName());
+          if (ttl_col->getStorageType() == NDBCOL::StorageTypeDisk) {
+            return create.failed_illegal_create_option(
+                "TTL column can't be an on-disk column");
+          }
+          // Zart ttl_col->getAttrId() here is always RNIL.
+          ttl_column_no = ttl_col->getColumnNo();
+          int ttl_column_id = ttl_col->getAttrId();
+          ndb_log_info("Zart, [API]TTL will work on column %s, no: %u, "
+                       "id: %d, type: %u",
+                        col.getName(), ttl_column_no, ttl_column_id,
+                        col.getType());
+        }
+      }
     }
+  }
+  if (found_ttl) {
+    assert(ttl_sec != RNIL && ttl_column_no != RNIL);
+    tab.setTTLSec(ttl_sec);
+    tab.setTTLColumnNo(ttl_column_no);
+    assert(tab.isTTLEnabled());
   }
 
   tmp_restore_column_map(table->read_set, old_map);

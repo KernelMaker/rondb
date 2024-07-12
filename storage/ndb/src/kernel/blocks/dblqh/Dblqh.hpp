@@ -2637,6 +2637,11 @@ public:
     Uint32 m_senderRef;
     Uint32 m_next_index_table;
     bool m_restore_started;
+    /*
+     * TTL
+     */
+    Uint32 m_ttl_sec;
+    Uint32 m_ttl_col_no;
   }; // Size 100 bytes
   typedef Ptr<Tablerec> TablerecPtr;
   void release_frag_array(Tablerec*);

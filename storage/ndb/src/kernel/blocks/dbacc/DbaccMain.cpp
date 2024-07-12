@@ -639,6 +639,23 @@ void Dbacc::execACCFRAGREQ(Signal* signal)
   BlockReference retRef = req->userRef;
   fragrecptr.p->rootState = ACTIVEROOT;
 
+  /*
+   * Zart
+   * TODO (Zhao)
+   * Try to avoid add TTL info in ACC, just use the info
+   * from LQH instead, which could make the alter table (TTL) implementation
+   * simplier
+   *
+   * ACC is just a class, not a thread, so it's possible to do it.
+   * I don't want to introduce potential inconsist issues...
+   */
+  if (fragrecptr.p->myTableId >= 17) {
+    g_eventLogger->info("Zart, [ACC]Gen Fragmentrec, table_id: %u, frag_id: %u,"
+        " TTL sec: %u, TTL column no: %u", fragrecptr.p->myTableId,
+        fragrecptr.p->fragmentid, fragrecptr.p->ttlSec,
+        fragrecptr.p->ttlColumnNo);
+  }
+
   AccFragConf * const conf = (AccFragConf*)&signal->theData[0];
   conf->userPtr = userPtr;
   conf->rootFragPtr = RNIL;
@@ -8296,6 +8313,11 @@ void Dbacc::initFragAdd(Signal* signal,
   {
     NdbMutex_Init(&regFragPtr.p->acc_frag_mutex[i]);
   }
+  /*
+   * TTL
+   */
+  regFragPtr.p->ttlSec = req->ttlSec;
+  regFragPtr.p->ttlColumnNo = req->ttlColumnNo;
 }//Dbacc::initFragAdd()
 
 void Dbacc::initFragGeneral(FragmentrecPtr regFragPtr)const
@@ -8322,6 +8344,11 @@ void Dbacc::initFragGeneral(FragmentrecPtr regFragPtr)const
   regFragPtr.p->activeScanMask = 0;
 
   regFragPtr.p->m_lockStats.init();
+  /*
+   * TTL
+   */
+  regFragPtr.p->ttlSec = RNIL;
+  regFragPtr.p->ttlColumnNo = RNIL;
 }//Dbacc::initFragGeneral()
 
 

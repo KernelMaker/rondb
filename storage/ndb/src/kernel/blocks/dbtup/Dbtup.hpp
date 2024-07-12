@@ -1302,7 +1302,9 @@ TupTriggerData_pool c_triggerPool;
       deferredInsertTriggers(triggerPool),
       deferredUpdateTriggers(triggerPool),
       deferredDeleteTriggers(triggerPool),
-      tuxCustomTriggers(triggerPool)
+      tuxCustomTriggers(triggerPool),
+      m_ttl_sec(RNIL),
+      m_ttl_col_no(RNIL)
   {}
     
     AttributeMask notNullAttributeMask;
@@ -1492,6 +1494,12 @@ TupTriggerData_pool c_triggerPool;
     } m_reorg_suma_filter;
     State tableStatus;
     Local_key m_default_value_location;
+
+    /*
+     * TTL
+     */
+    Uint32 m_ttl_sec;
+    Uint32 m_ttl_col_no;
   };
   Uint32
     m_read_ctl_file_data[BackupFormat::LCP_CTL_FILE_BUFFER_SIZE_IN_WORDS];
