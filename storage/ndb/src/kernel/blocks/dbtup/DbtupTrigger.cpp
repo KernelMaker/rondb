@@ -996,6 +996,11 @@ void Dbtup::checkDetachedTriggers(KeyReqStruct *req_struct,
   case ZUPDATE:
   case ZINSERT:
   case ZREFRESH:
+  /*
+   * Zart
+   * Handle ZINSERT_TTL
+   */
+  case ZINSERT_TTL:
     req_struct->m_tuple_ptr =get_copy_tuple(&regOperPtr->m_copy_tuple_location);
     break;
   }
@@ -1021,6 +1026,19 @@ void Dbtup::checkDetachedTriggers(KeyReqStruct *req_struct,
      * This is possible only on DELETE + INSERT
      */
     regOperPtr->op_type = ZUPDATE;
+  } else if (save_type == ZINSERT_TTL) {
+    /*
+     * Zart
+     * TODO (Zhao)
+     * We come here in this situation:
+     * insert an row which already exists but is expired.
+     * We did an ZUPDATE operation actually. But here is
+     * to generate the binlog, I assume we need to generate
+     * INSERT instead of UPDATE here because the slaves will
+     * handle this situation as master does.
+     * So let's see...
+     */
+    regOperPtr->op_type = ZINSERT;
   }
   
   switch(regOperPtr->op_type) {
@@ -2336,7 +2354,13 @@ Dbtup::executeTuxCommitTriggers(Signal* signal,
       return;
     jam();
     tupVersion= decr_tup_version(regOperPtr->op_struct.bit_field.tupVersion);
-  } else if (regOperPtr->op_type == ZUPDATE) {
+  } else if (regOperPtr->op_type == ZUPDATE ||
+             regOperPtr->op_type == ZINSERT_TTL) {
+    /*
+     * Zart
+     * ZINSERT_TTL is an update operation, so we
+     * need to decrease tup version here as well
+     */
     jam();
     tupVersion= decr_tup_version(regOperPtr->op_struct.bit_field.tupVersion);
   } else if (regOperPtr->op_type == ZDELETE) {
@@ -2383,6 +2407,18 @@ Dbtup::executeTuxAbortTriggers(Signal* signal,
     jam();
     /* Refresh should not affect TUX */
     return;
+  } else if (regOperPtr->op_type == ZINSERT_TTL) {
+    /*
+     * Zart
+     * We come here when transaction rollback or abort:
+     * 1. INSERT
+     * 2. WAIT UNTIL EXPIRED
+     * 3. BEGIN
+     * 4. INSERT
+     * 5. ROLLBACK or GET TransactionInactiveTimeout
+     */
+    jam();
+    tupVersion = regOperPtr->op_struct.bit_field.tupVersion;
   } else {
     ndbabort();
     tupVersion= 0; // remove warning

@@ -1426,6 +1426,7 @@ void Dbacc::execACCKEYREQ(Signal* signal,
   operationRecPtr.p = opPtrP;
   initOpRec(req, signal->getLength());
   ndbrequire(Magic::check_ptr(operationRecPtr.p));
+  bool is_ttl = AccKeyReq::getTTL(req->requestInfo);
 
   /*---------------------------------------------------------------*/
   /*                                                               */
@@ -1515,6 +1516,24 @@ void Dbacc::execACCKEYREQ(Signal* signal,
   }
 
   Uint32 op = opbits & Operationrec::OP_MASK;
+  /*
+   * Zart
+   * Convert ZINSERT to ZWRITE for TTL table
+   * NOTICE:
+   * we only need change the operation to ZWRITE in DbAcc::Operationrec
+   * to make the following steps pass. The operation in DBLQH is
+   * unchanged
+   *
+   */
+  if (op == ZINSERT && found && is_ttl) {
+    ndbrequire((operationRecPtr.p->m_op_bits & (Uint32)Operationrec::OP_MASK) ==
+               ZINSERT);
+    op = ZWRITE;
+    Uint32 tmp_opbits = operationRecPtr.p->m_op_bits;
+	  tmp_opbits &= ~(Uint32)Operationrec::OP_MASK;
+	  tmp_opbits |= op;
+	  operationRecPtr.p->m_op_bits = tmp_opbits;
+  }
   if (found == ZTRUE) 
   {
     switch (op) {
@@ -3316,7 +3335,7 @@ void Dbacc::execACC_ABORTREQ(Signal* signal,
                     operationRecPtr.p->transId2,
                     operationRecPtr.i,
                     opbits));
-
+    g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ()");
     abortOperation(signal, hash);
     operationRecPtr.p->m_op_bits = Operationrec::OP_INITIAL;
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
@@ -5906,6 +5925,7 @@ void Dbacc::abortOperation(Signal* signal, Uint32 hash)
   validate_lock_queue(operationRecPtr);
   if (opbits & Operationrec::OP_LOCK_OWNER) 
   {
+    g_eventLogger->info("Zart, Dbacc::abortOperation(), unlock");
     /**
      * We only need to protect changes when the lock owner aborts or
      * commits, this is to ensure that the state of the operation

@@ -45,6 +45,7 @@ enum Operation_t {
   ,ZREAD_EX = 5
   ,ZREFRESH = 6
   ,ZUNLOCK  = 7
+  ,ZINSERT_TTL = 10 // ZINSERT | 0x08
 };
 
 /**

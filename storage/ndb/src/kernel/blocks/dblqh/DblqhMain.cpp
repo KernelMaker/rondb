@@ -9455,6 +9455,17 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
   regTcPtr->m_dealloc_data.m_dealloc_ref_count = RNIL;
   {
     regTcPtr->operation = (Operation_t) op == ZREAD_EX ? ZREAD : (Operation_t) op;
+    /*
+     * Zart
+     * Since operation can be changed later, original_operation
+     * is the original one.
+     * Used for ZWRITE
+     */
+    regTcPtr->original_operation = regTcPtr->operation;
+    if (tabptr.i == 17) {
+      g_eventLogger->info("Zart, Set Dblqh::TcConnectionrec::original_opertation: %u",
+                          regTcPtr->original_operation);
+    }
     regTcPtr->lockType = 
       op == ZREAD_EX ? ZUPDATE : 
       (Operation_t) op == ZWRITE ? ZINSERT : 
@@ -10472,6 +10483,16 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
     taccreq = AccKeyReq::setNoWait(taccreq,
               ((regTcPtr.p->m_flags & TcConnectionrec::OP_NOWAIT) != 0));
     taccreq = AccKeyReq::setLockReq(taccreq, false);
+    /*
+     * Zart
+     * Set ttl flag for AccKeyReq, so that the c_acc->execACCKEYREQ
+     * can handle ZINSERT into TTL table correctly
+     */
+    if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
+      taccreq = AccKeyReq::setTTL(taccreq, true);
+    } else {
+      taccreq = AccKeyReq::setTTL(taccreq, false);
+    }
 
     AccKeyReq * const req = reinterpret_cast<AccKeyReq*>(&signal->theData[0]);
     req->requestInfo = taccreq;
@@ -10506,6 +10527,31 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
   }
   if (signal->theData[0] < RNIL)
   {
+    if (regTcPtr.p->operation == ZINSERT &&
+        (regTcPtr.p->accConnectPtrP->m_op_bits &
+         (Uint32)Dbacc::Operationrec::OP_MASK) == ZUPDATE) {
+      ndbrequire(signal->theData[1] == ZUPDATE);
+      /*
+       * Zart
+       * Detected "Duplicated" key while inserting into this TTL table,
+       * and we have converted operation from ZINSERT to ZUPDATE
+       */
+      g_eventLogger->info("Zart, Found duplicated row while inserting, convert "
+                          "operation from ZINSERT to ZINSERT_TTL and try...");
+      /*
+       * Zart
+       * Here, we convert operation of Dblqh::TcConnectionrec from ZINSERT
+       * to ZINSERT_TTL
+       * NOTICE:
+       * Since regTcPtr.p->reqinfo only leaves 3 bits for operation,
+       * so we can not set new operation type(if ZINSERT_TTL = 8) here. To
+       * walk around it, here we set the 4th bit to 1 to indicate
+       * this operation is ZINSERT_TTL, so the value of ZINSERT_TTL could
+       * only be 10;
+       */
+      regTcPtr.p->operation = ZINSERT_TTL;
+      ndbrequire((regTcPtr.p->operation & 0x07) == ZINSERT);
+    }
     jamDebug();
     continueACCKEYCONF(signal,
                        signal->theData[3],
@@ -11799,9 +11845,43 @@ Dblqh::continueACCKEYCONF(Signal * signal,
    * IS NEEDED SINCE TWO SCHEMA VERSIONS CAN BE ACTIVE SIMULTANEOUSLY ON A 
    * TABLE.
    * ----------------------------------------------------------------------- */
+  /*
+   * Zart
+   * TODO (Zhao)
+   * Check this if path. Maybe we need to do operation converting
+   *
+   */
   if (unlikely(regTcPtr->operation == ZWRITE))
   {
-    ndbassert(regTcPtr->seqNoReplica == 0 || 
+    /*
+     * Zart
+     * [TTL Replication ZWRITE to replicas]
+     * Before developing TTL. The code here seems to convert operation
+     * from ZWRITE to real operation and update to regTcPtr->operation on
+     * primary node. So that then in Dblqh::packLqhkeyreqLab() to replicate
+     * this operation to replica, the operation would be the real one(replicas
+     * will never receive ZWRITE
+     *
+     * BUT NOW. In TTL situation, we need to send ZWRITE to replicas because
+     * ZWRITE won't need to check TTL when do the update but normal ZUPDATE will do.
+     * If we send ZUPDATE to replica, replica may be failed to apply this
+     * operation because of the already existing row has expired.
+     * Like this situation:
+     * on a TTL table, we do that:
+     * 1. replace into TTL_TABLE values(xxx,...);
+     * 2. wait until this row expired
+     * 3. replace into TTL_TABLE values(xxx,...);
+     * If we don't send ZWRITE to replica, then in the 3rd step, the replica
+     * won't be successed because of trying to update on an expired row.
+     * So, I keep this convert and will convert it back in the later steps in
+     * Dblqh::packLqhkeyreqLab()
+     *
+     * NOTICE: regTcPtr->seqNoReplica == 0 means it's on primary fragment.
+     *
+     * NOTICE: the replica here is RonDB cluster replica fragment, not the
+     * Binlog slaves
+     */
+    ndbassert((tabptr.p->m_ttl_sec != RNIL || regTcPtr->seqNoReplica == 0) ||
 	      regTcPtr->activeCreat == Fragrecord::AC_NR_COPY);
     Uint32 op= signal->theData[1];
     Uint32 requestInfo = regTcPtr->reqinfo;
@@ -11846,6 +11926,11 @@ Dblqh::continueACCKEYCONF(Signal * signal,
   }
   else
   {
+    /*
+     * Zart
+     * TODO (Zhao)
+     * maybe need to handle this code path for TTL
+     */
     jamDebug();
     ndbassert(!m_is_query_block);
     acckeyconf_load_diskpage(signal,
@@ -11894,7 +11979,13 @@ Dblqh::acckeyconf_tupkeyreq(Signal* signal, TcConnectionrec* regTcPtr,
   regTcPtr->m_row_id.m_page_no = page_no;
   regTcPtr->m_row_id.m_page_idx = page_idx;
   regTcPtr->transactionState = TcConnectionrec::WAIT_TUP;
-  regTcPtr->m_use_rowid |= (op == ZINSERT || op == ZREFRESH);
+  /*
+   * Zart
+   * TODO (Zhao)
+   * Investigate what is m_use_rowid for...
+   */
+  regTcPtr->m_use_rowid |= (op == ZINSERT || op == ZREFRESH ||
+                            op == ZINSERT_TTL);
   /* --------------------------------------------------------------------- 
    * Clear interpreted mode bit since we do not want the next replica to
    * use interpreted mode. The next replica will receive a normal write.
@@ -11922,6 +12013,19 @@ Dblqh::acckeyconf_tupkeyreq(Signal* signal, TcConnectionrec* regTcPtr,
   }
   else
   {
+    /*
+     * Zart
+     * For ZINSERT_TTL, if we come here it means
+     * that user is trying to insert an already
+     * exist row and we converted operation type from
+     * ZINSERT to ZINSERT_TTL and execute
+     * c_tup->execTUPKEYREQ and got failed. The reason
+     * is that the already existing row hasn't expired.
+     * We can resue TUPKEYREF here to throw the error
+     * because we have set the DUPLICATED ENTRY error
+     * in c_tup->execTUPKEYREQ, return TUPKEYREF here
+     * then LQH will handle it correctly, like unlocking...
+     */
     execTUPKEYREF(signal);
     return;
   }
@@ -12746,6 +12850,26 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
     }
   }
 #endif
+  /*
+   * Zart
+   * Before replicating operation to replicas, if the table is
+   * a TTL table and the original operation is ZWRITE, we need to
+   * make sure that we send ZWRITE to replicas instead of ZUPDATE/ZINSERT,
+   * the converting from ZWRITE to ZUPDATE/ZINSERT happens in
+   * Dblqh::continueACCKEYCONF()
+   * I explain the reason there. Check [TTL Replication ZWRITE to replicas]
+   * there for more details
+   *
+   */
+  if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL &&
+      regTcPtr->original_operation == ZWRITE) {
+    ndbrequire(LqhKeyReq::getOperation(Treqinfo) == ZINSERT ||
+               LqhKeyReq::getOperation(Treqinfo) == ZUPDATE);
+    g_eventLogger->info("Zart, set LqhKeyReq op to ZWRITE from %u in order to "
+                        "replicate correctly",
+                        LqhKeyReq::getOperation(Treqinfo));
+    LqhKeyReq::setOperation(Treqinfo, ZWRITE);
+  }
   
   UintR TreadLenAiInd = (regTcPtr->readlenAi == 0 ? 0 : 1);
   UintR TsameLqhAndClient = (tcConnectptr.i == 

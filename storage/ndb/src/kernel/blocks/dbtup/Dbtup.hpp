@@ -977,7 +977,8 @@ struct Operationrec {
     m_commit_state(CommitNotStarted),
     m_any_value(0),
     op_type(ZREAD),
-    trans_state(Uint32(TRANS_DISCONNECTED))
+    trans_state(Uint32(TRANS_DISCONNECTED)),
+    original_op_type(ZREAD)
   {
     op_struct.bit_field.in_active_list = false;
     op_struct.bit_field.tupVersion = ZNIL;
@@ -1141,6 +1142,11 @@ struct Operationrec {
     RF_MULTI_NOT_EXIST  = 3,    /* Refresh op !first in trans, row deleted */
     RF_MULTI_EXIST      = 4     /* Refresh op !first in trans, row exists */
   };
+  /*
+   * Zart
+   * keep original operation type
+   */
+  Uint32 original_op_type;
 };
 
   Uint32 m_base_header_bits;

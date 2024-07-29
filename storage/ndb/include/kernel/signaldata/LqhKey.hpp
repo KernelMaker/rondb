@@ -542,6 +542,12 @@ inline
 void
 LqhKeyReq::setOperation(UintR & requestInfo, UintR val){
   ASSERT_MAX(val, RI_OPERATION_MASK, "LqhKeyReq::setOperation");
+  /*
+   * Zart
+   * Need to clear the previous operation bits before setting a
+   * new one
+   */
+  requestInfo &= ~((Uint32)RI_OPERATION_MASK << RI_OPERATION_SHIFT);
   requestInfo |= (val << RI_OPERATION_SHIFT);
 }
 
