@@ -3335,7 +3335,8 @@ void Dbacc::execACC_ABORTREQ(Signal* signal,
                     operationRecPtr.p->transId2,
                     operationRecPtr.i,
                     opbits));
-    g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ()");
+    g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ(), table: %u",
+                        fragrecptr.p->myTableId);
     abortOperation(signal, hash);
     operationRecPtr.p->m_op_bits = Operationrec::OP_INITIAL;
 #if defined(VM_TRACE) || defined(ERROR_INSERT)

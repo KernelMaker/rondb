@@ -1076,6 +1076,13 @@ public:
                  OO_DEFERRED_CONSTAINTS = 0x400,
                  OO_DISABLE_FK   = 0x800,
                  OO_NOWAIT       = 0x1000
+                 /*
+                  * Zart
+                  * TODO (Zhao)
+                  * Force operation ignore TTL
+                  *
+                  * OO_TTL_FORCE    = 0x2000
+                  */
     };
 
     /* An operation-specific abort option.

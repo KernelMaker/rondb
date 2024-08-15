@@ -7122,6 +7122,11 @@ void Dblqh::seizeTcrec(TcConnectionrecPtr& tcConnectptr,
   locTcConnectptr.p->gci_hi = 0;
   locTcConnectptr.p->gci_lo = 0;
   locTcConnectptr.p->errorCode = 0;
+  /*
+   * Zart
+   * reset original_operation to maximum uint8
+   */
+  locTcConnectptr.p->original_operation = 0xFF;
 
   tcConnectptr = locTcConnectptr;
   ndbrequire(Magic::check_ptr(locTcConnectptr.p->tupConnectPtrP));
@@ -9462,8 +9467,10 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
      * Used for ZWRITE
      */
     regTcPtr->original_operation = regTcPtr->operation;
-    if (tabptr.i == 17) {
-      g_eventLogger->info("Zart, Set Dblqh::TcConnectionrec::original_opertation: %u",
+    if (tabptr.i >= 17) {
+      g_eventLogger->info("Zart, [TableId: %u]"
+                          "Set Dblqh::TcConnectionrec::original_opertation: %u",
+                          tabptr.i,
                           regTcPtr->original_operation);
     }
     regTcPtr->lockType = 
@@ -10536,7 +10543,7 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
        * Detected "Duplicated" key while inserting into this TTL table,
        * and we have converted operation from ZINSERT to ZUPDATE
        */
-      g_eventLogger->info("Zart, Found duplicated row while inserting, convert "
+      g_eventLogger->info("Zart, Found duplicated row while inserting[1], convert "
                           "operation from ZINSERT to ZINSERT_TTL and try...");
       /*
        * Zart
@@ -11825,6 +11832,40 @@ void Dblqh::execACCKEYCONF(Signal* signal)
      */
     jamDebug();
     c_tup->prepareTUPKEYREQ(localKey1, localKey2, fragptr.p->tupFragptr);
+    /*
+     * Zart
+     * In normal path, the below check and type convertion will be done
+     * in Dblqh::exec_acckeyreq()
+     * We come here in this situation: This trx was waiting for a record
+     * lock before, when the related trx commit/rollback, releases the
+     * lock and wake up this trx, then we come here. So here is the 2rd
+     * place where we need to do the check and convertion
+     */
+    if (regTcPtr->operation == ZINSERT &&
+        (regTcPtr->accConnectPtrP->m_op_bits &
+         (Uint32)Dbacc::Operationrec::OP_MASK) == ZUPDATE) {
+      ndbrequire(signal->theData[1] == ZUPDATE);
+      /*
+       * Zart
+       * Detected "Duplicated" key while inserting into this TTL table,
+       * and we have converted operation from ZINSERT to ZUPDATE
+       */
+      g_eventLogger->info("Zart, Found duplicated row while inserting[2], convert "
+                          "operation from ZINSERT to ZINSERT_TTL and try...");
+      /*
+       * Zart
+       * Here, we convert operation of Dblqh::TcConnectionrec from ZINSERT
+       * to ZINSERT_TTL
+       * NOTICE:
+       * Since regTcPtr->reqinfo only leaves 3 bits for operation,
+       * so we can not set new operation type(if ZINSERT_TTL = 8) here. To
+       * walk around it, here we set the 4th bit to 1 to indicate
+       * this operation is ZINSERT_TTL, so the value of ZINSERT_TTL could
+       * only be 10;
+       */
+      regTcPtr->operation = ZINSERT_TTL;
+      ndbrequire((regTcPtr->operation & 0x07) == ZINSERT);
+    }
     continueACCKEYCONF(signal, localKey1, localKey2, m_tc_connect_ptr);
   }
   release_frag_access(fragptr.p);
@@ -12850,6 +12891,7 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
     }
   }
 #endif
+  {
   /*
    * Zart
    * Before replicating operation to replicas, if the table is
@@ -12861,7 +12903,26 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
    * there for more details
    *
    */
-  if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL &&
+  TablerecPtr tmp_tabptr = tabptr;
+  if (tmp_tabptr.p == nullptr) {
+    /*
+     * Zart
+     * NOTICE:
+     * tabptr is not always valid here...
+     * So it's safer to get the related tablerec by
+     * tableref explicitly
+     * TODO (Zhao)
+     * Maybe need to apply the change to other places where using
+     * tabptr to get TTL info
+     */
+    ndbassert(fragptr.p->tabRef == regTcPtr->tableref);
+    tmp_tabptr.i = fragptr.p->tabRef;
+    ptrAss(tmp_tabptr, tablerec);
+
+  } else {
+    ndbassert(tmp_tabptr.i == fragptr.p->tabRef);
+  }
+  if (tmp_tabptr.p->m_ttl_sec != RNIL && tmp_tabptr.p->m_ttl_col_no != RNIL &&
       regTcPtr->original_operation == ZWRITE) {
     ndbrequire(LqhKeyReq::getOperation(Treqinfo) == ZINSERT ||
                LqhKeyReq::getOperation(Treqinfo) == ZUPDATE);
@@ -12869,6 +12930,7 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
                         "replicate correctly",
                         LqhKeyReq::getOperation(Treqinfo));
     LqhKeyReq::setOperation(Treqinfo, ZWRITE);
+  }
   }
   
   UintR TreadLenAiInd = (regTcPtr->readlenAi == 0 ? 0 : 1);

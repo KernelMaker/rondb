@@ -5701,6 +5701,16 @@ int ha_ndbcluster::ndb_update_row(const uchar *old_data, uchar *new_data,
 
     if (options.optionsPresent != 0) poptions = &options;
 
+    /*
+     * Zart
+     * TODO (Zhao)
+     * If avoidNdbApiWriteOp is true in INSERT ON DUPLICATE KEY UPDATE statement
+     * here, we need to make the updateTuple can force update tuple even if the
+     * tuple is expired on data node
+     *
+     * Update:
+     * Yes, it is...
+     */
     if (likely(avoidNdbApiWriteOp)) {
       if (!(op =
                 trans->updateTuple(key_rec, (const char *)key_row, m_ndb_record,
@@ -6599,6 +6609,23 @@ int ha_ndbcluster::rnd_pos(uchar *buf, uchar *pos) {
       DBUG_PRINT("info", ("partition id %u", part_spec.start_part));
     }
     DBUG_DUMP("key", pos, key_length);
+    /*
+     * Zart
+     * TODO (Zhao)
+     * potential optimization:
+     * In "INSERT ON DUPLICATE KEY UPDATE" implementation:
+     * 1. first,
+     *    write_record()->
+     *    ha_ndbcluster::ndb_write_row()->
+     *    ha_ndbcluster::peek_indexed_rows()
+     *    will call readTuple once
+     * 2. then,
+     *    write_record()->
+     *    handler::ha_update_row()
+     *    will go here and call readTuple again
+     *
+     * extra readTuple is expensive
+     */
     int res = pk_read(
         pos, buf,
         (m_user_defined_partitioning) ? &(part_spec.start_part) : nullptr);

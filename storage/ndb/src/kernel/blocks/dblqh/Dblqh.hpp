@@ -2590,6 +2590,15 @@ public:
   typedef Ptr<PageRefRecord> PageRefRecordPtr;
 
   struct Tablerec {
+    /*
+     * Zart
+     * Initialize m_ttl to RNIL for safety
+     * TODO (Zhao)
+     * Initialize Tablerec of other blocks
+     */
+    Tablerec() : m_ttl_sec(RNIL),
+                 m_ttl_col_no(RNIL) {
+    }
     enum TableStatus {
       TABLE_DEFINED = 0,
       NOT_DEFINED = 1,

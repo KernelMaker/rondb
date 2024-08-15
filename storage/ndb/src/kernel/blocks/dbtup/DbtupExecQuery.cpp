@@ -1412,9 +1412,13 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
      * in the future
      */
     regOperPtr->original_op_type = original_op;
-    if (prepare_fragptr.p->fragTableId == 17) {
-      g_eventLogger->info("Zart, Set Dbtup::Operationrec::original_op_type: %u",
-                          regOperPtr->original_op_type);
+    if (prepare_fragptr.p->fragTableId >= 17) {
+      g_eventLogger->info("Zart, [TableId: %u]"
+                          "Set Dbtup::Operationrec::original_op_type: %u, "
+                          "current Dbtup::Operationrec::op_type: %u",
+                          prepare_fragptr.p->fragTableId,
+                          regOperPtr->original_op_type,
+                          regOperPtr->op_type);
     }
   }
   {
