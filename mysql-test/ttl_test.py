@@ -612,6 +612,537 @@ def case_12_thdB(conn):
     B_succ = True
 
 
+def case_13_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_13_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 1 and matched_rows == 1, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(6)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_14_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(11)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_14_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_15_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(13)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_15_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_16_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_16_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        time.sleep(6)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_17_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(11)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_17_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_18_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(13)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_18_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200 WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_19_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_19_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 1 and matched_rows == 1, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_20_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(11)
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_20_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_21_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_21_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_22_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(11)
+        cur.execute("ROLLBACK")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_22_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_a = 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 0 and matched_rows == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_23_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(1)
+        cur.execute("INSERT INTO sz values(2, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 2, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_23_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("SET ttl_debug_sleep_secs = 6");
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_a <= 1")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        #print(f"c: {changed_rows}, m: {matched_rows}")
+        assert changed_rows == 1 and matched_rows == 1, "ASSERT"
+        cur.execute("SET ttl_debug_sleep_secs = 0");
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_24_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        time.sleep(5)
+        cur.execute("COMMIT")
+        #time.sleep(1)
+        #cur.execute("SELECT * FROM sz")
+        #results = cur.fetchall()
+        #assert len(results) == 1, "ASSERT"
+        #for row in results:
+        #    col_a = row[0]
+        #    col_b = row[1]
+        #    col_c = row[2]
+        #    assert col_a == 1 and col_c == 201, "ASSERT"
+        #time.sleep(7)
+        #cur.execute("SELECT * FROM sz")
+        #results = cur.fetchall()
+        #assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_24_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("SET ttl_debug_sleep_secs = 6");
+        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("SET ttl_debug_sleep_secs = 0");
+        cur.execute("COMMIT")
+        #cur.execute("SELECT * FROM sz")
+        #results = cur.fetchall()
+        #assert len(results) == 1, "ASSERT"
+        #for row in results:
+        #    col_a = row[0]
+        #    col_b = row[1]
+        #    col_c = row[2]
+        #    assert col_a == 1 and col_c == 201, "ASSERT"
+        #time.sleep(8)
+        #cur.execute("SELECT * FROM sz")
+        #results = cur.fetchall()
+        #assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
 def case(num):
     global A_succ, B_succ
     global funcs_thdA, funcs_thdB
@@ -667,7 +1198,7 @@ A_succ = False
 B_succ = False
 if __name__ == '__main__':
 
-    case_num = 12
+    case_num = 24
     # 1. create database and table
     try:
         conn = pymysql.connect(host='127.0.0.1',
@@ -699,16 +1230,35 @@ if __name__ == '__main__':
         func_name = f"case_{i}_thdB"
         funcs_thdB.append(eval(func_name))
 
-    case(1)
-    case(2)
-    case(3)
-    case(4)
-    case(5)
-    case(6)
-    case(7)
-    case(8)
-    case(9)
-    case(10)
-    case(11)
-    case(12)
+    ##INSERT
+    #case(1)
+    #case(2)
+    #case(3)
+    #case(4)
+    #case(5)
 
+    ##INSERT ON DUPLICATE KEY UPDATE
+    #case(6)
+    #case(7)
+    #case(8)
+    #case(9)
+    #case(10)
+    #case(11)
+    #case(12)
+
+    ##UPDATE
+    #case(13)
+    #case(14)
+    #case(15)
+    #case(16)
+    #case(17)
+    #case(18)
+
+    ##DELETE
+    #case(19)
+    #case(20)
+    #case(21)
+    #case(22)
+    #case(23)
+
+    case(24)

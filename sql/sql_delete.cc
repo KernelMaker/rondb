@@ -603,6 +603,13 @@ bool Sql_cmd_delete::delete_from_single_table(THD *thd) {
 
       assert(!thd->is_error());
 
+#if !defined(NDEBUG)
+      fprintf(stderr, "Zart, TTL debug, "
+                      "Sql_cmd_delete::delete_from_single_table(), "
+                      "sleep %ld secs\n",
+                      thd->variables.ttl_debug_sleep_secs);
+      sleep(thd->variables.ttl_debug_sleep_secs);
+#endif // !NDEBUG
       if (DeleteCurrentRowAndProcessTriggers(thd, table, has_before_triggers,
                                              has_after_triggers,
                                              &deleted_rows)) {

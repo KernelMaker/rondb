@@ -2014,6 +2014,12 @@ bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
             // return false when IGNORE clause is used.
             goto ok_or_after_trg_err;
           }
+#if !defined(NDEBUG)
+      fprintf(stderr, "Zart, TTL debug, write_record(), "
+                      "sleep %ld secs\n",
+                      thd->variables.ttl_debug_sleep_secs);
+      sleep(thd->variables.ttl_debug_sleep_secs);
+#endif // !NDEBUG
 
           if ((error = table->file->ha_update_row(table->record[1],
                                                   table->record[0])) &&

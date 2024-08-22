@@ -15905,6 +15905,7 @@ void Dblqh::abortContinueAfterBlockedLab(Signal* signal,
   }
 
   regTcPtr.p->transactionState = TcConnectionrec::WAIT_ACC_ABORT;
+  g_eventLogger->info("Zart, Dbacc::[6]");
   c_acc->execACC_ABORTREQ(signal,
                           regTcPtr.p->accConnectrec,
                           regTcPtr.p->accConnectPtrP,

@@ -3504,6 +3504,14 @@ static Sys_var_ulong Sys_connection_memory_chunk_size(
     NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_session_admin),
     ON_UPDATE(nullptr));
 
+static Sys_var_ulong Sys_ttl_debug_sleep_secs(
+    "ttl_debug_sleep_secs",
+    "sleep few seconds for debug TTL",
+    SESSION_VAR(ttl_debug_sleep_secs), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, 3600), DEFAULT(0), BLOCK_SIZE(1),
+    NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(check_session_admin),
+    ON_UPDATE(nullptr));
+
 static Sys_var_bool Sys_connection_global_memory_tracking(
     "global_connection_memory_tracking",
     "Enable updating the global memory counter and checking "

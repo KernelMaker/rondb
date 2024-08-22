@@ -3704,6 +3704,148 @@ int Dbtup::handleDeleteReq(Signal* signal,
                            KeyReqStruct *req_struct,
                            bool disk)
 {
+  /*
+   * Zart
+   * Here we check whether the row is expired
+   */
+  {
+  if (regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
+    Uint32 attrId = (regTabPtr->m_ttl_col_no);
+    const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
+      (attrId * ZAD_SIZE);
+    const Uint32 TattrDesc1 = attrDescriptor[0];
+    // const Uint32 TattrDesc2 = attrDescriptor[1];
+    const Uint32 type_id = AttributeDescriptor::getType(TattrDesc1);
+    const Uint32 size = AttributeDescriptor::getSize(TattrDesc1);
+    const Uint32 size_in_bytes = AttributeDescriptor::getSizeInBytes(TattrDesc1);
+    const Uint32 size_in_words = AttributeDescriptor::getSizeInWords(TattrDesc1);
+    ndbrequire(type_id == NDB_TYPE_DATETIME2);
+    // const Uint32 array_type = AttributeDescriptor::getArrayType(TattrDesc1);
+    // const Uint32 array_size = AttributeDescriptor::getArraySize(TattrDesc1);
+    // const Uint32 nullable = AttributeDescriptor::getNullable(TattrDesc1);
+    // const Uint32 distri_key = AttributeDescriptor::getDKey(TattrDesc1);
+    // const Uint32 primary_key = AttributeDescriptor::getPrimaryKey(TattrDesc1);
+    // const Uint32 dynamic = AttributeDescriptor::getDynamic(TattrDesc1);
+    // const Uint32 disk_based = AttributeDescriptor::getDiskBased(TattrDesc1);
+    g_eventLogger->info("Zart, (DELETE) handleDeleteReq TTL check, "
+        "table_id: %u, "
+        "type_id: %u, size: %u, size_in_bytes: %u, "
+        "size_in_words: %u",
+        req_struct->fragPtrP->fragTableId, type_id, size,
+        size_in_bytes, size_in_words);
+    /*
+     * Zart
+     * Prepare correct attribute id format before passing it to readAttributes
+     */
+    attrId = attrId << 16;
+    Uint32 out_buf[3];
+    /*
+     * Zart
+     * TODO (Zhao)
+     * Double check whether it's safe to reuse req_struct here or not.
+     */
+    int ret = readAttributes(req_struct,
+        &attrId,
+        1,
+        out_buf,
+        3);
+    AttributeHeader* ahOut = (AttributeHeader*)out_buf;
+    g_eventLogger->info("Zart, (DELETE) Get ttl column data, col_id: %u, "
+        "byte_size: %u, "
+        "data_size: %u, is_null: %u",
+        ahOut->getAttributeId(), ahOut->getByteSize(),
+        ahOut->getDataSize(), ahOut->isNULL());
+    ndbrequire(regTabPtr->m_ttl_col_no == ahOut->getAttributeId());
+    if (ret >= 0) {
+      if (!ahOut->isNULL()) {
+        /*
+         * Zart
+         * Just need to parse to second part.
+         */
+        int64_t dt_bin = my_datetime_packed_from_binary(
+            reinterpret_cast<const unsigned char*>(
+              ahOut->getDataPtr()), 0);
+        MYSQL_TIME dt;
+        TIME_from_longlong_datetime_packed(&dt, dt_bin);
+        g_eventLogger->info("Zart, (DELETE) Parsed TTL column data: "
+            "%u.%u.%u %u:%u:%u",
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+        Uint32 ttl_sec = regTabPtr->m_ttl_sec;
+        bool valid_future_dt = true;
+        if (ttl_sec != 0) {
+          Interval interval;
+          memset(&interval, 0, sizeof(interval));
+          interval.second = ttl_sec;
+          bool add_ret = date_add_interval(&dt, INTERVAL_SECOND, interval, nullptr);
+          if (add_ret) {
+            g_eventLogger->warning("Zart, (DELETE) TTL column adds "
+                "interval overflowing");
+            valid_future_dt = false;
+          }
+        }
+        if (valid_future_dt) {
+          /*
+           * Zart
+           * Get current utc time
+           */
+          MYSQL_TIME curr_dt;
+          struct tm tmp_tm;
+          time_t t_now = (time_t)my_micro_time() / 1000000; /* second */
+          gmtime_r(&t_now, &tmp_tm);
+          curr_dt.neg = false;
+          curr_dt.second_part = 0;
+          curr_dt.year = ((tmp_tm.tm_year + 1900) % 10000);
+          curr_dt.month = tmp_tm.tm_mon + 1;
+          curr_dt.day = tmp_tm.tm_mday;
+          curr_dt.hour = tmp_tm.tm_hour;
+          curr_dt.minute = tmp_tm.tm_min;
+          curr_dt.second = tmp_tm.tm_sec;
+          curr_dt.time_zone_displacement = 0;
+          curr_dt.time_type = MYSQL_TIMESTAMP_DATETIME;
+          if (curr_dt.second == 60 || curr_dt.second == 61) {
+            curr_dt.second = 59;
+          }
+
+          /*
+           * Zart
+           * Compare with TTL
+           */
+          g_eventLogger->info("Zart, (DELETE) "
+              "Get TTL expired time: %u.%u.%u %u:%u:%u, "
+              "current time: %u.%u.%u %u:%u:%u",
+              dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+              curr_dt.year, curr_dt.month, curr_dt.day, curr_dt.hour,
+              curr_dt.minute, curr_dt.second);
+          int cmp_ret = my_time_compare(dt, curr_dt);
+          if (cmp_ret <= 0) {
+            /*
+             * Zart
+             * 1. Normal deletion on an already existing but expired row
+             */
+            g_eventLogger->info("Zart, (DELETE) TTL expired");
+            terrorCode = 626; // HA_ERR_KEY_NOT_FOUND
+            tupkeyErrorLab(req_struct);
+            return -1;
+          }
+        }
+      } else {
+        /*
+         * Zart
+         * TODO (Zhao)
+         * remove the warning log here.
+         */
+        g_eventLogger->warning("Zart, (DELETE) Read a NULL TTL column");
+      }
+    } else {
+      g_eventLogger->warning("Zart, (DELETE) Failed to read a TTL column");
+      jam();
+      terrorCode = Uint32(-ret);
+      tupkeyErrorLab(req_struct);
+      return -1;
+    }
+  }
+  }
+
   Uint32 copy_bits = 0;
   Tuple_header* dst = alloc_copy_tuple(regTabPtr,
       &regOperPtr->m_copy_tuple_location);

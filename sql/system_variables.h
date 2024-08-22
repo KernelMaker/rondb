@@ -499,6 +499,8 @@ struct System_variables {
     @sa Sys_explain_format
    */
   Explain_format_type explain_format;
+
+  long ttl_debug_sleep_secs;
 };
 
 /**

@@ -1572,6 +1572,10 @@ void Dbacc::execACCKEYREQ(Signal* signal,
 	  insertLockOwnersList(operationRecPtr);
 #endif
 	  fragrecptr.p->lockCount[hash]++;
+    if (fragrecptr.p->myTableId >= 17) {
+      g_eventLogger->info("Zart, Dbacc::execACCKEYREQ(), lock, table id: %u, frag id: %u",
+                          fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+    }
 	  opbits |= Operationrec::OP_LOCK_OWNER;
           operationRecPtr.p->m_op_bits = opbits;
           /**
@@ -2304,6 +2308,10 @@ void Dbacc::insertelementLab(Signal* signal,
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
   insertLockOwnersList(operationRecPtr);
 #endif
+  if (fragrecptr.p->myTableId >= 17) {
+    g_eventLogger->info("Zart, Dbacc::insertelementLab(), lock, table id: %u, frag id: %u",
+                        fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+  }
   operationRecPtr.p->m_op_bits |= Operationrec::OP_LOCK_OWNER;
   fragrecptr.p->lockCount[hash]++;
 
@@ -3335,8 +3343,11 @@ void Dbacc::execACC_ABORTREQ(Signal* signal,
                     operationRecPtr.p->transId2,
                     operationRecPtr.i,
                     opbits));
-    g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ(), table: %u",
-                        fragrecptr.p->myTableId);
+    if (fragrecptr.p->myTableId >= 17) {
+      g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ(), table id: %u, "
+                          "frag id: %u",
+                          fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+    }
     abortOperation(signal, hash);
     operationRecPtr.p->m_op_bits = Operationrec::OP_INITIAL;
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
@@ -5926,7 +5937,10 @@ void Dbacc::abortOperation(Signal* signal, Uint32 hash)
   validate_lock_queue(operationRecPtr);
   if (opbits & Operationrec::OP_LOCK_OWNER) 
   {
-    g_eventLogger->info("Zart, Dbacc::abortOperation(), unlock");
+    if (fragrecptr.p->myTableId >= 17) {
+      g_eventLogger->info("Zart, Dbacc::abortOperation(), unlock, table id: %u, frag id: %u",
+                          fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+    }
     /**
      * We only need to protect changes when the lock owner aborts or
      * commits, this is to ensure that the state of the operation
@@ -6141,6 +6155,10 @@ void Dbacc::commitOperation(Signal* signal)
   
   if (opbits & Operationrec::OP_LOCK_OWNER) 
   {
+    if (fragrecptr.p->myTableId >= 17) {
+      g_eventLogger->info("Zart, Dbacc::commitOperation(), unlock, table id: %u, frag id: %u",
+                          fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+    }
     jam();
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
     takeOutLockOwnersList(operationRecPtr);
@@ -6501,6 +6519,10 @@ Dbacc::release_lockowner(Signal* signal,
    *
    */
   {
+    if (fragrecptr.p->myTableId >= 17) {
+      g_eventLogger->info("Zart, Dbacc::release_lockowner(), lock, table id: %u, frag id: %u",
+                          fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+    }
     newOwner.p->m_op_bits |= Operationrec::OP_LOCK_OWNER;
     newOwner.p->elementPage = opPtr.p->elementPage;
     newOwner.p->elementPointer = opPtr.p->elementPointer;
@@ -8666,6 +8688,10 @@ void Dbacc::checkNextBucketLab(Signal* signal)
       insertLockOwnersList(operationRecPtr);
 #endif
       fragrecptr.p->lockCount[0]++;
+      if (fragrecptr.p->myTableId >= 17) {
+        g_eventLogger->info("Zart, Dbacc::checkNextBucketLab(), lock, table id: %u, frag id: %u",
+                            fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
+      }
       operationRecPtr.p->m_op_bits |=
         Operationrec::OP_LOCK_OWNER |
         Operationrec::OP_STATE_RUNNING | Operationrec::OP_RUN_QUEUE;
