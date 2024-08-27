@@ -978,7 +978,8 @@ struct Operationrec {
     m_any_value(0),
     op_type(ZREAD),
     trans_state(Uint32(TRANS_DISCONNECTED)),
-    original_op_type(ZREAD)
+    original_op_type(ZREAD),
+    ttl_ignore(0)
   {
     op_struct.bit_field.in_active_list = false;
     op_struct.bit_field.tupVersion = ZNIL;
@@ -1147,6 +1148,7 @@ struct Operationrec {
    * keep original operation type
    */
   Uint32 original_op_type;
+  Uint8 ttl_ignore;
 };
 
   Uint32 m_base_header_bits;

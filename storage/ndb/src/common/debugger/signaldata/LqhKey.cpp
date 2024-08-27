@@ -102,6 +102,8 @@ bool printLQHKEYREQ(FILE *output,
     fprintf(output, "UtilFlag ");
   if(LqhKeyReq::getNoWaitFlag(reqInfo))
     fprintf(output, "NoWait ");
+  if(LqhKeyReq::getTTLIgnoreFlag(reqInfo))
+    fprintf(output, "ttl_ignore ");
 
   fprintf(output, "ScanInfo/noFiredTriggers: H\'%x\n", sig->scanInfo);
   

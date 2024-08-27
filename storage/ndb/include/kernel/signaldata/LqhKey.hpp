@@ -214,6 +214,12 @@ private:
 
   static UintR getNoWaitFlag(const UintR & requestInfo);
   static void setNoWaitFlag(UintR & requestInfo, UintR val);
+  /*
+   * Zart
+   * TTL
+   */
+  static void setTTLIgnoreFlag(UintR & requestInfo, UintR val);
+  static UintR getTTLIgnoreFlag(const UintR & requestInfo);
 
   enum RequestInfo {
     RI_KEYLEN_SHIFT      =  0, RI_KEYLEN_MASK      = 1023, /* legacy for short LQHKEYREQ */
@@ -222,8 +228,12 @@ private:
     RI_UTIL_SHIFT        =  2,
     RI_NOWAIT_SHIFT      =  3,
 
+    /*
+     * Zart
+     * TTL
+     */
+    RI_TTL_IGNORE_SHIFT  =  5,
     /* Currently unused */
-    RI_CLEAR_SHIFT5      =  5,
     RI_CLEAR_SHIFT6      =  6,
     RI_CLEAR_SHIFT7      =  7,
     RI_CLEAR_SHIFT8      =  8,
@@ -730,7 +740,6 @@ UintR
 LqhKeyReq::getLongClearBits(const UintR& requestInfo)
 {
   const Uint32 mask =
-    (1 << RI_CLEAR_SHIFT5) |
     (1 << RI_CLEAR_SHIFT6) |
     (1 << RI_CLEAR_SHIFT7) |
     (1 << RI_CLEAR_SHIFT8) |
@@ -776,6 +785,19 @@ inline
 UintR
 LqhKeyReq::getNoWaitFlag(const UintR & requestInfo){
   return (requestInfo >> RI_NOWAIT_SHIFT) & 1;
+}
+
+inline
+void
+LqhKeyReq::setTTLIgnoreFlag(UintR & requestInfo, UintR val){
+  ASSERT_BOOL(val, "LqhKeyReq::setTTLIgnoreFlag");
+  requestInfo |= (val << RI_TTL_IGNORE_SHIFT);
+}
+
+inline
+UintR
+LqhKeyReq::getTTLIgnoreFlag(const UintR & requestInfo){
+  return (requestInfo >> RI_TTL_IGNORE_SHIFT) & 1;
 }
 
 inline

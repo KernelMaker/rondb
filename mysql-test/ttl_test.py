@@ -7,7 +7,7 @@ def case_1_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
@@ -36,7 +36,7 @@ def case_1_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         assert false, "ASSERT"
     except pymysql.err.IntegrityError as e:
         assert e.args[0] == 1062, "ASSERT"
@@ -72,7 +72,7 @@ def case_2_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -101,7 +101,7 @@ def case_2_thdB(conn):
         time.sleep(5)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -128,7 +128,7 @@ def case_3_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(13)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -148,7 +148,7 @@ def case_3_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -166,7 +166,7 @@ def case_4_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -195,7 +195,7 @@ def case_4_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -222,7 +222,7 @@ def case_5_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -251,7 +251,7 @@ def case_5_thdB(conn):
         time.sleep(5)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -278,7 +278,7 @@ def case_6_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(13)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -298,7 +298,7 @@ def case_6_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200)")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -316,7 +316,7 @@ def case_7_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -345,7 +345,7 @@ def case_7_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -373,7 +373,7 @@ def case_8_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -402,7 +402,7 @@ def case_8_thdB(conn):
         time.sleep(5)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -429,7 +429,7 @@ def case_9_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(13)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -449,7 +449,7 @@ def case_9_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -467,7 +467,7 @@ def case_10_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -496,7 +496,7 @@ def case_10_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -523,7 +523,7 @@ def case_11_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -552,7 +552,7 @@ def case_11_thdB(conn):
         time.sleep(5)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -579,7 +579,7 @@ def case_12_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(14)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -599,7 +599,7 @@ def case_12_thdB(conn):
         time.sleep(2)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
         results = cur.fetchall()
@@ -617,7 +617,7 @@ def case_13_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -676,7 +676,7 @@ def case_14_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -717,7 +717,7 @@ def case_15_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(13)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -758,7 +758,7 @@ def case_16_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -800,7 +800,7 @@ def case_17_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -841,7 +841,7 @@ def case_18_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(13)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -882,7 +882,7 @@ def case_19_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -923,7 +923,7 @@ def case_20_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("COMMIT")
         cur.execute("SELECT * FROM sz")
@@ -963,7 +963,7 @@ def case_21_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("ROLLBACK")
         time.sleep(1)
@@ -1004,7 +1004,7 @@ def case_22_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(11)
         cur.execute("ROLLBACK")
         cur.execute("SELECT * FROM sz")
@@ -1044,9 +1044,9 @@ def case_23_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
         time.sleep(1)
-        cur.execute("INSERT INTO sz values(2, sysdate(), 100)")
+        cur.execute("INSERT INTO sz VALUES(2, SYSDATE(), 100)")
         time.sleep(5)
         cur.execute("COMMIT")
         time.sleep(1)
@@ -1090,22 +1090,25 @@ def case_24_thdA(conn):
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("INSERT INTO sz values(1, sysdate(), 100)")
-        time.sleep(5)
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(7)
         cur.execute("COMMIT")
-        #time.sleep(1)
-        #cur.execute("SELECT * FROM sz")
-        #results = cur.fetchall()
-        #assert len(results) == 1, "ASSERT"
-        #for row in results:
-        #    col_a = row[0]
-        #    col_b = row[1]
-        #    col_c = row[2]
-        #    assert col_a == 1 and col_c == 201, "ASSERT"
-        #time.sleep(7)
-        #cur.execute("SELECT * FROM sz")
-        #results = cur.fetchall()
-        #assert len(results) == 0, "ASSERT"
+        time.sleep(4)
+        cur.execute("SET DEBUG_SYNC = 'now SIGNAL go_ahead'");
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT1"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 201, "ASSERT2"
+        cur.execute("SELECT * FROM sz")
+        time.sleep(4)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT3"
     except Exception as e:
         print(f"Thd A failed: {e}")
         cur.close()
@@ -1116,25 +1119,142 @@ def case_24_thdA(conn):
 def case_24_thdB(conn):
     global B_succ
     try:
-        time.sleep(2)
+        time.sleep(5)
         cur = conn.cursor()
         cur.execute("BEGIN")
-        cur.execute("SET ttl_debug_sleep_secs = 6");
-        cur.execute("INSERT INTO sz values(1, sysdate(), 200) ON DUPLICATE KEY UPDATE col_c = 201")
-        cur.execute("SET ttl_debug_sleep_secs = 0");
+        #cur.execute("SET ttl_debug_sleep_secs = 6");
+        cur.execute("SET DEBUG_SYNC = 'zhao_wait_for_row_get_expired_after_reading_1 WAIT_FOR go_ahead'");
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
+        #cur.execute("SET ttl_debug_sleep_secs = 0");
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 2 and matched_rows == 2, "ASSERT"
         cur.execute("COMMIT")
-        #cur.execute("SELECT * FROM sz")
-        #results = cur.fetchall()
-        #assert len(results) == 1, "ASSERT"
-        #for row in results:
-        #    col_a = row[0]
-        #    col_b = row[1]
-        #    col_c = row[2]
-        #    assert col_a == 1 and col_c == 201, "ASSERT"
-        #time.sleep(8)
-        #cur.execute("SELECT * FROM sz")
-        #results = cur.fetchall()
-        #assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT1"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 201, "ASSERT2"
+        time.sleep(5)
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT3"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
+
+def case_25_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(7)
+        cur.execute("COMMIT")
+        time.sleep(4)
+        cur.execute("SET DEBUG_SYNC = 'now SIGNAL go_ahead'");
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT1"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 201, "ASSERT2"
+        cur.execute("SELECT * FROM sz")
+        time.sleep(3)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_25_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(5)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("SET DEBUG_SYNC = 'zhao_wait_for_row_get_expired_after_reading_2 WAIT_FOR go_ahead'");
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 200) ON DUPLICATE KEY UPDATE col_c = 201, col_b = NOW()")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 2 and matched_rows == 2, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT1"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 201, "ASSERT2"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
+def case_26_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 101)")
+        cur.execute("INSERT INTO sz VALUES(2, SYSDATE(), 102)")
+        # cur.execute("INSERT INTO sz VALUES(3, SYSDATE(), 103)")
+        # cur.execute("INSERT INTO sz VALUES(4, SYSDATE(), 104)")
+        # cur.execute("INSERT INTO sz VALUES(5, SYSDATE(), 105)")
+        # cur.execute("INSERT INTO sz VALUES(6, SYSDATE(), 106)")
+        cur.execute("COMMIT")
+
+        # time.sleep(5)
+        # cur.execute("SELECT * FROM sz")
+        # cur.execute("SELECT * FROM sz WHERE col_a >= 3")
+        # cur.execute("SELECT * FROM sz WHERE col_a >= 3 and col_a <= 5")
+        # cur.execute("SELECT * FROM sz WHERE col_a >= 3 and col_c >= 104")
+        # cur.execute("UPDATE sz SET col_c = 666 WHERE col_a >= 3 and col_c >= 104")
+        cur.execute("SET DEBUG_SYNC = 'zhao_wait_for_row_get_expired_after_reading_3 WAIT_FOR go_ahead'");
+        cur.execute("UPDATE sz SET col_c = 666 WHERE col_a <= 1")
+        results = cur.fetchall()
+        # assert len(results) == 6, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            #assert col_a == 1 and col_c == 201, "ASSERT2"
+            print(f"[{col_a}, {col_b}, {col_c}]")
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_26_thdB(conn):
+    global B_succ
+    try:
+        cur = conn.cursor()
+        time.sleep(12)
+        cur.execute("SET DEBUG_SYNC = 'now SIGNAL go_ahead'");
     except Exception as e:
         print(f"Thd B failed: {e}")
         cur.close()
@@ -1148,6 +1268,8 @@ def case(num):
     global funcs_thdA, funcs_thdB
     A_succ = False
     B_succ = False
+
+    cases_require_debug_sync = [23, 24, 25]
 
 
     # 1. Connect
@@ -1171,7 +1293,37 @@ def case(num):
         exit(-1)
     B_succ = True
 
-    # 2. Test
+    # 2. Verify DEBUG_SYNC for some cases
+    if num in cases_require_debug_sync:
+        try:
+            cur = A_conn.cursor();
+            cur.execute("SHOW VARIABLES LIKE 'DEBUG_SYNC'")
+            results = cur.fetchall()
+            # print(f"debug_sync: {results[0][0]}, {results[0][1]}")
+            if results[0][1].find("ON") == -1:
+                print(f"case {num} require MySQL DEBUG_SYNC, turn it on and retry...")
+                cur.close()
+                A_conn.close()
+                B_conn.close()
+                exit(-1)
+
+            cur = B_conn.cursor();
+            cur.execute("SHOW VARIABLES LIKE 'DEBUG_SYNC'")
+            results = cur.fetchall()
+            if results[0][1].find("ON") == -1:
+                print(f"case {num} require MySQL DEBUG_SYNC, turn it on and retry...")
+                cur.close()
+                A_conn.close()
+                B_conn.close()
+                exit(-1)
+        except Exception as e:
+            print(f"TRY DEBUG_SYNC failed: {e}")
+            cur.close()
+            A_conn.close()
+            B_conn.close()
+            exit(-1)
+
+    # 3. Test
     if (A_succ and B_succ):
         A_succ = False
         B_succ = False
@@ -1198,7 +1350,7 @@ A_succ = False
 B_succ = False
 if __name__ == '__main__':
 
-    case_num = 24
+    case_num = 26
     # 1. create database and table
     try:
         conn = pymysql.connect(host='127.0.0.1',
@@ -1261,4 +1413,7 @@ if __name__ == '__main__':
     #case(22)
     #case(23)
 
-    case(24)
+    #case(24)
+    #case(25)
+    #case(25)
+    case(26)

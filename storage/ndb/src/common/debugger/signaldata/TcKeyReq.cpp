@@ -103,6 +103,9 @@ bool printTCKEYREQ(FILE *output,
     if (sig->getNoWaitFlag(sig->requestInfo))
       fprintf(output, " nowait");
 
+    if (sig->getTTLIgnoreFlag(sig->requestInfo))
+      fprintf(output, " ttl_ignore");
+
     fprintf(output, "\n");
   }
   

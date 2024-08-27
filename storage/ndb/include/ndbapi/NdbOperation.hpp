@@ -1075,14 +1075,13 @@ public:
                  OO_NOT_QUEUABLE = 0x200,
                  OO_DEFERRED_CONSTAINTS = 0x400,
                  OO_DISABLE_FK   = 0x800,
-                 OO_NOWAIT       = 0x1000
+                 OO_NOWAIT       = 0x1000,
                  /*
                   * Zart
                   * TODO (Zhao)
                   * Force operation ignore TTL
-                  *
-                  * OO_TTL_FORCE    = 0x2000
                   */
+                 OO_TTL_IGNORE    = 0x2000
     };
 
     /* An operation-specific abort option.
@@ -1509,7 +1508,8 @@ protected:
     OF_DEFERRED_CONSTRAINTS = 0x8,
     OF_DISABLE_FK = 0x10,
     OF_NOWAIT = 0x20,
-    OF_BLOB_PART_READ = 0x40
+    OF_BLOB_PART_READ = 0x40,
+    OF_TTL_IGNORE = 0x80
   };
   Uint8  m_flags;
 

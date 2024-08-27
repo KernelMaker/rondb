@@ -3174,6 +3174,7 @@ static bool table_lock_not_mapped_to_row_lock(enum thr_lock_type lock_type) {
 
 inline int ha_ndbcluster::fetch_next(NdbScanOperation *cursor) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::fetch_next");
   int local_check;
   int error;
   NdbTransaction *trans = m_thd_ndb->trans;
@@ -3356,6 +3357,7 @@ inline int ha_ndbcluster::next_result(uchar *buf) {
   DBUG_TRACE;
 
   if (m_active_cursor) {
+    ndb_log_info("Zart, ha_ndbcluster::next_result");
     while ((res = fetch_next(m_active_cursor)) == 0) {
       DBUG_PRINT("info", ("One more record found"));
 
@@ -3517,6 +3519,15 @@ const NdbOperation *ha_ndbcluster::pk_unique_index_read_key(
     assert(m_user_defined_partitioning);
     options.optionsPresent |= NdbOperation::OperationOptions::OO_PARTITION_ID;
     options.partitionId = *ppartition_id;
+    poptions = &options;
+  }
+
+  /*
+   * Zart
+   * TTL
+   */
+  if (m_ttl_ignore) {
+    options.optionsPresent |= NdbOperation::OperationOptions::OO_TTL_IGNORE;
     poptions = &options;
   }
 
@@ -3842,6 +3853,7 @@ static int guess_scan_flags(NdbOperation::LockMode lm, Ndb_table_map *table_map,
 int ha_ndbcluster::full_table_scan(const KEY *key_info,
                                    const key_range *start_key,
                                    const key_range *end_key, uchar *buf) {
+  ndb_log_info("Zart, ha_ndbcluster::full_table_scan");
   THD *thd = table->in_use;
   int error;
   NdbTransaction *trans = m_thd_ndb->trans;
@@ -5646,6 +5658,11 @@ int ha_ndbcluster::ndb_update_row(const uchar *old_data, uchar *new_data,
     options.optionsPresent |= NdbOperation::OperationOptions::OO_DISABLE_FK;
   }
 
+  if (m_ttl_ignore) {
+    ndb_log_info("Zart, ha_ndbcluster::ndb_update_row(), set TTL_IGNORE flag");
+    options.optionsPresent |= NdbOperation::OperationOptions::OO_TTL_IGNORE;
+  }
+
   if (cursor) {
     /*
       We are scanning records and want to update the record
@@ -6214,6 +6231,7 @@ static inline int fail_index_offline(TABLE *t, int index) {
 int ha_ndbcluster::index_init(uint index, bool sorted) {
   DBUG_TRACE;
   DBUG_PRINT("enter", ("index: %u  sorted: %d", index, sorted));
+  ndb_log_info("Zart, ha_ndbcluster::index_init");
   if (index < MAX_KEY && m_index[index].type == UNDEFINED_INDEX)
     return fail_index_offline(table, index);
 
@@ -6310,6 +6328,7 @@ int ha_ndbcluster::index_read(uchar *buf, const uchar *key, uint key_len,
 
 int ha_ndbcluster::index_next(uchar *buf) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::index_next");
   ha_statistic_increment(&System_status_var::ha_read_next_count);
   const int error = next_result(buf);
   return error;
@@ -6317,6 +6336,7 @@ int ha_ndbcluster::index_next(uchar *buf) {
 
 int ha_ndbcluster::index_prev(uchar *buf) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::index_prev");
   ha_statistic_increment(&System_status_var::ha_read_prev_count);
   const int error = next_result(buf);
   return error;
@@ -6324,6 +6344,7 @@ int ha_ndbcluster::index_prev(uchar *buf) {
 
 int ha_ndbcluster::index_first(uchar *buf) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::index_first");
   if (!m_index[active_index].index)
     return fail_index_offline(table, active_index);
   ha_statistic_increment(&System_status_var::ha_read_first_count);
@@ -6337,6 +6358,7 @@ int ha_ndbcluster::index_first(uchar *buf) {
 
 int ha_ndbcluster::index_last(uchar *buf) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::index_last");
   if (!m_index[active_index].index)
     return fail_index_offline(table, active_index);
   ha_statistic_increment(&System_status_var::ha_read_last_count);
@@ -6497,6 +6519,7 @@ int ha_ndbcluster::Copying_alter::check_saved_commit_count(
 int ha_ndbcluster::rnd_init(bool) {
   DBUG_TRACE;
 
+  ndb_log_info("Zart, ha_ndbcluster::rnd_init");
   if (int error = close_scan()) {
     return error;
   }
@@ -6519,6 +6542,7 @@ int ha_ndbcluster::rnd_init(bool) {
 int ha_ndbcluster::close_scan() {
   DBUG_TRACE;
 
+  ndb_log_info("Zart, ha_ndbcluster::close_scan");
   if (m_active_query) {
     m_active_query->close(m_thd_ndb->m_force_send);
     m_active_query = nullptr;
@@ -6562,6 +6586,7 @@ int ha_ndbcluster::rnd_end() {
 
 int ha_ndbcluster::rnd_next(uchar *buf) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::rnd_next");
   ha_statistic_increment(&System_status_var::ha_read_rnd_next_count);
 
   int error;
@@ -6581,6 +6606,7 @@ int ha_ndbcluster::rnd_next(uchar *buf) {
 
 int ha_ndbcluster::rnd_pos(uchar *buf, uchar *pos) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::rnd_pos");
   ha_statistic_increment(&System_status_var::ha_read_rnd_count);
   // The primary key for the record is stored in pos
   // Perform a pk_read using primary key "index"
@@ -6662,6 +6688,7 @@ void ha_ndbcluster::position(const uchar *record) {
   uint key_length;
 
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::position");
 
   if (table_share->primary_key != MAX_KEY) {
     key_length = ref_length;
@@ -7006,6 +7033,20 @@ int ha_ndbcluster::extra(enum ha_extra_function operation) {
       // again for subsequent statement
       DBUG_PRINT("info", ("HA_EXTRA_END_ALTER_COPY"));
       break;
+    /*
+     * Zart
+     * TTL
+     */
+    case HA_EXTRA_IGNORE_TTL:
+      DBUG_PRINT("info", ("HA_EXTRA_IGNORE_TTL"));
+      DBUG_PRINT("info", ("Ignore TTL"));
+      m_ttl_ignore = true;
+      break;
+    case HA_EXTRA_NO_IGNORE_TTL:
+      DBUG_PRINT("info", ("HA_EXTRA_NO_IGNORE_TTL"));
+      DBUG_PRINT("info", ("Don't ignore TTL"));
+      m_ttl_ignore = false;
+      break;
     default:
       break;
   }
@@ -7086,6 +7127,11 @@ int ha_ndbcluster::reset() {
 
   assert(m_is_bulk_delete == false);
   m_is_bulk_delete = false;
+  /*
+   * Zart
+   * TTL
+   */
+  m_ttl_ignore = false;
   return 0;
 }
 
@@ -11466,7 +11512,8 @@ ha_ndbcluster::ha_ndbcluster(handlerton *hton, TABLE_SHARE *table_arg)
       m_active_query(nullptr),
       m_pushed_operation(nullptr),
       m_cond(this),
-      m_multi_cursor(nullptr) {
+      m_multi_cursor(nullptr),
+      m_ttl_ignore(false) {
   DBUG_TRACE;
 
   stats.records = ~(ha_rows)0;  // uninitialized
@@ -13487,6 +13534,7 @@ int ha_ndbcluster::multi_range_read_init(RANGE_SEQ_IF *seq_funcs,
                                          void *seq_init_param, uint n_ranges,
                                          uint mode, HANDLER_BUFFER *buffer) {
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::multi_range_read_init");
 
   /*
     If supplied buffer is smaller than needed for just one range, we cannot do
@@ -13563,6 +13611,7 @@ int ha_ndbcluster::multi_range_start_retrievals(uint starting_range) {
       check_if_pushable(NdbQueryOperationDef::OrderedIndexScan, active_index);
 
   DBUG_TRACE;
+  ndb_log_info("Zart, ha_ndbcluster::multi_range_start_retrievals");
 
   /*
    * read multi range will read ranges as follows (if not ordered)
@@ -13953,6 +14002,7 @@ int ha_ndbcluster::multi_range_start_retrievals(uint starting_range) {
 int ha_ndbcluster::multi_range_read_next(char **range_info) {
   DBUG_TRACE;
 
+  ndb_log_info("Zart, ha_ndbcluster::multi_range_read_next");
   if (m_disable_multi_read) {
     return handler::multi_range_read_next(range_info);
   }
@@ -14106,6 +14156,7 @@ int ha_ndbcluster::multi_range_read_next(char **range_info) {
 int ha_ndbcluster::read_multi_range_fetch_next() {
   DBUG_TRACE;
 
+  ndb_log_info("Zart, ha_ndbcluster::read_multi_range_fetch_next");
   if (m_active_query) {
     DBUG_PRINT("info",
                ("read_multi_range_fetch_next from pushed join, m_next_row:%p",

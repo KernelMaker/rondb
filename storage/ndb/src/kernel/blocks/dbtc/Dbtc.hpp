@@ -1611,6 +1611,11 @@ public:
     
       Uint32 scanTakeOverInd;
       Uint32 unlockNodeId;     /* NodeId for unlock operation */
+
+      /* Zart
+       * TTL
+       */
+      Uint8 m_ttl_ignore;
     /* End of TCKEYREQ/TCINDXREQ only fields */
 
   };

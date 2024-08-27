@@ -247,6 +247,13 @@ private:
    */
   static void setNoWaitFlag(UintR & requestInfo, UintR val);
   static UintR getNoWaitFlag(const UintR & requestInfo);
+
+  /**
+   * Zart
+   * TTL
+   */
+  static void setTTLIgnoreFlag(UintR & requestInfo, UintR val);
+  static UintR getTTLIgnoreFlag(const UintR & requestInfo);
 };
 
 /**
@@ -358,10 +365,12 @@ private:
  * ----------------------------------------------------------------------
  U = BatchUnsafe           - 1  Bit 23
 
+ I = IgnoreTTL             - 1  Bit 24
+
            1111111111222222222233
  01234567890123456789012345678901
  dnb cooop lsyyeiaaarkkkkkkkkkkkk  (Short TCKEYREQ)
- dnbvcooopqlsyyeixDfrRwBU          (Long TCKEYREQ)
+ dnbvcooopqlsyyeixDfrRwBUI         (Long TCKEYREQ)
 */
 
 #define TCKEY_NODISK_SHIFT (1)
@@ -399,6 +408,12 @@ private:
 
 #define TC_BATCH_SAFE_SHIFT (22)
 #define TC_BATCH_UNSAFE_SHIFT (23)
+
+/*
+ * Zart
+ * TTL
+ */
+#define TC_TTL_IGNORE_SHIFT (24)
 
 /**
  * Scan Info
@@ -821,6 +836,20 @@ inline
 UintR
 TcKeyReq::getNoWaitFlag(const UintR & requestInfo){
   return (requestInfo >> TC_NOWAIT_SHIFT) & 1;
+}
+
+inline
+void
+TcKeyReq::setTTLIgnoreFlag(UintR & requestInfo, UintR flag){
+  ASSERT_BOOL(flag, "TcKeyReq::setTTLIgnoreFlag");
+  requestInfo |= (flag << TC_TTL_IGNORE_SHIFT);
+}
+
+inline
+UintR
+TcKeyReq::getTTLIgnoreFlag(const UintR & requestInfo)
+{
+  return (requestInfo >> TC_TTL_IGNORE_SHIFT) & 1;
 }
 
 #undef JAM_FILE_ID

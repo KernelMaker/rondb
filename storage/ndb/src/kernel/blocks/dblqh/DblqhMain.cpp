@@ -7127,6 +7127,7 @@ void Dblqh::seizeTcrec(TcConnectionrecPtr& tcConnectptr,
    * reset original_operation to maximum uint8
    */
   locTcConnectptr.p->original_operation = 0xFF;
+  locTcConnectptr.p->ttl_ignore = 0;
 
   tcConnectptr = locTcConnectptr;
   ndbrequire(Magic::check_ptr(locTcConnectptr.p->tupConnectPtrP));
@@ -9490,6 +9491,12 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
       regTcPtr->m_flags |= TcConnectionrec::OP_NOWAIT;
     }
   }
+  /*
+   * Zart
+   * TTL
+   */
+  regTcPtr->ttl_ignore = LqhKeyReq::getTTLIgnoreFlag(Treqinfo);
+
   if (regTcPtr->dirtyOp)
   {
     ndbrequire(regTcPtr->opSimple);
@@ -12875,6 +12882,15 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
   regTcPtr->m_use_rowid |=
     fragptr.p->m_copy_started_state == Fragrecord::AC_NR_COPY;
   LqhKeyReq::setRowidFlag(Treqinfo, regTcPtr->m_use_rowid);
+
+  /*
+   * Zart
+   * TTL
+   * TODO (Zhao)
+   * Double check that it needs to set ttl_ignore for LqhKeyReq
+   * in other places as well
+   */
+  LqhKeyReq::setTTLIgnoreFlag(Treqinfo, regTcPtr->ttl_ignore);
 
 #ifdef VM_TRACE
   if (LqhKeyReq::getRowidFlag(Treqinfo))

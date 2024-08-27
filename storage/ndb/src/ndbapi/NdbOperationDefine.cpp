@@ -1502,5 +1502,14 @@ NdbOperation::handleOperationOptions (const OperationType type,
     op->m_flags |= OF_NOWAIT;
   }
 
+  /*
+   * Zart
+   * Ignore TTL
+   */
+  if (opts->optionsPresent & OperationOptions::OO_TTL_IGNORE)
+  {
+    op->m_flags |= OF_TTL_IGNORE;
+  }
+
   return 0;
 }

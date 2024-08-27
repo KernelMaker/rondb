@@ -251,6 +251,9 @@ bool InitIndexRangeScan(TABLE *table, handler *file, int index,
                         unsigned mrr_flags, bool in_ror_merged_scan,
                         MY_BITMAP *column_bitmap) {
   DBUG_TRACE;
+  if (strcmp(table->s->table_name.str, "sz") == 0) {
+    fprintf(stderr, "Zart InitIndexRangeScan\n");
+  }
 
   /* set keyread to true if index is covering */
   if (!table->no_keyread && table->covering_keys.is_set(index))
@@ -352,6 +355,9 @@ int IndexRangeScanIterator::Read() {
   MY_BITMAP *const save_read_set = table()->read_set;
   MY_BITMAP *const save_write_set = table()->write_set;
   DBUG_TRACE;
+  if (strcmp(table()->s->table_name.str, "sz") == 0) {
+    fprintf(stderr, "Zart IndexRangeScanIterator::Read\n");
+  }
 
   if (in_ror_merged_scan) {
     /*

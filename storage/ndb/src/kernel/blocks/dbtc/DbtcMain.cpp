@@ -4250,6 +4250,7 @@ void Dbtc::execTCKEYREQ(Signal* signal)
                               TcKeyReq::getReadCommittedBaseFlag(Treqinfo);
 
     regCachePtr->m_noWait = TcKeyReq::getNoWaitFlag(Treqinfo);
+    regCachePtr->m_ttl_ignore = TcKeyReq::getTTLIgnoreFlag(Treqinfo);
   }
   else
   {
@@ -4258,6 +4259,12 @@ void Dbtc::execTCKEYREQ(Signal* signal)
     titcLenAiInTckeyreq = TcKeyReq::getAIInTcKeyReq(Treqinfo);
     regCachePtr->m_read_committed_base = 0;
     regCachePtr->m_noWait = 0;
+    /*
+     * Zart
+     * TODO (Zhao)
+     * unable to ignore TTL in ShortTcKeyReq?
+     */
+    regCachePtr->m_ttl_ignore = 0;
   }
   bool util_flag = ZFALSE;
   if (unlikely(refToMain(sendersBlockRef) == DBUTIL))
@@ -5501,6 +5508,7 @@ void Dbtc::sendlqhkeyreq(Signal* signal,
   LqhKeyReq::setDeferredConstraints(Tdata10, (Tdeferred & m_deferred_enabled));
   LqhKeyReq::setDisableFkConstraints(Tdata10, Tdisable_fk);
   LqhKeyReq::setNoWaitFlag(Tdata10, regCachePtr->m_noWait);
+  LqhKeyReq::setTTLIgnoreFlag(Tdata10, regCachePtr->m_ttl_ignore);
 
   /* ----------------------------------------------------------------------- 
    * If we are sending a short LQHKEYREQ, then there will be some AttrInfo

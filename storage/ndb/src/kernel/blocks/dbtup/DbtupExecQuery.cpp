@@ -1412,13 +1412,16 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
      * in the future
      */
     regOperPtr->original_op_type = original_op;
+    regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
     if (prepare_fragptr.p->fragTableId >= 17) {
       g_eventLogger->info("Zart, [TableId: %u]"
                           "Set Dbtup::Operationrec::original_op_type: %u, "
-                          "current Dbtup::Operationrec::op_type: %u",
+                          "current Dbtup::Operationrec::op_type: %u, "
+                          "ignore TTL ?(%u)",
                           prepare_fragptr.p->fragTableId,
                           regOperPtr->original_op_type,
-                          regOperPtr->op_type);
+                          regOperPtr->op_type,
+                          regOperPtr->ttl_ignore);
     }
   }
   {
@@ -2154,7 +2157,12 @@ int Dbtup::handleReadReq(Signal* signal,
    * Zart
    * Here we check whether the row is expired
    */
-  if (regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no) {
+  if (_regOperPtr->ttl_ignore == 1) {
+    g_eventLogger->info("Zart, (Read) Skip checking TTL since "
+                        "ttl ignore is set");
+  }
+  if (_regOperPtr->ttl_ignore == 0 &&
+      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
       (attrId * ZAD_SIZE);
@@ -2367,9 +2375,14 @@ int Dbtup::handleUpdateReq(Signal* signal,
   if (operPtrP->original_op_type == ZWRITE &&
       regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
     g_eventLogger->info("Zart, (UPDATE) Skip checking TTL since "
-                        "the original operation is ZWRITE");
+                        "the original operation is ZWRITE.");
   }
-  if (operPtrP->original_op_type != ZWRITE &&
+  if (operPtrP->ttl_ignore == 1) {
+    g_eventLogger->info("Zart, (UPDATE) Skip checking TTL since "
+                        "ttl ignore is set");
+  }
+  if (operPtrP->ttl_ignore == 0 &&
+      operPtrP->original_op_type != ZWRITE &&
       regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
