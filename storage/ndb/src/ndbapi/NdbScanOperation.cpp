@@ -513,6 +513,15 @@ NdbScanOperation::scanImpl(const NdbScanOperation::ScanOptions *options,
       return -1;
   }
 
+  /*
+   * Zart
+   * TTL
+   */
+  if (options->optionsPresent & ScanOptions::SO_TTL_IGNORE) {
+    m_flags |= OF_TTL_IGNORE;
+  }
+
+
   /* Add interpreted code words to ATTRINFO signal
    * chain as necessary
    */
@@ -2461,6 +2470,12 @@ int NdbScanOperation::prepareSendScan(Uint32 /*aTC_ConnectPtr*/,
   if (m_aggregation_code != nullptr) {
     ScanTabReq::setAggregation(reqInfo, 1);
   }
+  /*
+   * Zart
+   * TTL
+   */
+  ScanTabReq::setTTLIgnoreFlag(reqInfo, (m_flags & OF_TTL_IGNORE) != 0);
+
   req->requestInfo = reqInfo;
   req->distributionKey= theDistributionKey;
   theSCAN_TABREQ->setLength(ScanTabReq::StaticLength + theDistrKeyIndicator_);

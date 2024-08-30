@@ -137,6 +137,9 @@ public:
 
   static void setAggregationFlag(Uint32 & requestInfo, Uint32 val);
   static Uint32 getAggregationFlag(const Uint32 & requestInfo);
+
+  static void setTTLIgnoreFragFlag(Uint32 & requestInfo, Uint32 val);
+  static Uint32 getTTLIgnoreFragFlag(const Uint32 & requestInfo);
 };
 
 /*
@@ -336,11 +339,12 @@ public:
  * f = First match flag      - 1  Bit 21
  * q = Query thread flag     - 1  Bit 22
  * g = Aggregation flag      - 1  Bit 23
+ * I = TTL ignore flag       - 1  Bit 24
  *
  *           1111111111222222222233
  * 01234567890123456789012345678901
  *  rrcdlxhkrztppppaaaaaaaaaaaaaaaa   Short variant ( < 6.4.0)
- *  rrcdlxhkrztppppCsaim  g           Long variant (6.4.0 +)
+ *  rrcdlxhkrztppppCsaim  gI          Long variant (6.4.0 +)
  */
 #define SF_LOCK_MODE_SHIFT   (5)
 #define SF_LOCK_MODE_MASK    (1)
@@ -372,6 +376,7 @@ public:
 #define SF_FIRST_MATCH_SHIFT (21)
 #define SF_QUERY_THREAD_SHIFT  (22)
 #define SF_AGGREGATION_SHIFT (23)
+#define SF_TTL_IGNORE_SHIFT (24)
 
 inline 
 Uint32
@@ -664,6 +669,20 @@ ScanFragReq::setNotInterpretedFlag(UintR & requestInfo, UintR val)
 {
   ASSERT_BOOL(val, "ScanFragReq::setStatScanFlag");
   requestInfo |= (val << SF_NOT_INTERPRETED_SHIFT);
+}
+
+inline
+void
+ScanFragReq::setTTLIgnoreFragFlag(Uint32 & requestInfo, UintR val) {
+  ASSERT_BOOL(val, "ScanFragReq::setTTLIgnoreFragFlag");
+  requestInfo= (requestInfo & ~(1 << SF_TTL_IGNORE_SHIFT)) |
+               (val << SF_TTL_IGNORE_SHIFT);
+}
+
+inline
+Uint32
+ScanFragReq::getTTLIgnoreFragFlag(const Uint32 & requestInfo) {
+  return (requestInfo >> SF_TTL_IGNORE_SHIFT) & 1;
 }
 
 /**

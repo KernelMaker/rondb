@@ -3796,6 +3796,16 @@ int ha_ndbcluster::ordered_index_scan(const key_range *start_key,
       options.optionsPresent |= NdbScanOperation::ScanOptions::SO_PARTITION_ID;
     }
 
+    /*
+     * Zart
+     * TTL
+     * TODO (Zhao)
+     * Remove
+     */
+    if (m_ttl_ignore) {
+      options.optionsPresent |= NdbScanOperation::ScanOptions::SO_TTL_IGNORE;
+    }
+
     NdbInterpretedCode code(m_table);
     generate_scan_filter(&code, &options);
 
@@ -3912,6 +3922,16 @@ int ha_ndbcluster::full_table_scan(const KEY *key_info,
   NdbScanOperation::ScanOptions options;
   options.optionsPresent = (NdbScanOperation::ScanOptions::SO_SCANFLAGS |
                             NdbScanOperation::ScanOptions::SO_PARALLEL);
+  /*
+   * Zart
+   * TTL
+   * TODO (Zhao)
+   * Remove
+   */
+  if (m_ttl_ignore) {
+    options.optionsPresent = NdbScanOperation::ScanOptions::SO_TTL_IGNORE;
+  }
+
   options.scan_flags =
       guess_scan_flags(lm, m_table_map, m_table, table->read_set);
   options.parallel = DEFAULT_PARALLELISM;
@@ -5940,6 +5960,11 @@ int ha_ndbcluster::ndb_delete_row(const uchar *record,
   if (thd_test_options(thd, OPTION_NO_FOREIGN_KEY_CHECKS)) {
     DBUG_PRINT("info", ("Disabling foreign keys"));
     options.optionsPresent |= NdbOperation::OperationOptions::OO_DISABLE_FK;
+  }
+
+  if (m_ttl_ignore) {
+    ndb_log_info("Zart, ha_ndbcluster::ndb_delete_row(), set TTL_IGNORE flag");
+    options.optionsPresent |= NdbOperation::OperationOptions::OO_TTL_IGNORE;
   }
 
   if (cursor) {
@@ -13756,6 +13781,15 @@ int ha_ndbcluster::multi_range_start_retrievals(uint starting_range) {
 
         options.optionsPresent = NdbScanOperation::ScanOptions::SO_SCANFLAGS |
                                  NdbScanOperation::ScanOptions::SO_PARALLEL;
+        /*
+         * Zart
+         * TTL
+         * TODO (Zhao)
+         * Remove
+         */
+        if (m_ttl_ignore) {
+          options.optionsPresent |= NdbScanOperation::ScanOptions::SO_TTL_IGNORE;
+        }
 
         options.scan_flags =
             NdbScanOperation::SF_ReadRangeNo | NdbScanOperation::SF_MultiRange;

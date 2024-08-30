@@ -2035,7 +2035,11 @@ bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
            */
 
           DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_2");
-          table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
+          /*
+           * Zart
+           * Already set before
+           */
+          // table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
           if ((error = table->file->ha_update_row(table->record[1],
                                                   table->record[0])) &&
               error != HA_ERR_RECORD_IS_THE_SAME) {

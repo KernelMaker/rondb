@@ -955,7 +955,6 @@ bool Sql_cmd_update::update_single_table(THD *thd) {
           continue;
         }
 
-        fprintf(stderr, "Zart zhao_wait_for_row_get_expired_after_reading_3 [%u]\n", will_batch);
         DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_3");
         if (will_batch) {
           /*

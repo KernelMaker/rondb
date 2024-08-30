@@ -6443,6 +6443,7 @@ int handler::multi_range_read_next(char **range_info) {
   int range_res = 0;
   bool dup_found = false;
   DBUG_TRACE;
+  fprintf(stderr, "Zart, handler::multi_range_read_next\n");
   // For a multi-valued index the unique filter have to be used for correct
   // result
   assert(!(table->key_info[active_index].flags & HA_MULTI_VALUED_KEY) ||
@@ -7986,6 +7987,7 @@ int handler::ha_reset() {
   // Forget the record buffer.
   m_record_buffer = nullptr;
   m_unique = nullptr;
+  // fprintf(stderr, "Zart ha_reset, table_name: %s\n", table->s->table_name.str);
 
   const int retval = reset();
   return retval;

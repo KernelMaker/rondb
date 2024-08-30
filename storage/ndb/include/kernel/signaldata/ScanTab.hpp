@@ -120,6 +120,7 @@ private:
   static Uint32 getExtendedConf(const Uint32&);
   static Uint8 getReadCommittedBaseFlag(const UintR & requestInfo);
   static Uint32 getMultiFragFlag(const Uint32 & requestInfo);
+  static Uint32 getTTLIgnoreFlag(const Uint32 & requestInfo);
 
   /**
    * Set:ers for requestInfo
@@ -142,6 +143,7 @@ private:
   static void setExtendedConf(Uint32 & requestInfo, Uint32 val);
   static void setReadCommittedBaseFlag(Uint32 & requestInfo, Uint32 val);
   static void setMultiFragFlag(Uint32 & requestInfo, Uint32 val);
+  static void setTTLIgnoreFlag(Uint32 & requestInfo, Uint32 val);
 };
 
 /**
@@ -183,11 +185,12 @@ private:
  a = Pass all confs flag   - 1  Bit 28
  f = 4 word conf           - 1  Bit 29
  R = Read Committed base   - 1  Bit 30
+ I = IgnoreTTL             - 1  Bit 3
 
            1111111111222222222233
  01234567890123456789012345678901
  pppppppplnhcktzxbbbbbbbbbbdjafR
-        g
+    I   g
 */
 
 #define PARALLEL_SHIFT     (0)
@@ -231,6 +234,8 @@ private:
 #define SCAN_EXTENDED_CONF_SHIFT (29)
 #define SCAN_READ_COMMITTED_BASE_SHIFT (30)
 #define SCAN_MULTI_FRAG_SHIFT (31)
+
+#define SCAN_TTL_IGNORE_SHIFT (3)
 
 inline
 Uint8
@@ -478,6 +483,23 @@ ScanTabReq::setMultiFragFlag(UintR & requestInfo, Uint32 flag){
                (flag << SCAN_MULTI_FRAG_SHIFT);
 }
 
+/*
+ * Zart
+ * TTL
+ */
+inline
+UintR
+ScanTabReq::getTTLIgnoreFlag(const UintR & requestInfo) {
+  return (requestInfo >> SCAN_TTL_IGNORE_SHIFT) & 1;
+}
+
+inline
+void
+ScanTabReq::setTTLIgnoreFlag(UintR & requestInfo, Uint32 flag) {
+  ASSERT_BOOL(flag, "TcKeyReq::setTTLIgnoreFlag");
+  requestInfo= (requestInfo & ~(1 << SCAN_TTL_IGNORE_SHIFT)) |
+               (flag << SCAN_TTL_IGNORE_SHIFT);
+}
 /**
  * 
  * SENDER:  Dbtc

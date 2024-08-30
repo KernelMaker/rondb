@@ -746,6 +746,8 @@ public:
                              // that we won't send a scanfragconf with 0 completed_ops
                              // to the TC, which could cause incorrect aggregation result.
     AggInterpreter* m_agg_interpreter;
+    // TTL
+    Uint8 m_ttl_ignore;
   };
   static constexpr Uint32 DBLQH_SCAN_RECORD_TRANSIENT_POOL_INDEX = 1;
   typedef Ptr<ScanRecord> ScanRecordPtr;

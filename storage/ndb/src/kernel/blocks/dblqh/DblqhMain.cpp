@@ -20537,6 +20537,7 @@ Uint32 Dblqh::initScanrec(const ScanFragReq* scanFragReq,
   const Uint32 prioAFlag = ScanFragReq::getPrioAFlag(reqinfo);
   const Uint32 firstMatch = ScanFragReq::getFirstMatchFlag(reqinfo);
   const Uint32 aggregation = ScanFragReq::getAggregationFlag(reqinfo);
+  const Uint32 ttl_ignore = ScanFragReq::getTTLIgnoreFragFlag(reqinfo);
 
   scanPtr->scanLockMode = scanLockMode;
   scanPtr->readCommitted = readCommitted;
@@ -20544,6 +20545,7 @@ Uint32 Dblqh::initScanrec(const ScanFragReq* scanFragReq,
   scanPtr->prioAFlag = prioAFlag;
   scanPtr->m_first_match_flag = firstMatch;
   scanPtr->m_aggregation = aggregation;
+  scanPtr->m_ttl_ignore = ttl_ignore;
 
   const Uint32 descending = ScanFragReq::getDescendingFlag(reqinfo);
   Uint32 tupScan = ScanFragReq::getTupScanFlag(reqinfo);

@@ -1343,6 +1343,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
     req_struct.m_row_id.m_page_idx = ZNIL;
 #endif
     req_struct.scan_rec = lqhScanPtrP;
+    regOperPtr->ttl_ignore = lqhScanPtrP->m_ttl_ignore;
   }
   else
   {
@@ -1375,6 +1376,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
     req_struct.m_row_id.m_page_no = row_id_page_no;
     req_struct.m_row_id.m_page_idx = row_id_page_idx;
     req_struct.scan_rec = nullptr;
+    regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
   }
   req_struct.m_deferred_constraints = deferred_constraints;
   req_struct.m_disable_fk_checks = disable_fk_checks;
@@ -1412,7 +1414,6 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
      * in the future
      */
     regOperPtr->original_op_type = original_op;
-    regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
     if (prepare_fragptr.p->fragTableId >= 17) {
       g_eventLogger->info("Zart, [TableId: %u]"
                           "Set Dbtup::Operationrec::original_op_type: %u, "
@@ -3721,8 +3722,13 @@ int Dbtup::handleDeleteReq(Signal* signal,
    * Zart
    * Here we check whether the row is expired
    */
+  if (regOperPtr->ttl_ignore == 1) {
+    g_eventLogger->info("Zart, (Delete) Skip checking TTL since "
+                        "ttl ignore is set");
+  }
   {
-  if (regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
+  if (regOperPtr->ttl_ignore == 0 &&
+      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
       (attrId * ZAD_SIZE);

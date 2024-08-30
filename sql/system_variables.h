@@ -501,6 +501,7 @@ struct System_variables {
   Explain_format_type explain_format;
 
   long ttl_debug_sleep_secs;
+  bool ttl_expired_rows_visiable_in_delete;
 };
 
 /**
