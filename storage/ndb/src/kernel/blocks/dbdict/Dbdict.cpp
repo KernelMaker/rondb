@@ -8552,6 +8552,8 @@ Dbdict::execTC_SCHVERCONF(Signal* signal)
     DEB_HASH(("4: dict_tab(%u) HashFunctionFlag: %u",
               tabPtr.p->tableId,
               ((tabPtr.p->m_bits & TableRecord::TR_HashFunction) != 0)));
+    req->ttlSec = tabPtr.p->ttlSec;
+    req->ttlColumnNo = tabPtr.p->ttlColumnNo;
 
 
     if (DictTabInfo::isOrderedIndex(tabPtr.p->tableType))

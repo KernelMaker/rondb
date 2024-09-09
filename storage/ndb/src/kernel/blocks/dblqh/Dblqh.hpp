@@ -747,7 +747,8 @@ public:
                              // to the TC, which could cause incorrect aggregation result.
     AggInterpreter* m_agg_interpreter;
     // TTL
-    Uint8 m_ttl_ignore;
+    Uint8 m_ttl_ignore;         // ignore set by API
+    Uint8 m_ttl_ignore_for_ral; // ignore set by Read after lock
   };
   static constexpr Uint32 DBLQH_SCAN_RECORD_TRANSIENT_POOL_INDEX = 1;
   typedef Ptr<ScanRecord> ScanRecordPtr;
@@ -3117,7 +3118,7 @@ public:
   void setup_scan_pointers(Uint32 scanPtrI, Uint32 line);
   void setup_scan_pointers_from_tc_con(TcConnectionrecPtr, Uint32 line);
   void setup_key_pointers(Uint32 tcIndex, bool acquire_lock = true);
-  void exec_next_scan_conf(Signal *signal);
+  void exec_next_scan_conf(Signal *signal, bool ttl_ignore_for_ral = false);
   void exec_next_scan_ref(Signal *signal);
   void continue_next_scan_conf(Signal *signal,
                                ScanRecord::ScanState scanState,

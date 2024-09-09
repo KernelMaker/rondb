@@ -10566,6 +10566,13 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
       regTcPtr.p->operation = ZINSERT_TTL;
       ndbrequire((regTcPtr.p->operation & 0x07) == ZINSERT);
     }
+    regTcPtr.p->ttl_ignore = signal->theData[5];
+    if (tabptr.i >= 17) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], get ignore_ttl: %u, "
+                          "table id: %u",
+                           signal->theData[5],
+                           tabptr.i);
+    }
     jamDebug();
     continueACCKEYCONF(signal,
                        signal->theData[3],
@@ -11873,6 +11880,20 @@ void Dblqh::execACCKEYCONF(Signal* signal)
       regTcPtr->operation = ZINSERT_TTL;
       ndbrequire((regTcPtr->operation & 0x07) == ZINSERT);
     }
+    /*
+     * Zart
+     */
+    regTcPtr->ttl_ignore = signal->theData[5];
+    if (regTcPtr->tableref >= 17) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], get ignore_ttl: %u, "
+                          "table id: %u",
+                           signal->theData[5],
+                           regTcPtr->tableref);
+    }
+    // if (/*regTcPtr->tableref >= 17 && */regTcPtr->ttl_ignore) {
+    //   g_eventLogger->info("Zart, Dblqh::execACCKEYCONF, Ignore TTL "
+    //                       "for one operation");
+    // }
     continueACCKEYCONF(signal, localKey1, localKey2, m_tc_connect_ptr);
   }
   release_frag_access(fragptr.p);
@@ -17449,7 +17470,7 @@ void Dblqh::execNEXT_SCANCONF(Signal* signal)
   release_frag_access(prim_tab_fragptr.p);
 }
 
-void Dblqh::exec_next_scan_conf(Signal *signal)
+void Dblqh::exec_next_scan_conf(Signal *signal, bool ttl_ignore_for_ral)
 {
   /**
    * The scan block sent an immediate signal requiring no
@@ -17468,6 +17489,7 @@ void Dblqh::exec_next_scan_conf(Signal *signal)
    */
   scanPtr->m_row_id.m_page_idx = pageIdx;
   scanPtr->m_row_id.m_page_no = pageNo;
+  scanPtr->m_ttl_ignore_for_ral = ttl_ignore_for_ral;
   continue_next_scan_conf(signal,
                           scanPtr->scanState,
                           scanPtr);
@@ -20546,6 +20568,7 @@ Uint32 Dblqh::initScanrec(const ScanFragReq* scanFragReq,
   scanPtr->m_first_match_flag = firstMatch;
   scanPtr->m_aggregation = aggregation;
   scanPtr->m_ttl_ignore = ttl_ignore;
+  scanPtr->m_ttl_ignore_for_ral = false;
 
   const Uint32 descending = ScanFragReq::getDescendingFlag(reqinfo);
   Uint32 tupScan = ScanFragReq::getTupScanFlag(reqinfo);

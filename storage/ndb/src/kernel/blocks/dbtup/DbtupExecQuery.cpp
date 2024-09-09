@@ -1343,7 +1343,36 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
     req_struct.m_row_id.m_page_idx = ZNIL;
 #endif
     req_struct.scan_rec = lqhScanPtrP;
+    /*
+     * Zart
+     * TTL
+     */
     regOperPtr->ttl_ignore = lqhScanPtrP->m_ttl_ignore;
+    if (lqhScanPtrP->m_ttl_ignore == 1 ||
+        lqhScanPtrP->m_ttl_ignore_for_ral == 1) {
+      regOperPtr->ttl_ignore = 1;
+    } else {
+      regOperPtr->ttl_ignore = 0;
+    }
+    if (prepare_fragptr.p->fragTableId >= 17) {
+      g_eventLogger->info("Zart, Dbtup::execTUPKEYREQ(), Ignore TTL[%u, %u]: %u",
+                           lqhScanPtrP->m_ttl_ignore,
+                           lqhScanPtrP->m_ttl_ignore_for_ral,
+                           regOperPtr->ttl_ignore);
+    }
+    /*
+     * Zart
+     * TODO (Zhao)
+     * double check here
+     */
+    if (lqhScanPtrP->m_ttl_ignore == 0 && lqhOpPtrP->ttl_ignore) {
+      if (prepare_fragptr.p->fragTableId >= 17) {
+        g_eventLogger->info("Zart, Dbtup::execTUPKEYREQ(), Ignore TTL "
+                            "for one operation in a normal scan");
+      }
+      ndbrequire(false);
+      regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
+    }
   }
   else
   {
@@ -1377,6 +1406,11 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
     req_struct.m_row_id.m_page_idx = row_id_page_idx;
     req_struct.scan_rec = nullptr;
     regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
+    if (prepare_fragptr.p->fragTableId >= 17 &&
+        regOperPtr->ttl_ignore) {
+      g_eventLogger->info("Zart, Dbtup::execTUPKEYREQ(), Ignore TTL "
+                   "for one operation");
+    }
   }
   req_struct.m_deferred_constraints = deferred_constraints;
   req_struct.m_disable_fk_checks = disable_fk_checks;

@@ -814,6 +814,11 @@ struct Operationrec {
   Operationrec_pool oprec_pool;
   Operationrec_list m_reserved_copy_frag_lock;
   OperationrecPtr operationRecPtr;
+  /*
+   * Zart
+   * TTL
+   */
+  Operationrec tmp_op_rec;
   OperationrecPtr queOperPtr;
   Uint32 cfreeopRec;
 
@@ -942,6 +947,11 @@ public:
   {
     return sizeof(struct Tabrec);
   }
+  /*
+   * Zart
+   * TTL
+   */
+  bool WhetherSkipTTL(Signal* signal);
 private:
   // Transit signals
   void execDEBUG_SIG(Signal* signal);
@@ -1003,7 +1013,7 @@ private:
   bool addfragtotab(Uint64 rootIndex, Uint32 fragId) const;
   void drop_fragment_from_table(Uint32 tableId, Uint32 fragId);
   void initOpRec(const AccKeyReq* signal, Uint32 siglen) const;
-  void sendAcckeyconf(Signal* signal) const;
+  void sendAcckeyconf(Signal* signal, bool ignore_ttl = false) const;
   Uint32 getNoParallelTransaction(const Operationrec*) const;
 
 #ifdef VM_TRACE
@@ -1210,10 +1220,12 @@ private:
   void sendholdconfsignalLab(Signal* signal) const;
   void accIsLockedLab(Signal* signal,
                       OperationrecPtr lockOwnerPtr,
-                      Uint32 hash);
+                      Uint32 hash,
+                      bool is_ttl_table);
   void insertExistElemLab(Signal* signal,
                           OperationrecPtr lockOwnerPtr,
-                          Uint32 hash);
+                          Uint32 hash,
+                          bool is_ttl_table);
   void releaseScanLab(Signal* signal);
   void initialiseRecordsLab(Signal* signal, Uint32, Uint32, Uint32);
   void checkNextBucketLab(Signal* signal);

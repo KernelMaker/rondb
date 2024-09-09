@@ -1126,13 +1126,19 @@ void Dbacc::initOpRec(const AccKeyReq* signal, Uint32 siglen) const
 /* --------------------------------------------------------------------------------- */
 /* SEND_ACCKEYCONF                                                                   */
 /* --------------------------------------------------------------------------------- */
-void Dbacc::sendAcckeyconf(Signal* signal) const
+void Dbacc::sendAcckeyconf(Signal* signal, bool ignore_ttl) const
 {
   signal->theData[0] = operationRecPtr.p->userptr;
   signal->theData[1] = operationRecPtr.p->m_op_bits & Operationrec::OP_MASK;
   signal->theData[2] = operationRecPtr.p->fid;
   signal->theData[3] = operationRecPtr.p->localdata.m_page_no;
   signal->theData[4] = operationRecPtr.p->localdata.m_page_idx;
+  signal->theData[5] = ignore_ttl ? 1 : 0;
+  if (fragrecptr.p->myTableId >= 17) {
+    g_eventLogger->info("Zart, Dbacc::sendAcckeyconf(), set ignore_ttl = %u, "
+                        "table id: %u",
+                         signal->theData[5], fragrecptr.p->myTableId);
+  }
 }//Dbacc::sendAcckeyconf()
 
 /**
@@ -1634,13 +1640,13 @@ void Dbacc::execACCKEYREQ(Signal* signal,
       else
       {
         jam();
-        accIsLockedLab(signal, lockOwnerPtr, hash);
+        accIsLockedLab(signal, lockOwnerPtr, hash, is_ttl);
         return;
       }//if
     case ZINSERT:
       jam();
       ndbassert(!m_is_in_query_thread);
-      insertExistElemLab(signal, lockOwnerPtr, hash);
+      insertExistElemLab(signal, lockOwnerPtr, hash, is_ttl);
       return;
     default:
       ndbabort();
@@ -2135,10 +2141,52 @@ ref:
 void 
 Dbacc::accIsLockedLab(Signal* signal,
                       OperationrecPtr lockOwnerPtr,
-                      Uint32 hash)
+                      Uint32 hash,
+                      bool is_ttl_table)
 {
   Uint32 bits = operationRecPtr.p->m_op_bits;
   validate_lock_queue(lockOwnerPtr);
+  
+  /*
+   * Zart
+   * TTL
+   */
+  bool ignore_ttl = false;
+  if (is_ttl_table) {
+    OperationrecPtr lastOpPtr;
+    lastOpPtr.i = lockOwnerPtr.p->m_lo_last_parallel_op_ptr_i;
+
+    if (lastOpPtr.i == RNIL)
+    {
+      lastOpPtr = lockOwnerPtr;
+    }
+    else
+    {
+      ndbrequire(m_curr_acc->oprec_pool.getValidPtr(lastOpPtr));
+    }
+
+    ndbassert(validate_parallel_queue(lastOpPtr, lockOwnerPtr.i));
+
+    Uint32 lastbits = lastOpPtr.p->m_op_bits;
+    if (lastbits & Operationrec::OP_ACC_LOCK_MODE)
+    {
+      if(operationRecPtr.p->is_same_trans(lastOpPtr.p))
+      {
+        ignore_ttl = true;
+      }
+    } else {
+      OperationrecPtr loopPtr = lockOwnerPtr;
+      do
+      {
+        ndbrequire(m_curr_acc->oprec_pool.getValidPtr(loopPtr));
+        if (loopPtr.p->is_same_trans(operationRecPtr.p)) {
+          ignore_ttl = true;
+          break;
+        }
+        loopPtr.i = loopPtr.p->nextParallelQue;
+      } while (loopPtr.i != RNIL);
+    }
+  }
   
   if ((bits & Operationrec::OP_DIRTY_READ) == 0)
   {
@@ -2198,7 +2246,7 @@ Dbacc::accIsLockedLab(Signal* signal,
                                             != ZREADLOCK,
                                             operationRecPtr.p->m_lockTime,
                                             getHighResTimer());
-      sendAcckeyconf(signal);
+      sendAcckeyconf(signal, ignore_ttl);
       return;
     }
     else if (return_result == ZSERIAL_QUEUE)
@@ -2234,7 +2282,7 @@ Dbacc::accIsLockedLab(Signal* signal,
       c_tup->prepareTUPKEYREQ(operationRecPtr.p->localdata.m_page_no,
                               operationRecPtr.p->localdata.m_page_idx,
                               fragrecptr.p->tupFragptr);
-      sendAcckeyconf(signal);
+      sendAcckeyconf(signal, ignore_ttl);
       operationRecPtr.p->m_op_bits = Operationrec::OP_EXECUTED_DIRTY_READ;
       return;
     } 
@@ -2257,7 +2305,8 @@ Dbacc::accIsLockedLab(Signal* signal,
 /* ------------------------------------------------------------------------ */
 void Dbacc::insertExistElemLab(Signal* signal,
                                OperationrecPtr lockOwnerPtr,
-                               Uint32 hash)
+                               Uint32 hash,
+                               bool is_ttl)
 {
   if (!lockOwnerPtr.p)
   {
@@ -2266,7 +2315,7 @@ void Dbacc::insertExistElemLab(Signal* signal,
     acckeyref1Lab(signal, ZWRITE_ERROR);/* THE ELEMENT ALREADY EXIST */
     return;
   }//if
-  accIsLockedLab(signal, lockOwnerPtr, hash);
+  accIsLockedLab(signal, lockOwnerPtr, hash, is_ttl);
 }//Dbacc::insertExistElemLab()
 
 /* --------------------------------------------------------------------------------- */
@@ -3468,6 +3517,17 @@ void Dbacc::execACC_LOCKREQ(Signal* signal)
         accreq = AccKeyReq::setReplicaType(accreq, 0); // ?
         accreq = AccKeyReq::setTakeOver(accreq, false);
         accreq = AccKeyReq::setLockReq(accreq, true);
+        /*
+         * Zart
+         * Set ttl flag for AccKeyReq, so that the c_acc->execACCKEYREQ
+         * can handle ZINSERT into TTL table correctly
+         */
+        if (prepare_fragptr.p->ttlSec != RNIL &&
+            prepare_fragptr.p->ttlColumnNo != RNIL) {
+          accreq = AccKeyReq::setTTL(accreq, true);
+        } else {
+          accreq = AccKeyReq::setTTL(accreq, false);
+        }
         AccKeyReq* keyreq = reinterpret_cast<AccKeyReq*>(&signal->theData[0]);
         keyreq->fragmentPtr = fragrecptr.i;
         keyreq->requestInfo = accreq;
@@ -3557,6 +3617,203 @@ void Dbacc::execACC_LOCKREQ(Signal* signal)
     return;
   }
   ndbabort();
+}
+
+/*
+ * Check whether needs to skip TTL for this record
+ */
+bool Dbacc::WhetherSkipTTL(Signal* signal)
+{
+  jamEntryDebug();
+  bool skip = false;
+  
+  // Make up AccLockReq
+  AccLockReq* sig = (AccLockReq*)signal->getDataPtrSend();
+  AccLockReq reqCopy = *sig;
+  AccLockReq* const req = &reqCopy;
+  Uint32 lockOp = (req->requestInfo & 0xFF);
+  ndbrequire(lockOp == AccLockReq::LockShared);
+  jam();
+  fragrecptr = prepare_fragptr;
+  ndbassert(fragrecptr.p->myTableId == req->tableId);
+  ndbassert(fragrecptr.p->fragmentid == req->fragId);
+  ndbrequire(req->accOpPtr == RNIL);
+
+  // Initialize local Operationrec as its construct function
+  // OperationrecPtr operationRecPtr;
+  operationRecPtr.p = &tmp_op_rec;
+  operationRecPtr.i = 0x880721;
+  operationRecPtr.p->m_magic = Magic::make(RT_DBACC_OPERATION);
+  operationRecPtr.p->m_op_bits =  ~(Uint32)0 /*OP_INITIAL*/;
+  operationRecPtr.p->prevOp = RNIL;
+  operationRecPtr.p->m_reserved = false;
+
+  jamDebug();
+  operationRecPtr.p->userptr = req->userPtr;
+  operationRecPtr.p->userblockref = req->userRef;
+  operationRecPtr.p->scanRecPtr = RNIL;
+  Uint32 lockMode = (lockOp == AccLockReq::LockShared) ? 0 : 1;
+  Uint32 opCode = ZSCAN_OP;
+
+  // Initialize AccKeyReq
+  {
+    Uint32 accreq = 0;
+    accreq = AccKeyReq::setOperation(accreq, opCode);
+    accreq = AccKeyReq::setLockType(accreq, lockMode);
+    accreq = AccKeyReq::setDirtyOp(accreq, false);
+    accreq = AccKeyReq::setReplicaType(accreq, 0); // ?
+    accreq = AccKeyReq::setTakeOver(accreq, false);
+    accreq = AccKeyReq::setLockReq(accreq, true);
+    ndbrequire(prepare_fragptr.p->ttlSec != RNIL &&
+              prepare_fragptr.p->ttlColumnNo != RNIL);
+    accreq = AccKeyReq::setTTL(accreq, true);
+    AccKeyReq* keyreq = reinterpret_cast<AccKeyReq*>(&signal->theData[0]);
+    keyreq->fragmentPtr = fragrecptr.i;
+    keyreq->requestInfo = accreq;
+    keyreq->hashValue = req->hashValue;
+    keyreq->keyLen = 0;   // search local key
+    keyreq->transId1 = req->transId1;
+    keyreq->transId2 = req->transId2;
+    keyreq->lockConnectPtr = RNIL;
+    keyreq->localKey[0] = req->page_id;
+    keyreq->localKey[1] = req->page_idx;
+    static_assert(AccKeyReq::SignalLength_localKey == 10);
+  }
+  signal->setLength(AccKeyReq::SignalLength_localKey);
+
+  // Check the lock
+  {
+  jamEntryDebug();
+  AccKeyReq* const req = reinterpret_cast<AccKeyReq*>(&signal->theData[0]);
+  fragrecptr = prepare_fragptr;
+  { // Initialize local Operationrec from AccKeyReq
+  Uint32 Treqinfo;
+
+  Treqinfo = req->requestInfo;
+
+  operationRecPtr.p->hashValue = LHBits32(req->hashValue);
+  operationRecPtr.p->tupkeylen = req->keyLen;
+  operationRecPtr.p->m_scanOpDeleteCountOpRef = RNIL;
+  operationRecPtr.p->transId1 = req->transId1;
+  operationRecPtr.p->transId2 = req->transId2;
+
+  const bool readOp = AccKeyReq::getLockType(Treqinfo) == ZREAD;
+  const bool dirtyOp = AccKeyReq::getDirtyOp(Treqinfo);
+  const bool dirtyReadOp = readOp & dirtyOp;
+  const bool noWait = AccKeyReq::getNoWait(Treqinfo);
+  Uint32 operation = AccKeyReq::getOperation(Treqinfo);
+  // Zart assert
+  ndbrequire(readOp && !dirtyOp && !noWait && operation == ZSCAN_OP);
+
+  Uint32 opbits = 0;
+  opbits |= operation;
+  opbits |= readOp ? 0 : (Uint32) Operationrec::OP_LOCK_MODE;
+  opbits |= readOp ? 0 : (Uint32) Operationrec::OP_ACC_LOCK_MODE;
+  opbits |= dirtyReadOp ? (Uint32) Operationrec::OP_DIRTY_READ : 0;
+  opbits |= noWait ? (Uint32) Operationrec::OP_NOWAIT : 0;
+
+  // Zart assert
+  ndbrequire(AccKeyReq::getLockReq(Treqinfo))
+  opbits |= Operationrec::OP_LOCK_REQ;            // TUX LOCK_REQ
+  opbits |= Operationrec::OP_COMMIT_DELETE_CHECK;
+
+  ndbrequire(operationRecPtr.p->m_op_bits == Operationrec::OP_INITIAL);
+  operationRecPtr.p->fid = fragrecptr.p->myfid;
+  operationRecPtr.p->fragptr = fragrecptr.i;
+  operationRecPtr.p->nextParallelQue = RNIL;
+  operationRecPtr.p->prevParallelQue = RNIL;
+  operationRecPtr.p->nextSerialQue = RNIL;
+  operationRecPtr.p->prevSerialQue = RNIL;
+  operationRecPtr.p->elementPage = RNIL;
+  operationRecPtr.p->scanRecPtr = RNIL;
+  operationRecPtr.p->m_op_bits = opbits;
+  NdbTick_Invalidate(&operationRecPtr.p->m_lockTime);
+
+  if (operationRecPtr.p->tupkeylen == 0)
+  {
+    static_assert(AccKeyReq::SignalLength_localKey == 10);
+    ndbassert(signal->getLength() == AccKeyReq::SignalLength_localKey);
+  }
+  else
+  {
+    static_assert(AccKeyReq::SignalLength_keyInfo == 8);
+    ndbassert(signal->getLength() == AccKeyReq::SignalLength_keyInfo + operationRecPtr.p->tupkeylen);
+  }
+  } // Dbacc::initOpRec()
+
+  ndbrequire(Magic::check_ptr(operationRecPtr.p));
+  bool is_ttl = AccKeyReq::getTTL(req->requestInfo);
+  ndbrequire(is_ttl);
+
+  OperationrecPtr lockOwnerPtr;
+  Page8Ptr bucketPageptr;
+  Uint32 bucketConidx;
+  Page8Ptr elemPageptr;
+  Uint32 elemConptr;
+  Uint32 elemptr;
+
+  Uint32 hash = 0;
+  c_tup->acquire_frag_page_map_mutex_read(jamBuffer());
+  acquire_frag_mutex_hash(fragrecptr.p, operationRecPtr, hash);
+  const Uint32 found = getElement(req,
+      lockOwnerPtr,
+      bucketPageptr,
+      bucketConidx,
+      elemPageptr,
+      elemConptr,
+      elemptr);
+  c_tup->release_frag_page_map_mutex_read(jamBuffer());
+
+  Uint32 opbits = operationRecPtr.p->m_op_bits;
+
+  ndbrequire(!(AccKeyReq::getTakeOver(req->requestInfo)));
+
+  Uint32 op = opbits & Operationrec::OP_MASK;
+  ndbrequire(op == ZSCAN_OP);
+  g_eventLogger->info("Zart, Dbacc::WhetherSkipTTL(), found: %u, locked: %d",
+                       found, lockOwnerPtr.p != nullptr);
+  if (found == ZTRUE) {
+    if (likely(lockOwnerPtr.p)) {
+      jam();
+      OperationrecPtr lastOpPtr;
+      lastOpPtr.i = lockOwnerPtr.p->m_lo_last_parallel_op_ptr_i;
+
+      if (lastOpPtr.i == RNIL)
+      {
+        lastOpPtr = lockOwnerPtr;
+      }
+      else
+      {
+        ndbrequire(m_curr_acc->oprec_pool.getValidPtr(lastOpPtr));
+      }
+
+      ndbassert(validate_parallel_queue(lastOpPtr, lockOwnerPtr.i));
+
+      Uint32 lastbits = lastOpPtr.p->m_op_bits;
+      if (lastbits & Operationrec::OP_ACC_LOCK_MODE)
+      {
+        if(operationRecPtr.p->is_same_trans(lastOpPtr.p))
+        {
+          skip = true;
+        }
+      } else {
+        OperationrecPtr loopPtr = lockOwnerPtr;
+        do
+        {
+          ndbrequire(m_curr_acc->oprec_pool.getValidPtr(loopPtr));
+          if (loopPtr.p->is_same_trans(operationRecPtr.p)) {
+            skip = true;
+          }
+          loopPtr.i = loopPtr.p->nextParallelQue;
+        } while (loopPtr.i != RNIL);
+      }
+    }
+  }
+  release_frag_mutex_hash(fragrecptr.p, hash);
+  } // execACCKEYREQ()
+  req->returnCode = AccLockReq::Success;
+  req->accOpPtr = RNIL;
+  return skip;
 }
 
 /* ------------------------------------------------------------------------- */

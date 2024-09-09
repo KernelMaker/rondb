@@ -118,8 +118,13 @@ struct TcSchVerReq
   Uint32 readBackup;
   Uint32 fullyReplicated;
   Uint32 hashFunctionFlag;
+  /*
+   * TTL
+   */
+  Uint32 ttlSec;
+  Uint32 ttlColumnNo;
 
-  static constexpr Uint32 SignalLength = 12;
+  static constexpr Uint32 SignalLength = 14;
 };
 
 struct TcSchVerConf

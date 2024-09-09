@@ -1722,6 +1722,8 @@ public:
     Uint8 hasCharAttr;
     Uint8 noOfDistrKeys;
     Uint8 hasVarKeys;
+    Uint32 m_ttl_sec;
+    Uint32 m_ttl_col_no;
 
     bool checkTable(Uint32 schemaVersion) const {
       return !get_dropping() &&

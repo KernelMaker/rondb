@@ -1052,6 +1052,17 @@ void Dbtc::execTC_SCHVERREQ(Signal* signal)
     jam();
     tabptr.p->m_flags |= TableRecord::TR_FULLY_REPLICATED;
   }
+  /*
+   * Zart
+   * TTL
+   */
+  tabptr.p->m_ttl_sec = req->ttlSec;
+  tabptr.p->m_ttl_col_no = req->ttlColumnNo;
+  if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
+    g_eventLogger->info("Zart, [TC]Gen Tablerec, table_id: %u, TTL sec: %u, "
+                        "TTL column no: %u",
+        tabptr.i, tabptr.p->m_ttl_sec, tabptr.p->m_ttl_col_no);
+  }
 
   TcSchVerConf * conf = (TcSchVerConf*)signal->getDataPtr();
   conf->senderRef = reference();
@@ -16749,6 +16760,23 @@ void Dbtc::diFcountReqLab(Signal* signal,
     (ScanFragReq::getReadCommittedFlag(scanptr.p->scanRequestInfo) ||
        scanptr.p->m_read_committed_base) &&
     ((tabPtr.p->m_flags & TableRecord::TR_FULLY_REPLICATED) != 0);
+  /*
+   * Zart
+   * TTL
+   * Only read primary on TTL table
+   *
+   * if m_read_any_node == 1
+   *   This is a committed read. We want any fragment which is readable.
+   * TODO (Zhao)
+   * Should keep it or not? read_any_node just works with full replicated table,
+   * look into what it is.
+   */
+  if (scanptr.p->m_read_any_node == 1 &&
+      tabPtr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
+    scanptr.p->m_read_any_node = 0; 
+    g_eventLogger->info("Zart, Dbtc::diFcountReqLab(), set m_read_any_node to 0 "
+                        "for TTL table: %u", tabPtr.i);
+  }
   
   /*************************************************
    * THE FIRST STEP TO RECEIVE IS SUCCESSFULLY COMPLETED.
@@ -17271,7 +17299,30 @@ bool Dbtc::sendDihGetNodeReq(Signal* signal,
    */
   NodeId primaryNodeId = nodeId;
   Uint32 TreadBackup = (tabPtr.p->m_flags & TableRecord::TR_READ_BACKUP);
-  if (TreadBackup &&
+  bool ttl_table = false;
+  /*
+   * Zart
+   * TTL
+   * Since READ_BACKUP will read replica instead of primary, it doesn't
+   * work with TTL table's read what you have locked
+   * Skip READ_BACKUP for TTL table
+   *
+   * TODO (Zhao)
+   * Check full replicated table?
+   */
+  if (tabPtr.p->m_ttl_sec != RNIL && tabPtr.p->m_ttl_col_no != RNIL) {
+    ttl_table = true;
+  }
+  if (ttl_table && TreadBackup &&
+      (ScanFragReq::getReadCommittedFlag(scanptr.p->scanRequestInfo) ||
+       scanptr.p->m_read_committed_base)) {
+    g_eventLogger->info("Zart,  Dbtc::sendDihGetNodeReq(), ignore TR_READ_BACKUP "
+                        "for TTL table id: %u, frag id: %u",
+                         tabPtr.i,
+                         scanFragId);
+  }
+
+  if (!ttl_table && TreadBackup &&
       (ScanFragReq::getReadCommittedFlag(scanptr.p->scanRequestInfo) ||
        scanptr.p->m_read_committed_base))
   {
@@ -19190,6 +19241,8 @@ void Dbtc::initTable(Signal* signal)
     tabptr.p->hasCharAttr = 0;
     tabptr.p->noOfDistrKeys = 0;
     tabptr.p->hasVarKeys = 0;
+    tabptr.p->m_ttl_sec = RNIL;
+    tabptr.p->m_ttl_col_no = RNIL;
   }//for
 }//Dbtc::initTable()
 

@@ -1042,6 +1042,11 @@ Dbtux::continue_scan(Signal *signal,
     // next time look for next entry
     scan.m_state = ScanOp::Next;
     signal->setLength(NextScanConf::SignalLengthNoGCI);
+    /*
+     * Zart
+     * TTL
+     * TODO (Zhao) Ignore TTL for index scan.
+     */
     c_lqh->exec_next_scan_conf(signal);
     return;
   }
