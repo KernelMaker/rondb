@@ -2656,6 +2656,7 @@ public:
     Uint32 m_ttl_col_no;
   }; // Size 100 bytes
   typedef Ptr<Tablerec> TablerecPtr;
+  bool is_ttl_table(Uint32 table_id);
   void release_frag_array(Tablerec*);
   Uint32 findFreeFragEntry(Uint32 num_fragments_in_array);
   bool seize_frag_array(Tablerec*,

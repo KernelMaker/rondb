@@ -4813,6 +4813,13 @@ void Dblqh::removeTable(Uint32 tableId)
   release_frag_array(tabptr.p);
 }
 
+bool Dblqh::is_ttl_table(Uint32 table_id) {
+  TablerecPtr t_tabptr;
+  t_tabptr.i = table_id;
+  ptrCheckGuard(t_tabptr, ctabrecFileSize, tablerec);
+  return (t_tabptr.p->m_ttl_sec != RNIL &&
+          t_tabptr.p->m_ttl_col_no != RNIL);
+}
 void
 Dblqh::release_frag_array(Tablerec *tabPtrP)
 {
@@ -9496,6 +9503,8 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
    * TTL
    */
   regTcPtr->ttl_ignore = LqhKeyReq::getTTLIgnoreFlag(Treqinfo);
+  g_eventLogger->info("Zart, Dblqh::execLQHKEYREQ(), ttl_ignore: %u",
+                      regTcPtr->ttl_ignore);
 
   if (regTcPtr->dirtyOp)
   {
@@ -10566,12 +10575,39 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
       regTcPtr.p->operation = ZINSERT_TTL;
       ndbrequire((regTcPtr.p->operation & 0x07) == ZINSERT);
     }
-    regTcPtr.p->ttl_ignore = signal->theData[5];
-    if (tabptr.i >= 17) {
-      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], get ignore_ttl: %u, "
+    /*
+     * Zart
+     * TTL
+     */
+    if (regTcPtr.p->ttl_ignore && signal->theData[5] != 1) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
+                          "ACCKEYCONF is 0 but the related "
+                          "Dblqh::TcConnectionrec::ttl_ignore has already "
+                          "been set as 1, so keep it! "
+                          "table id: %u",
+                           tabptr.i);
+    } else if (regTcPtr.p->ttl_ignore != 1 && signal->theData[5] == 1) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
+                          "ACCKEYCONF is 1 and the related "
+                          "Dblqh::TcConnectionrec::ttl_ignore is 0, "
+                          "so set it to 1! "
+                          "table id: %u",
+                           tabptr.i);
+      /* IMPORTANT */
+      regTcPtr.p->ttl_ignore = signal->theData[5];
+    } else if (regTcPtr.p->ttl_ignore && signal->theData[5]) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
+                          "both ACCKEYCONF and the related "
+                          "Dblqh::TcConnectionrec is 1, "
+                          "no need to set again"
+                          "table id: %u",
+                           tabptr.i);
+    }
+    if (regTcPtr.p->tableref >= 17) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], final ignore_ttl: %u, "
                           "table id: %u",
                            signal->theData[5],
-                           tabptr.i);
+                           regTcPtr.p->tableref);
     }
     jamDebug();
     continueACCKEYCONF(signal,
@@ -11882,10 +11918,34 @@ void Dblqh::execACCKEYCONF(Signal* signal)
     }
     /*
      * Zart
+     * TTL
      */
-    regTcPtr->ttl_ignore = signal->theData[5];
+    if (regTcPtr->ttl_ignore && signal->theData[5] != 1) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
+                          "ACCKEYCONF is 0 but the related "
+                          "Dblqh::TcConnectionrec::ttl_ignore has already "
+                          "been set as 1, so keep it! "
+                          "table id: %u",
+                           tabptr.i);
+    } else if (regTcPtr->ttl_ignore != 1 && signal->theData[5] == 1) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
+                          "ACCKEYCONF is 1 and the related "
+                          "Dblqh::TcConnectionrec::ttl_ignore is 0, "
+                          "so set it to 1! "
+                          "table id: %u",
+                           tabptr.i);
+      /* IMPORTANT */
+      regTcPtr->ttl_ignore = signal->theData[5];
+    } else if (regTcPtr->ttl_ignore && signal->theData[5]) {
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
+                          "both ACCKEYCONF and the related "
+                          "Dblqh::TcConnectionrec is 1, "
+                          "no need to set again"
+                          "table id: %u",
+                           tabptr.i);
+    }
     if (regTcPtr->tableref >= 17) {
-      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], get ignore_ttl: %u, "
+      g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], final ignore_ttl: %u, "
                           "table id: %u",
                            signal->theData[5],
                            regTcPtr->tableref);

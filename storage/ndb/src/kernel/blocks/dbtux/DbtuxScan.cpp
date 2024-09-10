@@ -766,6 +766,10 @@ Dbtux::continue_scan(Signal *signal,
   }
 #endif
   const Index& index = *c_ctx.indexPtr.p;
+
+  bool ttl_table = c_lqh->is_ttl_table(index.m_tableId);
+  bool ttl_ignore_for_ral = false;
+
   if (unlikely(scan.m_lockwait || wait_scan_lock_record))
   {
     jam();
@@ -976,6 +980,37 @@ Dbtux::continue_scan(Signal *signal,
       default:
         ndbabort();
       }
+    } else if (ttl_table) {
+      jamDebug();
+      const TreeEnt ent = scan.m_scanEnt;
+      // read tuple key
+      readTableHashKey(ent, pkData, pkSize);
+      // get read lock or exclusive lock
+      AccLockReq* const lockReq = (AccLockReq*)signal->getDataPtrSend();
+      lockReq->returnCode = RNIL;
+      lockReq->requestInfo =
+        scan.m_lockMode == 0 ? AccLockReq::LockShared : AccLockReq::LockExclusive;
+      lockReq->accOpPtr = RNIL;
+      lockReq->userPtr = scanPtr.i;
+      lockReq->userRef = reference();
+      lockReq->tableId = scan.m_tableId;
+      lockReq->fragId = frag.m_fragId;
+      lockReq->hashValue =
+        rondb_calc_hash_val((const char*)pkData,
+                             pkSize,
+                             frag.m_use_new_hash_function);
+      Uint32 lkey1, lkey2;
+      getTupAddr(ent, lkey1, lkey2);
+      lockReq->page_id = lkey1;
+      lockReq->page_idx = lkey2;
+      lockReq->transId1 = scan.m_transId1;
+      lockReq->transId2 = scan.m_transId2;
+      lockReq->isCopyFragScan = ZFALSE;
+      ttl_ignore_for_ral = c_acc->WhetherSkipTTL(signal);
+      g_eventLogger->info("Zart, Dbtux::continue_scan() check whether needs "
+                          "to ignore TTL: %d", ttl_ignore_for_ral);
+      scan.m_state = ScanOp::Locked;
+      jamEntryDebug();
     }
     else
     {
@@ -1045,9 +1080,9 @@ Dbtux::continue_scan(Signal *signal,
     /*
      * Zart
      * TTL
-     * TODO (Zhao) Ignore TTL for index scan.
+     * Here we set ScanRecord->m_ignore_ttl_for_ral
      */
-    c_lqh->exec_next_scan_conf(signal);
+    c_lqh->exec_next_scan_conf(signal, ttl_ignore_for_ral);
     return;
   }
   // In ACC this is checked before req->checkLcpStop
