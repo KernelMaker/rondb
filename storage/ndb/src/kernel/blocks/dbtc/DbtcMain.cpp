@@ -4780,6 +4780,9 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
   TcConnectRecord * const regTcPtr = tcConnectptr.p;
   ApiConnectRecord * const regApiPtr = apiConnectptr.p;
 
+  bool ttl_table = false;
+  bool ttl_can_go_to_replica = false;
+
   UintR TtcTimer = ctcTimer;
   UintR ThashValue = thashValue;
   UintR TdistrHashValue = tdistrHashValue;
@@ -4797,6 +4800,27 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
     terrorCode = localTabptr.p->getErrorCode(schemaVersion);
     TCKEY_abort(signal, 58, apiConnectptr);
     return;
+  }
+  /*
+   * Zart
+   * TTL
+   * if the current table is TTL table, check whether allow
+   * this operation to go to replica or not
+   */
+  {
+    Uint32 read_back = localTabptr.p->m_flags & TableRecord::TR_READ_BACKUP;
+    Uint32 fully_replicated =
+             localTabptr.p->m_flags & TableRecord::TR_FULLY_REPLICATED;
+    Uint32 op = regTcPtr->operation;
+    Uint32 op_count = regApiPtr->tcConnect.getCount();
+    Uint8 TopSimple = regTcPtr->opSimple;
+    Uint8 TopDirty = regTcPtr->dirtyOp;
+    ttl_table = (localTabptr.p->m_ttl_sec != RNIL &&
+                      localTabptr.p->m_ttl_col_no != RNIL);
+    if (ttl_table && (read_back || fully_replicated) && op == ZREAD &&
+        TopSimple != 0 && TopDirty != 0 && op_count == 1) {
+      ttl_can_go_to_replica = true;
+    }
   }
 
   /**
@@ -4960,6 +4984,37 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
 
   regCachePtr->fragmentDistributionKey = (tnodeinfo >> 16) & 255;
   Uint32 TreadBackup = (localTabptr.p->m_flags & TableRecord::TR_READ_BACKUP);
+  /*
+   * Zart
+   * If the current table is TTL table, adjust TreadBackup based on
+   * ttl_can_go_to_replica
+   */
+  if (ttl_table && !ttl_can_go_to_replica) {
+    g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), DISALLOW the operation to go to "
+                        "replica for ttl table id: %u, op: %u"
+                        "TopSimple: %u, TopDirty: %u, "
+                        "m_write_count: %u, m_exec_count: %u, "
+                        "m_exec_write_count: %u, m_simple_read_count: %u "
+                        "count: %u",
+                        localTabptr.i, Toperation,
+                        regTcPtr->opSimple, regTcPtr->dirtyOp,
+                        regApiPtr->m_write_count, regApiPtr->m_exec_count,
+                        regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
+                        regApiPtr->tcConnect.getCount());
+    TreadBackup = 0;
+  } else if (ttl_table) {
+    g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), ALLOW the operation to go to "
+                        "replica for ttl table id: %u, op: %u"
+                        "TopSimple: %u, TopDirty: %u, "
+                        "m_write_count: %u, m_exec_count: %u, "
+                        "m_exec_write_count: %u, m_simple_read_count: %u "
+                        "count: %u",
+                        localTabptr.i, Toperation,
+                        regTcPtr->opSimple, regTcPtr->dirtyOp,
+                        regApiPtr->m_write_count, regApiPtr->m_exec_count,
+                        regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
+                        regApiPtr->tcConnect.getCount());
+  }
   if (Toperation == ZREAD || Toperation == ZREAD_EX)
   {
     Uint8 TopSimple = regTcPtr->opSimple;

@@ -9503,8 +9503,10 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
    * TTL
    */
   regTcPtr->ttl_ignore = LqhKeyReq::getTTLIgnoreFlag(Treqinfo);
-  g_eventLogger->info("Zart, Dblqh::execLQHKEYREQ(), ttl_ignore: %u",
-                      regTcPtr->ttl_ignore);
+  if (tabptr.i >= 17) {
+    g_eventLogger->info("Zart, Dblqh::execLQHKEYREQ(), ttl_ignore: %u",
+                        regTcPtr->ttl_ignore);
+  }
 
   if (regTcPtr->dirtyOp)
   {

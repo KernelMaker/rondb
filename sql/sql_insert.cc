@@ -1865,7 +1865,7 @@ bool write_record(THD *thd, TABLE *table, COPY_INFO *info, COPY_INFO *update) {
        * ignore ttl in scan?
        */
       DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_1");
-      table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
+      // table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
 
       /* Read all columns for the row we are going to replace */
       table->use_all_columns();

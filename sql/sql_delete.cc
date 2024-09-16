@@ -623,7 +623,7 @@ bool Sql_cmd_delete::delete_from_single_table(THD *thd) {
 */
       DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_4");
       if (!read_removal) {
-        table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
+        // table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
       } else {
         if (strcmp(table->s->table_name.str, "sz") == 0) {
           fprintf(stderr, "Zart Sql_cmd_delete::delete_from_single_table, "
