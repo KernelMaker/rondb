@@ -8577,6 +8577,22 @@ Dbdict::execTC_SCHVERCONF(Signal* signal)
         (Uint32)((tabPtr.p->m_bits & TableRecord::TR_FullyReplicated) != 0);
     }
 
+    /*
+     * Zart
+     * TTL
+     * send primaryTable to TC to make sure the table record
+     * of non-table table can find its primary table record to
+     * get the TTL info.
+     */
+    if (!DictTabInfo::isTable(tabPtr.p->tableType)) {
+      req->primaryTableId = tabPtr.p->primaryTableId;
+      TableRecordPtr basePtr;
+      bool ok = find_object(basePtr, tabPtr.p->primaryTableId);
+      ndbrequire(ok && basePtr.p->tableId == tabPtr.p->primaryTableId);
+    } else {
+      req->primaryTableId = RNIL;
+    }
+
     sendSignal(DBTC_REF, GSN_TC_SCHVERREQ, signal,
                TcSchVerReq::SignalLength, JBB);
     return;

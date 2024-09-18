@@ -1724,6 +1724,7 @@ public:
     Uint8 hasVarKeys;
     Uint32 m_ttl_sec;
     Uint32 m_ttl_col_no;
+    Uint32 m_primary_table_id;
 
     bool checkTable(Uint32 schemaVersion) const {
       return !get_dropping() &&
@@ -2336,7 +2337,8 @@ private:
                          ScanRecordPtr,
                          ScanFragLocationPtr &fragLocationPtr,
                          Uint32 scanFragId,
-                         bool is_multi_spj_scan);
+                         bool is_multi_spj_scan,
+                         bool ttl_can_go_to_replica);
   void get_next_frag_location(ScanFragLocationPtr fragLocationPtr,
                               Uint32 & fragId,
                               Uint32 & primaryBlockRef,
