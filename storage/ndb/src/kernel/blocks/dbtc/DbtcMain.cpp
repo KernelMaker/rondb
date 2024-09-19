@@ -4811,12 +4811,13 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
    */
   {
     Uint32 read_back = localTabptr.p->m_flags & TableRecord::TR_READ_BACKUP;
-    // Uint32 fully_replicated =
-    //          localTabptr.p->m_flags & TableRecord::TR_FULLY_REPLICATED;
+    Uint32 fully_replicated =
+             localTabptr.p->m_flags & TableRecord::TR_FULLY_REPLICATED;
     Uint32 op = regTcPtr->operation;
     Uint32 op_count = regApiPtr->tcConnect.getCount();
     Uint8 TopSimple = regTcPtr->opSimple;
     Uint8 TopDirty = regTcPtr->dirtyOp;
+    Uint8 Tread_committed_base = regCachePtr->m_read_committed_base;
 
     if (DictTabInfo::isTable(localTabptr.p->tableType)) {
       ttl_table = (localTabptr.p->m_ttl_sec != RNIL &&
@@ -4830,8 +4831,10 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
                     tmp_tabPtr.p->m_ttl_col_no != RNIL);
     }
 
-    if (ttl_table && (read_back/* || fully_replicated*/) && op == ZREAD &&
-        TopSimple != 0 && TopDirty != 0 && op_count == 1) {
+    if (!ttl_table ||
+        (ttl_table && (read_back || fully_replicated) && op == ZREAD &&
+        (TopSimple != 0 || TopDirty != 0 || Tread_committed_base) &&
+        op_count == 1)) {
       ttl_can_go_to_replica = true;
     }
   }
@@ -4872,6 +4875,17 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
       {
         jam();
         req->anyNode = 1;
+        /*
+         * Zart
+         * TTL
+         * [CASE 1.1] key look-up on TTL & FULLY_REPLICATED table
+         */
+        if (!ttl_can_go_to_replica) {
+          g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), FULLY_REPLICATED "
+                              "table: %u is not allowed to go to any node",
+                              localTabptr.i);
+          req->anyNode = 0;
+        }
       }
     }
     else if (Tspecial_op_flags & TcConnectRecord::SOF_REORG_COPY)
@@ -5001,15 +5015,19 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
    * Zart
    * If the current table is TTL table, adjust TreadBackup based on
    * ttl_can_go_to_replica
+   * [CASE 1.2] key look-up on TTL & READ_BACKUP table
    */
   if (ttl_table && !ttl_can_go_to_replica) {
     g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), DISALLOW the operation to go to "
                         "replica for ttl table id: %u, op: %u"
+                        "read_backup: %u, fully_replicated: %u "
                         "TopSimple: %u, TopDirty: %u, "
                         "m_write_count: %u, m_exec_count: %u, "
                         "m_exec_write_count: %u, m_simple_read_count: %u "
                         "ApiConnectRecord: %u, count: %u",
                         localTabptr.i, Toperation,
+                        TreadBackup,
+                        localTabptr.p->m_flags & TableRecord::TR_FULLY_REPLICATED,
                         regTcPtr->opSimple, regTcPtr->dirtyOp,
                         regApiPtr->m_write_count, regApiPtr->m_exec_count,
                         regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
@@ -5019,11 +5037,14 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
   } else if (ttl_table) {
     g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), ALLOW the operation to go to "
                         "replica for ttl table id: %u, op: %u"
+                        "read_backup: %u, fully_replicated: %u "
                         "TopSimple: %u, TopDirty: %u, "
                         "m_write_count: %u, m_exec_count: %u, "
                         "m_exec_write_count: %u, m_simple_read_count: %u "
                         "ApiConnectRecord: %u, count: %u",
                         localTabptr.i, Toperation,
+                        TreadBackup,
+                        localTabptr.p->m_flags & TableRecord::TR_FULLY_REPLICATED,
                         regTcPtr->opSimple, regTcPtr->dirtyOp,
                         regApiPtr->m_write_count, regApiPtr->m_exec_count,
                         regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
@@ -5166,9 +5187,9 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
     if (regTcPtr->tcNodedata[0] != cownNodeid &&  // Primary replica is remote, and
         !checkingFKConstraint &&                  // Not verifying a FK-constraint.
         !batchUnsafe &&                           // Not an unsafe batched read
-        ((TopSimple != 0 && TopDirty == 0) ||                        // 1)
-         (TreadBackup != 0 && (TopSimple != 0 || TopDirty != 0)) ||  // 2)
-         (TreadBackup != 0 && regCachePtr->m_read_committed_base)))  // 3)
+        ((TopSimple != 0 && TopDirty == 0 && ttl_can_go_to_replica) ||   // 1)
+         (TreadBackup != 0 && (TopSimple != 0 || TopDirty != 0)) ||      // 2)
+         (TreadBackup != 0 && regCachePtr->m_read_committed_base)))      // 3)
     {
       jamDebug();
       /*-------------------------------------------------------------*/
@@ -16833,20 +16854,17 @@ void Dbtc::diFcountReqLab(Signal* signal,
   /*
    * Zart
    * TTL
-   * Only read primary on TTL table
+   * TTL & FULLY_REPLICATED table
+   * we don't need to handle scanptr.p->m_read_any_node here,
+   * since we will handle this situation in 
+   * execDIH_SCAN_TAB_CONF() ->
+   * sendDihGetNodesLab() ->
+   * sendDihGetNodeReq()
+   * below
    *
    * if m_read_any_node == 1
    *   This is a committed read. We want any fragment which is readable.
-   * TODO (Zhao)
-   * Should keep it or not? read_any_node just works with full replicated table,
-   * look into what it is.
    */
-  if (scanptr.p->m_read_any_node == 1 &&
-      tabPtr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
-    scanptr.p->m_read_any_node = 0; 
-    g_eventLogger->info("Zart, Dbtc::diFcountReqLab(), set m_read_any_node to 0 "
-                        "for TTL table: %u", tabPtr.i);
-  }
   
   /*************************************************
    * THE FIRST STEP TO RECEIVE IS SUCCESSFULLY COMPLETED.
@@ -17030,8 +17048,8 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
   bool ttl_can_go_to_replica = false;
   {
     Uint32 read_back = tabPtr.p->m_flags & TableRecord::TR_READ_BACKUP;
-    // Uint32 fully_replicated =
-    //          tabPtr.p->m_flags & TableRecord::TR_FULLY_REPLICATED;
+    Uint32 fully_replicated =
+             tabPtr.p->m_flags & TableRecord::TR_FULLY_REPLICATED;
     ndbassert(apiConnectptr.p->buddyPtr != RNIL);
     ApiConnectRecordPtr buddyApiPtr;
     buddyApiPtr.i = apiConnectptr.p->buddyPtr;
@@ -17058,13 +17076,16 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
     bool holdlock = ScanFragReq::getHoldLockFlag(scanptr.p->scanRequestInfo);
 
     g_eventLogger->info("Zart, Dbtc::sendDihGetNodesLab(), ttl_table: [%u]%u, "
-                        "read_back: %u, rc: %u, lockmode: %u, holdlock: %u, "
+                        "read_back: %u, fully_replicated: %u rc: %u, lockmode: %u, "
+                        "holdlock: %u, "
                         "ApiConnectRecord: %u, count: %u",
                         tabPtr.i,
-                        ttl_table, read_back, rc, lockmode, holdlock,
+                        ttl_table, read_back, fully_replicated,
+                        rc, lockmode, holdlock,
                         buddyApiPtr.i, op_count);
-    if (!ttl_table || (ttl_table && (read_back/* || fully_replicated*/) &&
-        (rc || rcb) && !lockmode && !holdlock && op_count == 0)) {
+    if (!ttl_table || (ttl_table && (read_back || fully_replicated) &&
+        (rc || rcb) && op_count == 0)) {
+      ndbrequire(!ttl_table || (!lockmode && !holdlock));
       ttl_can_go_to_replica = true;
     }
   }
@@ -17339,6 +17360,19 @@ bool Dbtc::sendDihGetNodeReq(Signal* signal,
   Uint32 distr_key_indicator = ZTRUE;
   req->scan_indicator = ZTRUE;
   req->anyNode = scanptr.p->m_read_any_node;
+  /*
+   * Zart
+   * TTL
+   * [CASE 2.1 ]Scan on TTL & FULLY_REPLICATED table
+   */
+  if (!ttl_can_go_to_replica) {
+    g_eventLogger->info("Zart,  Dbtc::sendDihGetNodeReq(), ignore FULLY_REPLICATED "
+                         "for TTL table id: [%u], frag id: %u, m_read_any_node before: %u",
+                          scanptr.p->scanTableref,
+                          scanFragId,
+                          scanptr.p->m_read_any_node);
+    req->anyNode = 0;
+  }
   req->jamBufferPtr = jamBuffer();
   req->get_next_fragid_indicator = 0;
   req->only_readable_nodes = 1;
@@ -17425,8 +17459,7 @@ bool Dbtc::sendDihGetNodeReq(Signal* signal,
    * work with TTL table's read what you have locked
    * Skip READ_BACKUP for TTL table
    *
-   * TODO (Zhao)
-   * Check full replicated table?
+   * [CASE 2.2] Scan on TTL & READ_BACKUP table
    */
   if (!ttl_can_go_to_replica) {
     g_eventLogger->info("Zart,  Dbtc::sendDihGetNodeReq(), ignore TR_READ_BACKUP "
