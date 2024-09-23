@@ -1797,6 +1797,15 @@ out:
     fireTrigOrd->m_triggerEvent = TriggerEvent::TE_INSERT;
     break;
   case(ZUPDATE):
+  /* 
+   * Zart
+   * TTL
+   * crash on fully_replicated table here:
+   * 1. insert 1 row
+   * 2. wait for it expires
+   * 3. insert the same row again
+   */
+  case(ZINSERT_TTL):
     jam();
     fireTrigOrd->m_triggerEvent = TriggerEvent::TE_UPDATE;
     break;

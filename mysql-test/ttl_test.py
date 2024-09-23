@@ -1553,6 +1553,258 @@ def case_27_thdB(conn):
     B_succ = True
 
 
+def case_28_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, sysdate(), 1), (2, sysdate(), 2), (3, sysdate(), 3), (4, sysdate(), 4), (5, sysdate(), 5), (6, sysdate(), 6), (7, sysdate(), 7), (8, sysdate(), 8), (9, sysdate(), 9), (10, sysdate(), 10)")
+        cur.execute("COMMIT")
+        time.sleep(2)
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 10, "ASSERT"
+        cur.execute("SELECT * FROM sz where col_a = 6")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz where col_a >= 6")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("SELECT * FROM sz where col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz where col_c <= 8")
+        results = cur.fetchall()
+        assert len(results) == 8, "ASSERT"
+        time.sleep(9)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("COMMIT")
+
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, sysdate(), 1), (2, sysdate(), 2), (3, sysdate(), 3), (4, sysdate(), 4), (5, sysdate(), 5), (6, sysdate(), 6), (7, sysdate(), 7), (8, sysdate(), 8), (9, sysdate(), 9), (10, sysdate(), 10)")
+        cur.execute("COMMIT")
+        time.sleep(2)
+
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_28_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(15)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz WHERE col_a <= 5 FOR SHARE")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        time.sleep(6)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a = 3")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a >= 3")
+        results = cur.fetchall()
+        assert len(results) == 3, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a <= 9")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+
+        cur.execute("SELECT * FROM sz WHERE col_c = 3")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c >= 3")
+        results = cur.fetchall()
+        assert len(results) == 3, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c <= 9")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("COMMIT")
+
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a = 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a >= 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_a <= 9")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+
+        cur.execute("SELECT * FROM sz WHERE col_c = 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c >= 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz WHERE col_c <= 9")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("COMMIT")
+
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        time.sleep(2)
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
+def case_29_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE test.sz1 ("
+                    "col_a INT, "
+                    "col_b DATETIME, "
+                    "col_c INT, "
+                    "PRIMARY KEY(col_a)) "
+                    "ENGINE = NDB, "
+                    "COMMENT=\"NDB_TABLE=FULLY_REPLICATED=1,TTL=10@col_b\"")
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz1 VALUES(1, sysdate(), 1), (2, sysdate(), 2), (3, sysdate(), 3), (4, sysdate(), 4), (5, sysdate(), 5), (6, sysdate(), 6), (7, sysdate(), 7), (8, sysdate(), 8), (9, sysdate(), 9), (10, sysdate(), 10)")
+        cur.execute("COMMIT")
+        time.sleep(2)
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 10, "ASSERT"
+        cur.execute("SELECT * FROM sz1 where col_a = 6")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz1 where col_a >= 6")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("SELECT * FROM sz1 where col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz1 where col_c <= 8")
+        results = cur.fetchall()
+        assert len(results) == 8, "ASSERT"
+        time.sleep(9)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("COMMIT")
+
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz1 VALUES(1, sysdate(), 1), (2, sysdate(), 2), (3, sysdate(), 3), (4, sysdate(), 4), (5, sysdate(), 5), (6, sysdate(), 6), (7, sysdate(), 7), (8, sysdate(), 8), (9, sysdate(), 9), (10, sysdate(), 10)")
+        cur.execute("COMMIT")
+        time.sleep(2)
+
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_29_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(15)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz1 WHERE col_a <= 5 FOR SHARE")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        time.sleep(6)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a = 3")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a >= 3")
+        results = cur.fetchall()
+        assert len(results) == 3, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a <= 9")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+
+        cur.execute("SELECT * FROM sz1 WHERE col_c = 3")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c >= 3")
+        results = cur.fetchall()
+        assert len(results) == 3, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c <= 9")
+        results = cur.fetchall()
+        assert len(results) == 5, "ASSERT"
+        cur.execute("COMMIT")
+
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a = 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a >= 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_a <= 9")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+
+        cur.execute("SELECT * FROM sz1 WHERE col_c = 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c = 8")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c >= 3")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("SELECT * FROM sz1 WHERE col_c <= 9")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        cur.execute("COMMIT")
+        cur.execute("DROP TABLE sz1")
+
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        time.sleep(2)
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
 def case(num):
     global A_succ, B_succ
     global funcs_thdA, funcs_thdB
@@ -1640,7 +1892,7 @@ A_succ = False
 B_succ = False
 if __name__ == '__main__':
 
-    case_num = 27
+    case_num = 29
     # 1. create database and table
     try:
         conn = pymysql.connect(host='127.0.0.1',
@@ -1704,7 +1956,11 @@ if __name__ == '__main__':
     case(23)
     case(27)
 
+    case(23)
+    case(25)
+    ##case(26)
     case(24)
-    case(25)
-    case(25)
-    #case(26)
+
+    #READ LOCKED
+    case(28)
+    case(29) # FULLY_REPLICATED
