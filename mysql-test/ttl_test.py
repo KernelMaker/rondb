@@ -1805,6 +1805,308 @@ def case_29_thdB(conn):
     cur.close()
     B_succ = True
 
+
+def case_30_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(5)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(7)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_30_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(8)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
+
+def case_31_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(11)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(4)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_31_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(5)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_32_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(13)
+        cur.execute("COMMIT")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_32_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_33_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(5)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(7)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_33_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(8)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_34_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(11)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(4)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_34_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(5)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_a = row[0]
+            col_b = row[1]
+            col_c = row[2]
+            assert col_a == 1 and col_c == 200, "ASSERT"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_35_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        time.sleep(14)
+        cur.execute("ROLLBACK")
+        time.sleep(1)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_35_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
 def case(num):
     global A_succ, B_succ
     global funcs_thdA, funcs_thdB
@@ -1892,7 +2194,7 @@ A_succ = False
 B_succ = False
 if __name__ == '__main__':
 
-    case_num = 29
+    case_num = 35
     # 1. create database and table
     try:
         conn = pymysql.connect(host='127.0.0.1',
@@ -1964,3 +2266,11 @@ if __name__ == '__main__':
     #READ LOCKED
     case(28)
     case(29) # FULLY_REPLICATED
+
+    #REPLACE INTO
+    case(30)
+    case(31)
+    case(32)
+    case(33)
+    case(34)
+    case(35)

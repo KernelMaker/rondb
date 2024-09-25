@@ -12012,7 +12012,8 @@ Dblqh::continueACCKEYCONF(Signal * signal,
      * NOTICE: the replica here is RonDB cluster replica fragment, not the
      * Binlog slaves
      */
-    ndbassert((tabptr.p->m_ttl_sec != RNIL || regTcPtr->seqNoReplica == 0) ||
+
+    ndbassert((is_ttl_table(regTcPtr->tableref) || regTcPtr->seqNoReplica == 0) ||
 	      regTcPtr->activeCreat == Fragrecord::AC_NR_COPY);
     Uint32 op= signal->theData[1];
     Uint32 requestInfo = regTcPtr->reqinfo;

@@ -8815,6 +8815,12 @@ Backup::sendScanFragReq(Signal* signal,
     ScanFragReq::setKeyinfoFlag(req->requestInfo, 0);
     ScanFragReq::setTupScanFlag(req->requestInfo, 1);
     ScanFragReq::setNotInterpretedFlag(req->requestInfo, 1);
+    /*
+     * Zart
+     * TTL
+     * Ignore TTL in backup scan
+     */
+    ScanFragReq::setTTLIgnoreFragFlag(req->requestInfo, 1);
     if (ptr.p->is_lcp())
     {
       ScanFragReq::setScanPrio(req->requestInfo, 1);
@@ -16302,6 +16308,12 @@ Backup::lcp_write_ctl_file(Signal *signal, BackupRecordPtr ptr)
                           dataFilePtr.p->m_lcp_writes,
                           ptr.p->m_num_parts_in_this_lcp);
       print_extended_lcp_stat();
+      /*
+       * Zart
+       * TODO (Zhao)
+       * assert here
+       * m_row_count 1 == m_lcp_inserts 0
+       */
       ndbrequire(ptr.p->m_save_error_code != 0 ||
                  ptr.p->m_row_count == dataFilePtr.p->m_lcp_inserts ||
         ((ptr.p->m_num_parts_in_this_lcp != BackupFormat::NDB_MAX_LCP_PARTS) &&
