@@ -1793,10 +1793,6 @@ out:
 
   switch(regOperPtr->op_type) {
   case(ZINSERT):
-    jam();
-    fireTrigOrd->m_triggerEvent = TriggerEvent::TE_INSERT;
-    break;
-  case(ZUPDATE):
   /* 
    * Zart
    * TTL
@@ -1806,6 +1802,10 @@ out:
    * 3. insert the same row again
    */
   case(ZINSERT_TTL):
+    jam();
+    fireTrigOrd->m_triggerEvent = TriggerEvent::TE_INSERT;
+    break;
+  case(ZUPDATE):
     jam();
     fireTrigOrd->m_triggerEvent = TriggerEvent::TE_UPDATE;
     break;

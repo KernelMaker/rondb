@@ -9681,7 +9681,17 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
   }
   else if(op == ZINSERT)
   {
-    ndbassert(refToMain(senderRef) == DBTC);
+    /*
+     * Zart
+     * TTL
+     * For TTL table, replica needs to receive
+     * ZINSERT
+     */
+    if (refToMain(senderRef) != DBTC) {
+      ndbassert(is_ttl_table(tabptr.i));
+    }
+    ndbassert(refToMain(senderRef) == DBTC ||
+              regTcPtr->seqNoReplica != 0);
   }
   
   if (unlikely((LqhKeyReq::FixedSignalLength + nextPos + TreclenAiLqhkey) != 
@@ -12115,9 +12125,13 @@ Dblqh::acckeyconf_tupkeyreq(Signal* signal, TcConnectionrec* regTcPtr,
    * Zart
    * TODO (Zhao)
    * Investigate what is m_use_rowid for...
+   *
+   * UPDATE:
+   * Seems it's used to handle insertion,
+   * ZINSERT_TTL is update, so shouldn't set m_use_rowid for ZINSERT_TTL here
    */
-  regTcPtr->m_use_rowid |= (op == ZINSERT || op == ZREFRESH ||
-                            op == ZINSERT_TTL);
+  regTcPtr->m_use_rowid |= (op == ZINSERT || op == ZREFRESH/* ||
+                            op == ZINSERT_TTL*/);
   /* --------------------------------------------------------------------- 
    * Clear interpreted mode bit since we do not want the next replica to
    * use interpreted mode. The next replica will receive a normal write.
@@ -12987,6 +13001,7 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
     {
       Uint32 nextNodeId = regTcPtr->nextReplica;
       ndbassert(LqhKeyReq::getOperation(Treqinfo) != ZINSERT ||
+                regTcPtr->operation == ZINSERT_TTL ||
                 get_node_status(nextNodeId) != ZNODE_UP);
     }
   }

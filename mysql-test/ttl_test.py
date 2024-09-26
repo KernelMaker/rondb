@@ -1733,7 +1733,7 @@ def case_29_thdB(conn):
         cur.execute("SELECT * FROM sz1 WHERE col_a <= 5 FOR SHARE")
         results = cur.fetchall()
         assert len(results) == 5, "ASSERT"
-        time.sleep(6)
+        time.sleep(7)
         cur.execute("SELECT * FROM sz1")
         results = cur.fetchall()
         assert len(results) == 5, "ASSERT"
