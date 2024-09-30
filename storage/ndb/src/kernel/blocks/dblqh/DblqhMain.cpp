@@ -2590,6 +2590,10 @@ void Dblqh::execREAD_CONFIG_REQ(Signal* signal)
       execDUMP_STATE_ORD(signal);
     }
   }
+  c_ttl_enabled = 0;
+  ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
+                            &c_ttl_enabled);
+  g_eventLogger->info("Zart, [LQH]TTL enabled: %u", c_ttl_enabled);
 }
 
 void Dblqh::init_restart_synch()
@@ -4817,7 +4821,8 @@ bool Dblqh::is_ttl_table(Uint32 table_id) {
   TablerecPtr t_tabptr;
   t_tabptr.i = table_id;
   ptrCheckGuard(t_tabptr, ctabrecFileSize, tablerec);
-  return (t_tabptr.p->m_ttl_sec != RNIL &&
+  return (c_ttl_enabled &&
+          t_tabptr.p->m_ttl_sec != RNIL &&
           t_tabptr.p->m_ttl_col_no != RNIL);
 }
 void

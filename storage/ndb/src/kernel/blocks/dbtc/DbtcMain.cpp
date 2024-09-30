@@ -1502,6 +1502,10 @@ void Dbtc::execREAD_CONFIG_REQ(Signal* signal)
                         instance(),
                         c_trans_error_loglevel);
   }
+  c_ttl_enabled = 0;
+  ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
+                            &c_ttl_enabled);
+  g_eventLogger->info("Zart, [TC]TTL enabled: %u", c_ttl_enabled);
 }
 
 void Dbtc::execSTTOR(Signal* signal) 

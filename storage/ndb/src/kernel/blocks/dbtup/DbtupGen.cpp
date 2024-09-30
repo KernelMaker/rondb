@@ -703,6 +703,11 @@ void Dbtup::execREAD_CONFIG_REQ(Signal* signal)
   NewVARIABLE *bat = allocateBat(1);
   bat[0].WA = &m_read_ctl_file_data[0];
   bat[0].nrr = (BackupFormat::LCP_CTL_FILE_BUFFER_SIZE_IN_WORDS * 4);
+
+  c_ttl_enabled = 0;
+  ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
+                            &c_ttl_enabled);
+  g_eventLogger->info("Zart, [TUP]TTL enabled: %u", c_ttl_enabled);
 }
 
 void Dbtup::initRecords(const ndb_mgm_configuration_iterator *mgm_cfg) 

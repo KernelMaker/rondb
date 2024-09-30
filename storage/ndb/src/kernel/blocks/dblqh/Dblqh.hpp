@@ -4827,6 +4827,7 @@ public:
   Uint64 c_total_rows_copy_fragreq;
   Uint64 c_total_words_copy_fragreq;
 #endif
+  Uint32 c_ttl_enabled;
 
   void update_cpu_usage(Signal*);
   void adjust_copyFragReq_rates(bool);

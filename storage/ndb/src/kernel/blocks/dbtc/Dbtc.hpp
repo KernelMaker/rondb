@@ -3164,6 +3164,7 @@ private:
   Uint32 m_max_writes_per_trans;
   Uint32 c_trans_error_loglevel;
   Uint32 m_take_over_operations;
+  Uint32 c_ttl_enabled;
 
   void dump_trans(ApiConnectRecordPtr transPtr);
   bool hasOp(ApiConnectRecordPtr transPtr, Uint32 op);
@@ -3256,7 +3257,8 @@ private:
 
   bool is_ttl_table(TableRecord* tabptr) {
     ndbrequire(tabptr != nullptr);
-    return (tabptr->m_ttl_sec != RNIL &&
+    return (c_ttl_enabled &&
+            tabptr->m_ttl_sec != RNIL &&
             tabptr->m_ttl_col_no != RNIL);
   }
   bool is_ttl_table(Uint32 table_id) {
@@ -3264,8 +3266,7 @@ private:
     TableRecordPtr tmp_tabPtr;
     tmp_tabPtr.i = table_id;
     ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
-    return (tmp_tabPtr.p->m_ttl_sec != RNIL &&
-            tmp_tabPtr.p->m_ttl_col_no != RNIL);
+    return is_ttl_table(tmp_tabPtr.p);
   }
 
 public:
