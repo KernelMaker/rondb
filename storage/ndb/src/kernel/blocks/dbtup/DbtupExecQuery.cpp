@@ -2197,7 +2197,8 @@ int Dbtup::handleReadReq(Signal* signal,
                         "ttl ignore is set");
   }
   if (_regOperPtr->ttl_ignore == 0 &&
-      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no) {
+      is_ttl_table(regTabPtr)
+      /* regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no */) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
       (attrId * ZAD_SIZE);
@@ -2408,7 +2409,8 @@ int Dbtup::handleUpdateReq(Signal* signal,
    * TTL
    */
   if (operPtrP->original_op_type == ZWRITE &&
-      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
+      is_ttl_table(regTabPtr)
+      /* regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL */) {
     g_eventLogger->info("Zart, (UPDATE) Skip checking TTL since "
                         "the original operation is ZWRITE.");
   }
@@ -2418,7 +2420,8 @@ int Dbtup::handleUpdateReq(Signal* signal,
   }
   if (operPtrP->ttl_ignore == 0 &&
       operPtrP->original_op_type != ZWRITE &&
-      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
+      is_ttl_table(regTabPtr)
+      /* regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL */) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
       (attrId * ZAD_SIZE);
@@ -3762,7 +3765,8 @@ int Dbtup::handleDeleteReq(Signal* signal,
   }
   {
   if (regOperPtr->ttl_ignore == 0 &&
-      regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL) {
+      is_ttl_table(regTabPtr)
+      /* regTabPtr->m_ttl_sec != RNIL && regTabPtr->m_ttl_col_no != RNIL */) {
     Uint32 attrId = (regTabPtr->m_ttl_col_no);
     const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
       (attrId * ZAD_SIZE);

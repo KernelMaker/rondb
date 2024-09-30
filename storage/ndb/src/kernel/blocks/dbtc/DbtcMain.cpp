@@ -4820,15 +4820,17 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
     Uint8 Tread_committed_base = regCachePtr->m_read_committed_base;
 
     if (DictTabInfo::isTable(localTabptr.p->tableType)) {
-      ttl_table = (localTabptr.p->m_ttl_sec != RNIL &&
-                    localTabptr.p->m_ttl_col_no != RNIL);
+      // ttl_table = (localTabptr.p->m_ttl_sec != RNIL &&
+      //               localTabptr.p->m_ttl_col_no != RNIL);
+      ttl_table = is_ttl_table(localTabptr.p);
     } else {
-      TableRecordPtr tmp_tabPtr;
-      ndbrequire(localTabptr.p->m_primary_table_id != RNIL);
-      tmp_tabPtr.i = localTabptr.p->m_primary_table_id;
-      ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
-      ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
-                    tmp_tabPtr.p->m_ttl_col_no != RNIL);
+      // TableRecordPtr tmp_tabPtr;
+      // ndbrequire(localTabptr.p->m_primary_table_id != RNIL);
+      // tmp_tabPtr.i = localTabptr.p->m_primary_table_id;
+      // ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
+      // ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
+      //               tmp_tabPtr.p->m_ttl_col_no != RNIL);
+      ttl_table = is_ttl_table(localTabptr.p->m_primary_table_id);
     }
 
     if (!ttl_table ||
@@ -17059,15 +17061,17 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
 
     bool ttl_table = false;
     if (DictTabInfo::isTable(tabPtr.p->tableType)) {
-      ttl_table = (tabPtr.p->m_ttl_sec != RNIL &&
-                    tabPtr.p->m_ttl_col_no != RNIL);
+      // ttl_table = (tabPtr.p->m_ttl_sec != RNIL &&
+      //               tabPtr.p->m_ttl_col_no != RNIL);
+      ttl_table = is_ttl_table(tabPtr.p);
     } else {
-      TableRecordPtr tmp_tabPtr;
-      ndbrequire(tabPtr.p->m_primary_table_id != RNIL);
-      tmp_tabPtr.i = tabPtr.p->m_primary_table_id;
-      ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
-      ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
-                    tmp_tabPtr.p->m_ttl_col_no != RNIL);
+      // TableRecordPtr tmp_tabPtr;
+      // ndbrequire(tabPtr.p->m_primary_table_id != RNIL);
+      // tmp_tabPtr.i = tabPtr.p->m_primary_table_id;
+      // ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
+      // ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
+      //               tmp_tabPtr.p->m_ttl_col_no != RNIL);
+      ttl_table = is_ttl_table(tabPtr.p->m_primary_table_id);
     }
 
     bool rc = ScanFragReq::getReadCommittedFlag(scanptr.p->scanRequestInfo);

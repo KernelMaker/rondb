@@ -10523,7 +10523,8 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
      * Set ttl flag for AccKeyReq, so that the c_acc->execACCKEYREQ
      * can handle ZINSERT into TTL table correctly
      */
-    if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
+    // if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
+    if (is_ttl_table(regTcPtr.p->tableref)) {
       taccreq = AccKeyReq::setTTL(taccreq, true);
     } else {
       taccreq = AccKeyReq::setTTL(taccreq, false);
@@ -13018,26 +13019,27 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
    * there for more details
    *
    */
-  TablerecPtr tmp_tabptr = tabptr;
-  if (tmp_tabptr.p == nullptr) {
-    /*
-     * Zart
-     * NOTICE:
-     * tabptr is not always valid here...
-     * So it's safer to get the related tablerec by
-     * tableref explicitly
-     * TODO (Zhao)
-     * Maybe need to apply the change to other places where using
-     * tabptr to get TTL info
-     */
-    ndbassert(fragptr.p->tabRef == regTcPtr->tableref);
-    tmp_tabptr.i = fragptr.p->tabRef;
-    ptrAss(tmp_tabptr, tablerec);
+  // TablerecPtr tmp_tabptr = tabptr;
+  // if (tmp_tabptr.p == nullptr) {
+  //   /*
+  //    * Zart
+  //    * NOTICE:
+  //    * tabptr is not always valid here...
+  //    * So it's safer to get the related tablerec by
+  //    * tableref explicitly
+  //    * TODO (Zhao)
+  //    * Maybe need to apply the change to other places where using
+  //    * tabptr to get TTL info
+  //    */
+  //   ndbassert(fragptr.p->tabRef == regTcPtr->tableref);
+  //   tmp_tabptr.i = fragptr.p->tabRef;
+  //   ptrAss(tmp_tabptr, tablerec);
 
-  } else {
-    ndbassert(tmp_tabptr.i == fragptr.p->tabRef);
-  }
-  if (tmp_tabptr.p->m_ttl_sec != RNIL && tmp_tabptr.p->m_ttl_col_no != RNIL &&
+  // } else {
+  //   ndbassert(tmp_tabptr.i == fragptr.p->tabRef);
+  // }
+  // if (tmp_tabptr.p->m_ttl_sec != RNIL && tmp_tabptr.p->m_ttl_col_no != RNIL &&
+  if (is_ttl_table(fragptr.p->tabRef) &&
       regTcPtr->original_operation == ZWRITE) {
     ndbrequire(LqhKeyReq::getOperation(Treqinfo) == ZINSERT ||
                LqhKeyReq::getOperation(Treqinfo) == ZUPDATE);

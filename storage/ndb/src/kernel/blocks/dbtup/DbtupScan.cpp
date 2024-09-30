@@ -553,7 +553,8 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
                           tablePtr.i,
                           tablePtr.p->m_ttl_sec, tablePtr.p->m_ttl_col_no);
     }
-    if (tablePtr.p->m_ttl_sec != RNIL && tablePtr.p->m_ttl_col_no != RNIL) {
+    if (is_ttl_table(fragPtr.p->fragTableId)
+        /* tablePtr.p->m_ttl_sec != RNIL && tablePtr.p->m_ttl_col_no != RNIL */) {
       ttl_table = true;
     }
     }

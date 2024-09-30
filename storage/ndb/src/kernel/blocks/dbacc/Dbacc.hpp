@@ -1242,6 +1242,10 @@ private:
 #else
   void debug_lh_vars(const char* where) const {}
 #endif
+  bool is_ttl_table(Fragmentrec* fragptr) {
+    ndbrequire(fragptr != nullptr);
+    return (fragptr->ttlSec != RNIL && fragptr->ttlColumnNo != RNIL);
+  }
 
 public:
   // Variables

@@ -3522,8 +3522,9 @@ void Dbacc::execACC_LOCKREQ(Signal* signal)
          * Set ttl flag for AccKeyReq, so that the c_acc->execACCKEYREQ
          * can handle ZINSERT into TTL table correctly
          */
-        if (prepare_fragptr.p->ttlSec != RNIL &&
-            prepare_fragptr.p->ttlColumnNo != RNIL) {
+        if (is_ttl_table(prepare_fragptr.p)
+            /*prepare_fragptr.p->ttlSec != RNIL &&
+            prepare_fragptr.p->ttlColumnNo != RNIL*/) {
           accreq = AccKeyReq::setTTL(accreq, true);
         } else {
           accreq = AccKeyReq::setTTL(accreq, false);
@@ -3664,8 +3665,9 @@ bool Dbacc::WhetherSkipTTL(Signal* signal)
     accreq = AccKeyReq::setReplicaType(accreq, 0); // ?
     accreq = AccKeyReq::setTakeOver(accreq, false);
     accreq = AccKeyReq::setLockReq(accreq, true);
-    ndbrequire(prepare_fragptr.p->ttlSec != RNIL &&
-              prepare_fragptr.p->ttlColumnNo != RNIL);
+    // ndbrequire(prepare_fragptr.p->ttlSec != RNIL &&
+    //           prepare_fragptr.p->ttlColumnNo != RNIL);
+    ndbrequire(is_ttl_table(prepare_fragptr.p));
     accreq = AccKeyReq::setTTL(accreq, true);
     AccKeyReq* keyreq = reinterpret_cast<AccKeyReq*>(&signal->theData[0]);
     keyreq->fragmentPtr = fragrecptr.i;

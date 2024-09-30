@@ -4587,6 +4587,18 @@ private:
 
   void release_scan_lock(ScanLockPtr);
 
+  bool is_ttl_table(Tablerec* tabptr) {
+    ndbassert(tabptr != nullptr);
+    return (tabptr->m_ttl_sec != RNIL && tabptr->m_ttl_col_no != RNIL);
+  }
+
+  bool is_ttl_table(Uint32 table_id) {
+    TablerecPtr tablePtr;
+    tablePtr.i = table_id;
+    ptrCheckGuard(tablePtr, cnoOfTablerec, tablerec);
+    return is_ttl_table(tablePtr.p);
+  }
+
 public:
   Dbtup *m_curr_tup;
   static Uint64 getTransactionMemoryNeed(

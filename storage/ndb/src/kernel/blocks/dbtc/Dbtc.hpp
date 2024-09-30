@@ -3253,6 +3253,21 @@ private:
                               ApiConnectRecordPtr apiConnectptr);
 
   void printCrashApiConnectrec(ApiConnectRecordPtr apiConnectptr);
+
+  bool is_ttl_table(TableRecord* tabptr) {
+    ndbrequire(tabptr != nullptr);
+    return (tabptr->m_ttl_sec != RNIL &&
+            tabptr->m_ttl_col_no != RNIL);
+  }
+  bool is_ttl_table(Uint32 table_id) {
+    ndbrequire(table_id != RNIL);
+    TableRecordPtr tmp_tabPtr;
+    tmp_tabPtr.i = table_id;
+    ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
+    return (tmp_tabPtr.p->m_ttl_sec != RNIL &&
+            tmp_tabPtr.p->m_ttl_col_no != RNIL);
+  }
+
 public:
   DistributionHandler m_distribution_handle;
 
