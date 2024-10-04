@@ -74,6 +74,7 @@ private:
   Uint32 transId1;
   Uint32 transId2;
   Uint32 isCopyFragScan;
+  Uint32 ignore_ttl;
 };
 
 

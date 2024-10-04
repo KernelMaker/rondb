@@ -3557,6 +3557,14 @@ void Dbacc::execACC_LOCKREQ(Signal* signal)
         jamDebug();
         req->returnCode = AccLockReq::Success;
         req->accOpPtr = operationRecPtr.i;
+        /*
+         * Zart
+         * TTL
+         */
+        if (signal->theData[5] == 1) {
+          ndbrequire(is_ttl_table(prepare_fragptr.p));
+          req->ignore_ttl = 1;
+        }
       }
       else if (signal->theData[0] == RNIL)
       {

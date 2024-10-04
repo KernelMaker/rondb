@@ -602,6 +602,12 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
       lockReq->transId1 = scan.m_transId1;
       lockReq->transId2 = scan.m_transId2;
       lockReq->isCopyFragScan = ((scan.m_bits & ScanOp::SCAN_COPY_FRAG) != 0);
+      /*
+       * Zart
+       * TTL
+       * set ignore_ttl = 0 explicitly here
+       */
+      lockReq->ignore_ttl = 0;
       c_acc->execACC_LOCKREQ(signal);
       jamEntryDebug();
       switch (lockReq->returnCode) {
@@ -610,6 +616,11 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
         jamDebug();
         scan.m_state = ScanOp::Locked;
         scan.m_accLockOp = lockReq->accOpPtr;
+        if (ttl_table) {
+          ttl_ignore_for_ral = lockReq->ignore_ttl;
+          g_eventLogger->info("Zart, Dbtup::scanReply()[1] check whether needs "
+                              "to ignore TTL: %d", ttl_ignore_for_ral);
+        }
         break;
       }
       case AccLockReq::IsBlocked:
@@ -730,7 +741,7 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
       lockReq->transId2 = scan.m_transId2;
       lockReq->isCopyFragScan = ((scan.m_bits & ScanOp::SCAN_COPY_FRAG) != 0);
       ttl_ignore_for_ral = c_acc->WhetherSkipTTL(signal);
-      g_eventLogger->info("Zart, Dbtup::scanReply() check whether needs "
+      g_eventLogger->info("Zart, Dbtup::scanReply()[2] check whether needs "
                           "to ignore TTL: %d", ttl_ignore_for_ral);
       ndbassert(c_freeScanLock == RNIL);
       scan.m_state = ScanOp::Locked;
