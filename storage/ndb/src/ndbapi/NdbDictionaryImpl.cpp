@@ -991,6 +991,16 @@ NdbTableImpl::equal(const NdbTableImpl& obj) const
     DBUG_RETURN(false);
   }
 
+  if (m_ttl_sec != obj.m_ttl_sec)
+  {
+    DBUG_RETURN(false);
+  }
+
+  if (m_ttl_col_no != obj.m_ttl_col_no)
+  {
+    DBUG_RETURN(false);
+  }
+
   DBUG_RETURN(true);
 }
 
@@ -1073,6 +1083,13 @@ NdbTableImpl::assign(const NdbTableImpl& org)
   m_fully_replicated = org.m_fully_replicated;
   m_use_varsized_disk_data = org.m_use_varsized_disk_data;
   m_use_new_hash_function = org.m_use_new_hash_function;
+  /*
+   * Zart
+   * TTL
+   * Used in restoring from backups
+   */
+  m_ttl_sec = org.m_ttl_sec;
+  m_ttl_col_no = org.m_ttl_col_no;
 
   DBUG_PRINT("info", ("NdbTableImpl::assign %u, m_use_new_hash_function: %u",
                        m_primaryTableId,
@@ -3880,6 +3897,11 @@ NdbDictInterface::parseTableInfo(NdbTableImpl ** ret,
 			       DictTabInfo::TableMappingSize,
                                NdbTableImpl::IndirectReader,
                                impl);
+  if (tableDesc->TTLSec != RNIL && tableDesc->TTLColumnNo != RNIL) {
+    g_eventLogger->info("Zart, NdbDictInterface::parseTableInfo, parsed a TTL table, id: %u, "
+                        ", ttl_sec: %u, ttl_col: %u",
+                        tableDesc->TableId, tableDesc->TTLSec, tableDesc->TTLColumnNo);
+  }
   
   if(s != SimpleProperties::Break){
     free(tableDesc);
@@ -3987,6 +4009,13 @@ NdbDictInterface::parseTableInfo(NdbTableImpl ** ret,
     tableDesc->UseVarSizedDiskDataFlag == 0 ? false : true;
   impl->m_use_new_hash_function =
     tableDesc->HashFunctionFlag == 0 ? false : true;
+  /*
+   * Zart
+   * TTL
+   * Used in restoring from backups
+   */
+  impl->setTTLSec(tableDesc->TTLSec);
+  impl->setTTLColumnNo(tableDesc->TTLColumnNo);
 
 
   DBUG_PRINT("info", ("parseTableInfo(%u): m_logging: %u, partitionBalance: %d"
@@ -4684,6 +4713,12 @@ NdbDictInterface::compChangeMask(const NdbTableImpl &old_impl,
   if(!impl.m_range.equal(old_impl.m_range))
     AlterTableReq::setRangeListFlag(change_mask, true);
 
+  /*
+   * Zart
+   * TTL
+   * TODO (Zhao)
+   * Maybe modify here when support Alter TTL in the future
+   */
   /* No other property can be changed in alter table. */
   if(impl.m_logging != old_impl.m_logging ||
      impl.m_temporary != old_impl.m_temporary ||

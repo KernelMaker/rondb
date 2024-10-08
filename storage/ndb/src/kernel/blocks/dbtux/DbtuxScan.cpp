@@ -869,6 +869,7 @@ Dbtux::continue_scan(Signal *signal,
       lockReq->transId2 = scan.m_transId2;
       lockReq->isCopyFragScan = ZFALSE;
       // execute
+      lockReq->ignore_ttl = 0;
       c_acc->execACC_LOCKREQ(signal);
       jamEntryDebug();
       switch (lockReq->returnCode)
@@ -884,6 +885,11 @@ Dbtux::continue_scan(Signal *signal,
                       << scan << endl;
         }
 #endif
+        if (ttl_table) {
+          ttl_ignore_for_ral = lockReq->ignore_ttl;
+          g_eventLogger->info("Zart, Dbtux::continue_scan()[1] check whether needs "
+                              "to ignore TTL: %d", ttl_ignore_for_ral);
+        }
         break;
       }
       case AccLockReq::IsBlocked:
@@ -1007,7 +1013,7 @@ Dbtux::continue_scan(Signal *signal,
       lockReq->transId2 = scan.m_transId2;
       lockReq->isCopyFragScan = ZFALSE;
       ttl_ignore_for_ral = c_acc->WhetherSkipTTL(signal);
-      g_eventLogger->info("Zart, Dbtux::continue_scan() check whether needs "
+      g_eventLogger->info("Zart, Dbtux::continue_scan()[2] check whether needs "
                           "to ignore TTL: %d", ttl_ignore_for_ral);
       scan.m_state = ScanOp::Locked;
       jamEntryDebug();

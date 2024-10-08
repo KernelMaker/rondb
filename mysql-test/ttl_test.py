@@ -1,6 +1,7 @@
 import threading
 import pymysql
 import time
+import subprocess
 
 def case_1_thdA(conn):
     global A_succ
@@ -1675,10 +1676,12 @@ def case_28_thdB(conn):
     cur.close()
     B_succ = True
 
+
 def case_29_thdA(conn):
     global A_succ
     try:
         cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS sz1")
         cur.execute("CREATE TABLE test.sz1 ("
                     "col_a INT, "
                     "col_b DATETIME, "
@@ -1795,6 +1798,77 @@ def case_29_thdB(conn):
         assert len(results) == 0, "ASSERT"
         cur.execute("COMMIT")
         cur.execute("DROP TABLE sz1")
+
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        time.sleep(2)
+        cur.close()
+        return
+
+    cur.close()
+    B_succ = True
+
+
+def case_45_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, sysdate(), 1), (2, sysdate(), 2), (3, sysdate(), 3), (4, sysdate(), 4), (5, sysdate(), 5), (6, sysdate(), 6), (7, sysdate(), 7), (8, sysdate(), 8), (9, sysdate(), 9), (10, sysdate(), 10)")
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz WHERE col_c >= 7 FOR UPDATE")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT1"
+        cur.execute("UPDATE sz SET col_c = 100  WHERE col_c <= 3")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 3 and matched_rows == 3, "ASSERT2"
+        cur.execute("SELECT * FROM sz WHERE col_a <= 3 FOR SHARE")
+        results = cur.fetchall()
+        assert len(results) == 3, "ASSERT3"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 100, "ASSERT4"
+        cur.execute("DELETE FROM sz WHERE col_c >= 20")
+        changed_rows = conn.affected_rows()
+        matched_rows = cur.rowcount
+        assert changed_rows == 3 and matched_rows == 3, "ASSERT5"
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 7, "ASSERT6"
+        cur.execute("COMMIT")
+
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT7"
+
+
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_45_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(5)
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("SELECT * FROM sz FOR SHARE")
+        #cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz FOR UPDATE")
+        #cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        time.sleep(5)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
 
     except Exception as e:
         print(f"Thd B failed: {e}")
@@ -2352,6 +2426,7 @@ def case_40_thdA(conn):
     global A_succ
     try:
         cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS sz1")
         cur.execute("CREATE TABLE test.sz1 ("
                     "col_a INT, "
                     "col_b DATETIME, "
@@ -2428,6 +2503,397 @@ def case_40_thdB(conn):
     B_succ = True
 
 
+def case_41_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        time.sleep(5)
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 200, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+
+        time.sleep(2)
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz VALUES(1, SYSDATE(), 300)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_41_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(6)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 200, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+
+        time.sleep(2)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_42_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS sz1")
+        cur.execute("CREATE TABLE test.sz1 ("
+                    "col_a INT, "
+                    "col_b DATETIME, "
+                    "col_c INT)"
+                    "ENGINE = NDB, "
+                    "COMMENT=\"NDB_TABLE=FULLY_REPLICATED=1,TTL=10@col_b\"")
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz1 VALUES(1, SYSDATE(), 100)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        time.sleep(5)
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz1 VALUES(1, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 2, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+
+        time.sleep(2)
+        cur.execute("BEGIN")
+        cur.execute("REPLACE INTO sz1 VALUES(1, SYSDATE(), 300)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_42_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(6)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 2, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+
+        time.sleep(2)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        time.sleep(11)
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_43_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        cur.execute("INSERT INTO sz VALUES(2, SYSDATE(), 200)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 2, "ASSERT"
+        time.sleep(3)
+        cur.execute("BEGIN")
+        cur.execute("UPDATE sz SET col_c = 200")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz WHERE col_a = 1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 200, "ASSERT"
+        time.sleep(3)
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM sz WHERE col_c >= 100")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_43_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(1)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 2, "ASSERT"
+        time.sleep(3)
+        cur.execute("SELECT * FROM sz WHERE col_a = 1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 200, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+        time.sleep(3)
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 0, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_44_thdA(conn):
+    global A_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz VALUES(1, SYSDATE(), 100)")
+        cur.execute("INSERT INTO sz VALUES(2, SYSDATE(), 200)")
+        cur.execute("INSERT INTO sz VALUES(3, DATE_ADD(SYSDATE(), INTERVAL 1 DAY), 300)")
+        cur.execute("INSERT INTO sz VALUES(4, SYSDATE(), 400)")
+        time.sleep(11)
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_44_thdB(conn):
+    global B_succ
+    try:
+        time.sleep(12)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sz")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        assert check_rep(conn) == True, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
+def case_46_thdA(conn):
+    global A_succ
+    try:
+        time.sleep(2)
+        cur = conn.cursor()
+        cur.execute("DROP DATABASE IF EXISTS test")
+        cur.execute("CREATE DATABASE test")
+        cur.execute("USE test")
+        cur.execute("CREATE TABLE test.sz1 ("
+                    "col_a INT, "
+                    "col_b DATETIME, "
+                    "col_c INT, "
+                    "PRIMARY KEY(col_a)) "
+                    "ENGINE = NDB, "
+                    "COMMENT=\"NDB_TABLE=TTL=10@col_b\"")
+        cur.execute("CREATE TABLE test.sz2 ("
+                    "col_a INT, "
+                    "col_b DATETIME, "
+                    "col_c INT)"
+                    "ENGINE = NDB, "
+                    "COMMENT=\"NDB_TABLE=TTL=10@col_b\"")
+        cur.execute("CREATE TABLE test.sz3 ("
+                    "col_a INT, "
+                    "col_b DATETIME, "
+                    "col_c INT, "
+                    "PRIMARY KEY(col_a)) "
+                    "ENGINE = NDB")
+        cur.execute("BEGIN")
+        cur.execute("INSERT INTO sz1 VALUES(1, SYSDATE(), 100)")
+        cur.execute("INSERT INTO sz1 VALUES(2, SYSDATE(), 200)")
+        cur.execute("INSERT INTO sz1 VALUES(3, DATE_ADD(SYSDATE(), INTERVAL 1 DAY), 300)")
+        cur.execute("INSERT INTO sz1 VALUES(4, SYSDATE(), 400)")
+        cur.execute("INSERT INTO sz2 VALUES(1, SYSDATE(), 100)")
+        cur.execute("INSERT INTO sz2 VALUES(2, SYSDATE(), 200)")
+        cur.execute("INSERT INTO sz2 VALUES(3, DATE_ADD(SYSDATE(), INTERVAL 1 DAY), 300)")
+        cur.execute("INSERT INTO sz2 VALUES(4, SYSDATE(), 400)")
+        cur.execute("INSERT INTO sz3 VALUES(1, SYSDATE(), 100)")
+        cur.execute("INSERT INTO sz3 VALUES(2, SYSDATE(), 200)")
+        cur.execute("INSERT INTO sz3 VALUES(3, DATE_ADD(SYSDATE(), INTERVAL 1 DAY), 300)")
+        cur.execute("INSERT INTO sz3 VALUES(4, SYSDATE(), 400)")
+        cur.execute("COMMIT")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT"
+        cur.execute("SELECT * FROM sz2")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT"
+        cur.execute("SELECT * FROM sz3")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT"
+        time.sleep(11)
+
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        cur.execute("SELECT * FROM sz2")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        cur.execute("SELECT * FROM sz3")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT"
+        subprocess.run(["/home/zhaosong/Develop/rondb-bin/bin/ndb_mgm", "-e", "start backup"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        print(f"Thd A failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    A_succ = True
+
+def case_46_thdB(conn):
+    global B_succ
+    try:
+        cur = conn.cursor()
+        cur.execute("STOP SLAVE")
+        cur.execute("DROP DATABASE IF EXISTS test")
+        time.sleep(17)
+        subprocess.run(["/home/zhaosong/Develop/rondb-bin/bin/ndb_restore",
+                        "--ndb-connectstring=\"127.0.0.1:1188\"",
+                        "--nodeid=2", "--backupid=1",
+                        "--backup-path=/home/zhaosong/Develop/rondb-run/ndbmtd_1/ndb_data/BACKUP/BACKUP-1",
+                        "--restore_meta", "--no-restore-disk-objects"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["/home/zhaosong/Develop/rondb-bin/bin/ndb_restore",
+                        "--ndb-connectstring=\"127.0.0.1:1188\"",
+                        "--nodeid=2", "--backupid=1",
+                        "--backup-path=/home/zhaosong/Develop/rondb-run/ndbmtd_1/ndb_data/BACKUP/BACKUP-1",
+                        "--restore-data"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["/home/zhaosong/Develop/rondb-bin/bin/ndb_restore",
+                        "--ndb-connectstring=\"127.0.0.1:1188\"",
+                        "--nodeid=3", "--backupid=1",
+                        "--backup-path=/home/zhaosong/Develop/rondb-run/ndbmtd_2/ndb_data/BACKUP/BACKUP-1",
+                        "--restore-data"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cur.execute("USE test")
+        cur.execute("SELECT * FROM sz1")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        cur.execute("SELECT * FROM sz2")
+        results = cur.fetchall()
+        assert len(results) == 1, "ASSERT"
+        for row in results:
+            col_c = row[2]
+            assert col_c == 300, "ASSERT"
+        cur.execute("SELECT * FROM sz3")
+        results = cur.fetchall()
+        assert len(results) == 4, "ASSERT"
+    except Exception as e:
+        print(f"Thd B failed: {e}")
+        cur.close()
+        return
+    cur.close()
+    B_succ = True
+
+
 def check_rep(conn):
     ret = False;
     try:
@@ -2466,7 +2932,8 @@ def case(num):
     B_succ = False
 
     cases_require_debug_sync = [23, 24, 25]
-    cases_binlog = [36, 37, 38, 39, 40]
+    cases_binlog = [36, 37, 38, 39, 40, 41, 42, 43, 44]
+    cases_backup_restore = [46]
 
 
     # 1. Connect
@@ -2484,6 +2951,10 @@ def case(num):
             B_conn = pymysql.connect(host='127.0.0.1',
                                    port=3308,
                                    database='test',
+                                   user='root')
+        elif num in cases_backup_restore:
+            B_conn = pymysql.connect(host='127.0.0.1',
+                                   port=3306,
                                    user='root')
         else:
             B_conn = pymysql.connect(host='127.0.0.1',
@@ -2553,7 +3024,7 @@ A_succ = False
 B_succ = False
 if __name__ == '__main__':
 
-    case_num = 40
+    case_num = 46
     # 1. create database and table
     try:
         conn = pymysql.connect(host='127.0.0.1',
@@ -2626,6 +3097,7 @@ if __name__ == '__main__':
     #READ LOCKED
     case(28)
     case(29) # FULLY_REPLICATED
+    case(45)
 
     #REPLACE INTO
     case(30)
@@ -2641,3 +3113,10 @@ if __name__ == '__main__':
     case(38)
     case(39)
     case(40)
+    case(41)
+    case(42)
+    case(43)
+    case(44)
+
+    #BACKUP RESTORE
+    case(46)

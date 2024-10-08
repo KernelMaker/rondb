@@ -2703,6 +2703,12 @@ void Dbdict::initialiseTableRecord(TableRecordPtr tablePtr, Uint32 tableId)
   std::memset(tablePtr.p->indexStatNodes, 0, sizeof(tablePtr.p->indexStatNodes));
   tablePtr.p->indexStatBgRequest = 0;
   tablePtr.p->m_obj_ptr_i = RNIL;
+  /*
+   * Zart
+   * TTL
+   */
+  tablePtr.p->ttlSec = RNIL;
+  tablePtr.p->ttlColumnNo = RNIL;
 }//Dbdict::initialiseTableRecord()
 
 void Dbdict::initialiseTriggerRecord(TriggerRecordPtr triggerPtr, Uint32 triggerId)
