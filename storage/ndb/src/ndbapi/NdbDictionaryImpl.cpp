@@ -3897,11 +3897,14 @@ NdbDictInterface::parseTableInfo(NdbTableImpl ** ret,
 			       DictTabInfo::TableMappingSize,
                                NdbTableImpl::IndirectReader,
                                impl);
-  if (tableDesc->TTLSec != RNIL && tableDesc->TTLColumnNo != RNIL) {
+#ifdef TTL_DEBUG
+  if (tableDesc->TTLSec != RNIL && tableDesc->TTLColumnNo != RNIL &&
+      NEED_PRINT(tableDesc->TableId)) {
     g_eventLogger->info("Zart, NdbDictInterface::parseTableInfo, parsed a TTL table, id: %u, "
                         ", ttl_sec: %u, ttl_col: %u",
                         tableDesc->TableId, tableDesc->TTLSec, tableDesc->TTLColumnNo);
   }
+#endif  // TTL_DEBUG
   
   if(s != SimpleProperties::Break){
     free(tableDesc);
@@ -5059,10 +5062,12 @@ NdbDictInterface::serializeTableDesc(NdbTableImpl & impl,
 
   tmpTab->TTLSec = impl.m_ttl_sec;
   tmpTab->TTLColumnNo = impl.m_ttl_col_no;
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, [API]serializeTableDesc, table_name: %s, "
                        "set TTLSec: %u, TTLColumnNo: %u",
                        impl.m_internalName.c_str(),
                        impl.m_ttl_sec, impl.m_ttl_col_no);
+#endif  // TTL_DEBUG
 
   const char *tablespace_name= impl.m_tablespace_name.c_str();
 loop:

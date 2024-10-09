@@ -653,12 +653,14 @@ void Dbacc::execACCFRAGREQ(Signal* signal)
    * ACC is just a class, not a thread, so it's possible to do it.
    * I don't want to introduce potential inconsist issues...
    */
-  if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(fragrecptr.p->myTableId)) {
     g_eventLogger->info("Zart, [ACC]Gen Fragmentrec, table_id: %u, frag_id: %u,"
         " TTL sec: %u, TTL column no: %u", fragrecptr.p->myTableId,
         fragrecptr.p->fragmentid, fragrecptr.p->ttlSec,
         fragrecptr.p->ttlColumnNo);
   }
+#endif  // TTL_DEBUG
 
   AccFragConf * const conf = (AccFragConf*)&signal->theData[0];
   conf->userPtr = userPtr;
@@ -1138,11 +1140,13 @@ void Dbacc::sendAcckeyconf(Signal* signal, bool ignore_ttl) const
   signal->theData[3] = operationRecPtr.p->localdata.m_page_no;
   signal->theData[4] = operationRecPtr.p->localdata.m_page_idx;
   signal->theData[5] = ignore_ttl ? 1 : 0;
-  if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(fragrecptr.p->myTableId)) {
     g_eventLogger->info("Zart, Dbacc::sendAcckeyconf(), set ignore_ttl = %u, "
                         "table id: %u",
                          signal->theData[5], fragrecptr.p->myTableId);
   }
+#endif  // TTL_DEBUG
 }//Dbacc::sendAcckeyconf()
 
 /**
@@ -1582,10 +1586,12 @@ void Dbacc::execACCKEYREQ(Signal* signal,
 	  insertLockOwnersList(operationRecPtr);
 #endif
 	  fragrecptr.p->lockCount[hash]++;
-    if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(fragrecptr.p->myTableId)) {
       g_eventLogger->info("Zart, Dbacc::execACCKEYREQ(), lock, table id: %u, frag id: %u",
                           fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
     }
+#endif  // TTL_DEBUG
 	  opbits |= Operationrec::OP_LOCK_OWNER;
           operationRecPtr.p->m_op_bits = opbits;
           /**
@@ -2361,10 +2367,12 @@ void Dbacc::insertelementLab(Signal* signal,
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
   insertLockOwnersList(operationRecPtr);
 #endif
-  if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(fragrecptr.p->myTableId)) {
     g_eventLogger->info("Zart, Dbacc::insertelementLab(), lock, table id: %u, frag id: %u",
                         fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
   }
+#endif  // TTL_DEBUG
   operationRecPtr.p->m_op_bits |= Operationrec::OP_LOCK_OWNER;
   fragrecptr.p->lockCount[hash]++;
 
@@ -3396,11 +3404,13 @@ void Dbacc::execACC_ABORTREQ(Signal* signal,
                     operationRecPtr.p->transId2,
                     operationRecPtr.i,
                     opbits));
-    if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(fragrecptr.p->myTableId)) {
       g_eventLogger->info("Zart, Dbacc::execACC_ABORTREQ(), table id: %u, "
                           "frag id: %u",
                           fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
     }
+#endif  // TTL_DEBUG
     abortOperation(signal, hash);
     operationRecPtr.p->m_op_bits = Operationrec::OP_INITIAL;
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
@@ -3784,8 +3794,10 @@ bool Dbacc::WhetherSkipTTL(Signal* signal)
 
   Uint32 op = opbits & Operationrec::OP_MASK;
   ndbrequire(op == ZSCAN_OP);
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, Dbacc::WhetherSkipTTL(), found: %u, locked: %d",
                        found, lockOwnerPtr.p != nullptr);
+#endif  // TTL_DEBUG
   if (found == ZTRUE) {
     if (likely(lockOwnerPtr.p)) {
       jam();
@@ -6208,10 +6220,12 @@ void Dbacc::abortOperation(Signal* signal, Uint32 hash)
   validate_lock_queue(operationRecPtr);
   if (opbits & Operationrec::OP_LOCK_OWNER) 
   {
-    if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(fragrecptr.p->myTableId)) {
       g_eventLogger->info("Zart, Dbacc::abortOperation(), unlock, table id: %u, frag id: %u",
                           fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
     }
+#endif  // TTL_DEBUG
     /**
      * We only need to protect changes when the lock owner aborts or
      * commits, this is to ensure that the state of the operation
@@ -6426,10 +6440,12 @@ void Dbacc::commitOperation(Signal* signal)
   
   if (opbits & Operationrec::OP_LOCK_OWNER) 
   {
-    if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(fragrecptr.p->myTableId)) {
       g_eventLogger->info("Zart, Dbacc::commitOperation(), unlock, table id: %u, frag id: %u",
                           fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
     }
+#endif  // TTL_DEBUG
     jam();
 #if defined(VM_TRACE) || defined(ERROR_INSERT)
     takeOutLockOwnersList(operationRecPtr);
@@ -6790,10 +6806,12 @@ Dbacc::release_lockowner(Signal* signal,
    *
    */
   {
-    if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(fragrecptr.p->myTableId)) {
       g_eventLogger->info("Zart, Dbacc::release_lockowner(), lock, table id: %u, frag id: %u",
                           fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
     }
+#endif  // TTL_DEBUG
     newOwner.p->m_op_bits |= Operationrec::OP_LOCK_OWNER;
     newOwner.p->elementPage = opPtr.p->elementPage;
     newOwner.p->elementPointer = opPtr.p->elementPointer;
@@ -8959,10 +8977,12 @@ void Dbacc::checkNextBucketLab(Signal* signal)
       insertLockOwnersList(operationRecPtr);
 #endif
       fragrecptr.p->lockCount[0]++;
-      if (fragrecptr.p->myTableId >= 17) {
+#ifdef TTL_DEBUG
+      if (NEED_PRINT(fragrecptr.p->myTableId)) {
         g_eventLogger->info("Zart, Dbacc::checkNextBucketLab(), lock, table id: %u, frag id: %u",
                             fragrecptr.p->myTableId, fragrecptr.p->fragmentid);
       }
+#endif  // TTL_DEBUG
       operationRecPtr.p->m_op_bits |=
         Operationrec::OP_LOCK_OWNER |
         Operationrec::OP_STATE_RUNNING | Operationrec::OP_RUN_QUEUE;

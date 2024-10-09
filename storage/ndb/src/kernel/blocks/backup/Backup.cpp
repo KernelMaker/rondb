@@ -16313,6 +16313,8 @@ Backup::lcp_write_ctl_file(Signal *signal, BackupRecordPtr ptr)
        * TODO (Zhao)
        * assert here
        * m_row_count 1 == m_lcp_inserts 0
+       *
+       * SOVLED
        */
       ndbrequire(ptr.p->m_save_error_code != 0 ||
                  ptr.p->m_row_count == dataFilePtr.p->m_lcp_inserts ||

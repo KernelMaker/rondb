@@ -226,12 +226,9 @@ LqhTransConf::setDirtyFlag(UintR & requestInfo, UintR val){
 inline
 void
 LqhTransConf::setOperation(UintR & requestInfo, UintR val){
-  /*
-   * Zart
-   * I have to uncomment this check since ZINSERT_TTL is
-   * 10 (ZINSERT | 0x08)
-   */
-  // ASSERT_MAX(val, LTC_OPERATION_MASK, "LqhTransConf::setOperation");
+  if (val != ZINSERT_TTL) {
+    ASSERT_MAX(val, LTC_OPERATION_MASK, "LqhTransConf::setOperation");
+  }
   requestInfo |= (val << LTC_OPERATION_SHIFT);
 }
 

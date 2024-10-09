@@ -707,7 +707,9 @@ void Dbtup::execREAD_CONFIG_REQ(Signal* signal)
   c_ttl_enabled = 0;
   ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
                             &c_ttl_enabled);
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, [TUP]TTL enabled: %u", c_ttl_enabled);
+#endif  // TTL_DEBUG
 }
 
 void Dbtup::initRecords(const ndb_mgm_configuration_iterator *mgm_cfg) 

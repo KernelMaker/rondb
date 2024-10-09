@@ -547,14 +547,15 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
     TablerecPtr tablePtr;
     tablePtr.i = fragPtr.p->fragTableId;
     ptrCheckGuard(tablePtr, cnoOfTablerec, tablerec);
-    if (tablePtr.i >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(tablePtr.i)) {
       g_eventLogger->info("Zart, Dbtup::scanReply(), table_id: %u, "
                           "ttl_sec: %u, ttl_col_no: %u",
                           tablePtr.i,
                           tablePtr.p->m_ttl_sec, tablePtr.p->m_ttl_col_no);
     }
-    if (is_ttl_table(fragPtr.p->fragTableId)
-        /* tablePtr.p->m_ttl_sec != RNIL && tablePtr.p->m_ttl_col_no != RNIL */) {
+#endif  // TTL_DEBUG
+    if (is_ttl_table(fragPtr.p->fragTableId)) {
       ttl_table = true;
     }
     }
@@ -618,8 +619,10 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
         scan.m_accLockOp = lockReq->accOpPtr;
         if (ttl_table) {
           ttl_ignore_for_ral = lockReq->ignore_ttl;
+#ifdef TTL_DEBUG
           g_eventLogger->info("Zart, Dbtup::scanReply()[1] check whether needs "
                               "to ignore TTL: %d", ttl_ignore_for_ral);
+#endif  // TTL_DEBUG
         }
         break;
       }
@@ -741,8 +744,10 @@ Dbtup::scanReply(Signal* signal, ScanOpPtr scanPtr)
       lockReq->transId2 = scan.m_transId2;
       lockReq->isCopyFragScan = ((scan.m_bits & ScanOp::SCAN_COPY_FRAG) != 0);
       ttl_ignore_for_ral = c_acc->WhetherSkipTTL(signal);
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dbtup::scanReply()[2] check whether needs "
                           "to ignore TTL: %d", ttl_ignore_for_ral);
+#endif  // TTL_DEBUG
       ndbassert(c_freeScanLock == RNIL);
       scan.m_state = ScanOp::Locked;
       jamEntryDebug();

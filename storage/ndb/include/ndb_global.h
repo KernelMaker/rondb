@@ -284,4 +284,12 @@ struct GenericSectionPtr
   struct GenericSectionIterator* sectionIter;
 };
 
+/*
+ * Zart
+ * Turn on them to debug TTL
+ */
+#define TTL_DEBUG 1
+#define TTL_TABLE_ID 17
+#define NEED_PRINT(X) ((X) >= TTL_TABLE_ID)
+
 #endif

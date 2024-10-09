@@ -610,26 +610,25 @@ bool Sql_cmd_delete::delete_from_single_table(THD *thd) {
       }
 
       assert(!thd->is_error());
+      DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_4");
 /*
  * Zart
- * Uncommoned it, using DEBUG_SYNC instead
-#if !defined(NDEBUG)
-      fprintf(stderr, "Zart, TTL debug, "
-                      "Sql_cmd_delete::delete_from_single_table(), "
-                      "sleep %ld secs\n",
-                      thd->variables.ttl_debug_sleep_secs);
-      sleep(thd->variables.ttl_debug_sleep_secs);
-#endif // !NDEBUG
-*/
-      DEBUG_SYNC(thd, "zhao_wait_for_row_get_expired_after_reading_4");
+ * TTL
+ * No need to handle read_removal here since we've already supported
+ * RAL
+ * TODO (Zhao)
+ * remove them in the final release
+ */
       if (!read_removal) {
         // table->file->ha_extra(HA_EXTRA_IGNORE_TTL);
       } else {
-        if (strcmp(table->s->table_name.str, "sz") == 0) {
+#ifdef TTL_TRACE_HANDLER
+        if (strcmp(table->s->table_name.str, TTL_TABLE_NAME) == 0) {
           fprintf(stderr, "Zart Sql_cmd_delete::delete_from_single_table, "
                           "skip set HA_EXTRA_IGNORE_TTL since read_removal\n");
         }
       }
+#endif  // TTL_TRACE_HANDLER
       if (DeleteCurrentRowAndProcessTriggers(thd, table, has_before_triggers,
                                              has_after_triggers,
                                              &deleted_rows)) {

@@ -1059,12 +1059,14 @@ void Dbtc::execTC_SCHVERREQ(Signal* signal)
   tabptr.p->m_ttl_sec = req->ttlSec;
   tabptr.p->m_ttl_col_no = req->ttlColumnNo;
   tabptr.p->m_primary_table_id = req->primaryTableId;
-  if (tabptr.i >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(tabptr.i)) {
     g_eventLogger->info("Zart, [TC]Gen Tablerec, table_id: %u, TTL sec: %u, "
                         "TTL column no: %u, primaryTableId: %u",
         tabptr.i, tabptr.p->m_ttl_sec, tabptr.p->m_ttl_col_no,
         tabptr.p->m_primary_table_id);
   }
+#endif  // TTL_DEBUG
 
   TcSchVerConf * conf = (TcSchVerConf*)signal->getDataPtr();
   conf->senderRef = reference();
@@ -1505,7 +1507,9 @@ void Dbtc::execREAD_CONFIG_REQ(Signal* signal)
   c_ttl_enabled = 0;
   ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
                             &c_ttl_enabled);
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, [TC]TTL enabled: %u", c_ttl_enabled);
+#endif  // TTL_DEBUG
 }
 
 void Dbtc::execSTTOR(Signal* signal) 
@@ -4824,16 +4828,8 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
     Uint8 Tread_committed_base = regCachePtr->m_read_committed_base;
 
     if (DictTabInfo::isTable(localTabptr.p->tableType)) {
-      // ttl_table = (localTabptr.p->m_ttl_sec != RNIL &&
-      //               localTabptr.p->m_ttl_col_no != RNIL);
       ttl_table = is_ttl_table(localTabptr.p);
     } else {
-      // TableRecordPtr tmp_tabPtr;
-      // ndbrequire(localTabptr.p->m_primary_table_id != RNIL);
-      // tmp_tabPtr.i = localTabptr.p->m_primary_table_id;
-      // ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
-      // ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
-      //               tmp_tabPtr.p->m_ttl_col_no != RNIL);
       ttl_table = is_ttl_table(localTabptr.p->m_primary_table_id);
     }
 
@@ -4887,9 +4883,11 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
          * [CASE 1.1] key look-up on TTL & FULLY_REPLICATED table
          */
         if (!ttl_can_go_to_replica) {
+#ifdef TTL_DEBUG
           g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), FULLY_REPLICATED "
                               "table: %u is not allowed to go to any node",
                               localTabptr.i);
+#endif  // TTL_DEBUG
           req->anyNode = 0;
         }
       }
@@ -5024,6 +5022,7 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
    * [CASE 1.2] key look-up on TTL & READ_BACKUP table
    */
   if (ttl_table && !ttl_can_go_to_replica) {
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), DISALLOW the operation to go to "
                         "replica for ttl table id: %u, op: %u"
                         "read_backup: %u, fully_replicated: %u "
@@ -5039,8 +5038,10 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
                         regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
                         apiConnectptr.i,
                         regApiPtr->tcConnect.getCount());
+#endif  // TTL_DEBUG
     TreadBackup = 0;
   } else if (ttl_table) {
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, Dbtc::tckeyreq050Lab(), ALLOW the operation to go to "
                         "replica for ttl table id: %u, op: %u"
                         "read_backup: %u, fully_replicated: %u "
@@ -5056,6 +5057,7 @@ void Dbtc::tckeyreq050Lab(Signal* signal,
                         regApiPtr->m_exec_write_count, regApiPtr->m_simple_read_count,
                         apiConnectptr.i,
                         regApiPtr->tcConnect.getCount());
+#endif  // TTL_DEBUG
   }
   if (Toperation == ZREAD || Toperation == ZREAD_EX)
   {
@@ -17065,16 +17067,8 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
 
     bool ttl_table = false;
     if (DictTabInfo::isTable(tabPtr.p->tableType)) {
-      // ttl_table = (tabPtr.p->m_ttl_sec != RNIL &&
-      //               tabPtr.p->m_ttl_col_no != RNIL);
       ttl_table = is_ttl_table(tabPtr.p);
     } else {
-      // TableRecordPtr tmp_tabPtr;
-      // ndbrequire(tabPtr.p->m_primary_table_id != RNIL);
-      // tmp_tabPtr.i = tabPtr.p->m_primary_table_id;
-      // ptrCheckGuard(tmp_tabPtr, ctabrecFilesize, tableRecord);
-      // ttl_table = (tmp_tabPtr.p->m_ttl_sec != RNIL &&
-      //               tmp_tabPtr.p->m_ttl_col_no != RNIL);
       ttl_table = is_ttl_table(tabPtr.p->m_primary_table_id);
     }
 
@@ -17083,6 +17077,7 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
     bool lockmode = ScanFragReq::getLockMode(scanptr.p->scanRequestInfo);
     bool holdlock = ScanFragReq::getHoldLockFlag(scanptr.p->scanRequestInfo);
 
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, Dbtc::sendDihGetNodesLab(), ttl_table: [%u]%u, "
                         "read_back: %u, fully_replicated: %u rc: %u, lockmode: %u, "
                         "holdlock: %u, "
@@ -17091,6 +17086,7 @@ void Dbtc::sendDihGetNodesLab(Signal* signal,
                         ttl_table, read_back, fully_replicated,
                         rc, lockmode, holdlock,
                         buddyApiPtr.i, op_count);
+#endif  // TTL_DEBUG
     if (!ttl_table || (ttl_table && (read_back || fully_replicated) &&
         (rc || rcb) && op_count == 0)) {
       ndbrequire(!ttl_table || (!lockmode && !holdlock));
@@ -17374,11 +17370,13 @@ bool Dbtc::sendDihGetNodeReq(Signal* signal,
    * [CASE 2.1 ]Scan on TTL & FULLY_REPLICATED table
    */
   if (!ttl_can_go_to_replica) {
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart,  Dbtc::sendDihGetNodeReq(), ignore FULLY_REPLICATED "
                          "for TTL table id: [%u], frag id: %u, m_read_any_node before: %u",
                           scanptr.p->scanTableref,
                           scanFragId,
                           scanptr.p->m_read_any_node);
+#endif  // TTL_DEBUG
     req->anyNode = 0;
   }
   req->jamBufferPtr = jamBuffer();
@@ -17470,11 +17468,13 @@ bool Dbtc::sendDihGetNodeReq(Signal* signal,
    * [CASE 2.2] Scan on TTL & READ_BACKUP table
    */
   if (!ttl_can_go_to_replica) {
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart,  Dbtc::sendDihGetNodeReq(), ignore TR_READ_BACKUP "
                          "for TTL table id: [%u], frag id: %u, TreadBackup before: %u",
                           tabPtr.i,
                           scanFragId,
                           TreadBackup);
+#endif  // TTL_DEBUG
     TreadBackup = false;
   }
 

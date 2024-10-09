@@ -6322,7 +6322,8 @@ void Dbdict::handleTabInfoInit(Signal * signal, SchemaTransPtr & trans_ptr,
   tablePtr.p->ttlSec = c_tableDesc.TTLSec;
   tablePtr.p->ttlColumnNo = c_tableDesc.TTLColumnNo;
 
-  if (tablePtr.p->tableId >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(tablePtr.p->tableId)) {
     g_eventLogger->info("Zart, [DICT]s< parsed c_tableDesc , table_id: %u, "
                         "TTL sec: %u, TTL column no: %u",
                        tablePtr.p->tableId,
@@ -6333,6 +6334,7 @@ void Dbdict::handleTabInfoInit(Signal * signal, SchemaTransPtr & trans_ptr,
                        tablePtr.p->tableId, tablePtr.p->ttlSec,
                        tablePtr.p->ttlColumnNo);
   }
+#endif  // TTL_DEBUG
 
   handleTabInfo(it, parseP, c_tableDesc);
 
@@ -6695,9 +6697,11 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader & it,
       ndbrequire(tableDesc.TTLSec != RNIL);
       ndbrequire(AttributeDescriptor::getType(attrPtr.p->attributeDescriptor)
                  == DictTabInfo::ExtDatetime2);
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, [DICT]TTL validation on TTL attrId passed. "
                           "attrId: %u",
                            attrPtr.p->attributeId);
+#endif  // TTL_DEBUG
     }
     attrPtr.p->autoIncrement = attrDesc.AttributeAutoIncrement;
     {

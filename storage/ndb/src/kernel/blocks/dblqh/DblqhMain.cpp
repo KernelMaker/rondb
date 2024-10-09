@@ -2593,7 +2593,9 @@ void Dblqh::execREAD_CONFIG_REQ(Signal* signal)
   c_ttl_enabled = 0;
   ndb_mgm_get_int_parameter(p, CFG_DB_ENABLE_TTL,
                             &c_ttl_enabled);
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, [LQH]TTL enabled: %u", c_ttl_enabled);
+#endif  // TTL_DEBUG
 }
 
 void Dblqh::init_restart_synch()
@@ -2774,11 +2776,13 @@ Dblqh::execCREATE_TAB_REQ(Signal* signal)
   // Zart
   tabptr.p->m_ttl_sec = req->ttlSec;
   tabptr.p->m_ttl_col_no = req->ttlColumnNo;
-  if (tabptr.i >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(tabptr.i)) {
     g_eventLogger->info("Zart, [LQH]Gen Tablerec, table_id: %u, TTL sec: %u, "
                         "TTL column no: %u", tabptr.i,
                         tabptr.p->m_ttl_sec, tabptr.p->m_ttl_col_no);
   }
+#endif  // TTL_DEBUG
 
   if (req->primaryTableId != RNIL)
   {
@@ -9480,12 +9484,14 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
      * Used for ZWRITE
      */
     regTcPtr->original_operation = regTcPtr->operation;
-    if (tabptr.i >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(tabptr.i)) {
       g_eventLogger->info("Zart, [TableId: %u]"
                           "Set Dblqh::TcConnectionrec::original_opertation: %u",
                           tabptr.i,
                           regTcPtr->original_operation);
     }
+#endif  // TTL_DEBUG
     regTcPtr->lockType = 
       op == ZREAD_EX ? ZUPDATE : 
       (Operation_t) op == ZWRITE ? ZINSERT : 
@@ -9508,10 +9514,12 @@ void Dblqh::execLQHKEYREQ(Signal* signal)
    * TTL
    */
   regTcPtr->ttl_ignore = LqhKeyReq::getTTLIgnoreFlag(Treqinfo);
-  if (tabptr.i >= 17) {
+#ifdef TTL_DEBUG
+  if (NEED_PRINT(tabptr.i)) {
     g_eventLogger->info("Zart, Dblqh::execLQHKEYREQ(), ttl_ignore: %u",
                         regTcPtr->ttl_ignore);
   }
+#endif  // TTL_DEBUG
 
   if (regTcPtr->dirtyOp)
   {
@@ -10528,7 +10536,6 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
      * Set ttl flag for AccKeyReq, so that the c_acc->execACCKEYREQ
      * can handle ZINSERT into TTL table correctly
      */
-    // if (tabptr.p->m_ttl_sec != RNIL && tabptr.p->m_ttl_col_no != RNIL) {
     if (is_ttl_table(regTcPtr.p->tableref)) {
       taccreq = AccKeyReq::setTTL(taccreq, true);
     } else {
@@ -10577,8 +10584,10 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
        * Detected "Duplicated" key while inserting into this TTL table,
        * and we have converted operation from ZINSERT to ZUPDATE
        */
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Found duplicated row while inserting[1], convert "
                           "operation from ZINSERT to ZINSERT_TTL and try...");
+#endif  // TTL_DEBUG
       /*
        * Zart
        * Here, we convert operation of Dblqh::TcConnectionrec from ZINSERT
@@ -10598,35 +10607,43 @@ Dblqh::exec_acckeyreq(Signal* signal, TcConnectionrecPtr regTcPtr)
      * TTL
      */
     if (regTcPtr.p->ttl_ignore && signal->theData[5] != 1) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
                           "ACCKEYCONF is 0 but the related "
                           "Dblqh::TcConnectionrec::ttl_ignore has already "
                           "been set as 1, so keep it! "
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
     } else if (regTcPtr.p->ttl_ignore != 1 && signal->theData[5] == 1) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
                           "ACCKEYCONF is 1 and the related "
                           "Dblqh::TcConnectionrec::ttl_ignore is 0, "
                           "so set it to 1! "
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
       /* IMPORTANT */
       regTcPtr.p->ttl_ignore = signal->theData[5];
     } else if (regTcPtr.p->ttl_ignore && signal->theData[5]) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], ttl_ignore in "
                           "both ACCKEYCONF and the related "
                           "Dblqh::TcConnectionrec is 1, "
                           "no need to set again"
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
     }
-    if (regTcPtr.p->tableref >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(regTcPtr.p->tableref)) {
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[1], final ignore_ttl: %u, "
                           "table id: %u",
                            signal->theData[5],
                            regTcPtr.p->tableref);
     }
+#endif  // TTL_DEBUG
     jamDebug();
     continueACCKEYCONF(signal,
                        signal->theData[3],
@@ -11918,8 +11935,10 @@ void Dblqh::execACCKEYCONF(Signal* signal)
        * Detected "Duplicated" key while inserting into this TTL table,
        * and we have converted operation from ZINSERT to ZUPDATE
        */
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Found duplicated row while inserting[2], convert "
                           "operation from ZINSERT to ZINSERT_TTL and try...");
+#endif  // TTL_DEBUG
       /*
        * Zart
        * Here, we convert operation of Dblqh::TcConnectionrec from ZINSERT
@@ -11939,39 +11958,43 @@ void Dblqh::execACCKEYCONF(Signal* signal)
      * TTL
      */
     if (regTcPtr->ttl_ignore && signal->theData[5] != 1) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
                           "ACCKEYCONF is 0 but the related "
                           "Dblqh::TcConnectionrec::ttl_ignore has already "
                           "been set as 1, so keep it! "
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
     } else if (regTcPtr->ttl_ignore != 1 && signal->theData[5] == 1) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
                           "ACCKEYCONF is 1 and the related "
                           "Dblqh::TcConnectionrec::ttl_ignore is 0, "
                           "so set it to 1! "
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
       /* IMPORTANT */
       regTcPtr->ttl_ignore = signal->theData[5];
     } else if (regTcPtr->ttl_ignore && signal->theData[5]) {
+#ifdef TTL_DEBUG
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], ttl_ignore in "
                           "both ACCKEYCONF and the related "
                           "Dblqh::TcConnectionrec is 1, "
                           "no need to set again"
                           "table id: %u",
                            tabptr.i);
+#endif  // TTL_DEBUG
     }
-    if (regTcPtr->tableref >= 17) {
+#ifdef TTL_DEBUG
+    if (NEED_PRINT(regTcPtr->tableref)) {
       g_eventLogger->info("Zart, Dblqh::execACCKEYCONF[2], final ignore_ttl: %u, "
                           "table id: %u",
                            signal->theData[5],
                            regTcPtr->tableref);
     }
-    // if (/*regTcPtr->tableref >= 17 && */regTcPtr->ttl_ignore) {
-    //   g_eventLogger->info("Zart, Dblqh::execACCKEYCONF, Ignore TTL "
-    //                       "for one operation");
-    // }
+#endif  // TTL_DEBUG
     continueACCKEYCONF(signal, localKey1, localKey2, m_tc_connect_ptr);
   }
   release_frag_access(fragptr.p);
@@ -13024,33 +13047,15 @@ void Dblqh::packLqhkeyreqLab(Signal* signal,
    * there for more details
    *
    */
-  // TablerecPtr tmp_tabptr = tabptr;
-  // if (tmp_tabptr.p == nullptr) {
-  //   /*
-  //    * Zart
-  //    * NOTICE:
-  //    * tabptr is not always valid here...
-  //    * So it's safer to get the related tablerec by
-  //    * tableref explicitly
-  //    * TODO (Zhao)
-  //    * Maybe need to apply the change to other places where using
-  //    * tabptr to get TTL info
-  //    */
-  //   ndbassert(fragptr.p->tabRef == regTcPtr->tableref);
-  //   tmp_tabptr.i = fragptr.p->tabRef;
-  //   ptrAss(tmp_tabptr, tablerec);
-
-  // } else {
-  //   ndbassert(tmp_tabptr.i == fragptr.p->tabRef);
-  // }
-  // if (tmp_tabptr.p->m_ttl_sec != RNIL && tmp_tabptr.p->m_ttl_col_no != RNIL &&
   if (is_ttl_table(fragptr.p->tabRef) &&
       regTcPtr->original_operation == ZWRITE) {
     ndbrequire(LqhKeyReq::getOperation(Treqinfo) == ZINSERT ||
                LqhKeyReq::getOperation(Treqinfo) == ZUPDATE);
+#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, set LqhKeyReq op to ZWRITE from %u in order to "
                         "replicate correctly",
                         LqhKeyReq::getOperation(Treqinfo));
+#endif  // TTL_DEBUG
     LqhKeyReq::setOperation(Treqinfo, ZWRITE);
   }
   }
@@ -16027,7 +16032,9 @@ void Dblqh::abortContinueAfterBlockedLab(Signal* signal,
   }
 
   regTcPtr.p->transactionState = TcConnectionrec::WAIT_ACC_ABORT;
+#ifdef TTL_DEBUG
   g_eventLogger->info("Zart, Dbacc::[6]");
+#endif  // TTL_DEBUG
   c_acc->execACC_ABORTREQ(signal,
                           regTcPtr.p->accConnectrec,
                           regTcPtr.p->accConnectPtrP,
