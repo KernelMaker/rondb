@@ -2308,6 +2308,21 @@ int Dbtup::handleReadReq(
   }
   dst = &signal->theData[start_index];
   dstLen = (MAX_READ / 4) - start_index;
+
+  if (unlikely(_regOperPtr->ttl_ignore == 0 &&
+               _regOperPtr->ttl_only_expired == 1)) {
+    ndbassert(req_struct->fragPtrP != nullptr);
+    if (!c_lqh->is_ttl_table(req_struct->fragPtrP->fragTableId)) {
+      g_eventLogger->warning("(Read) Received an read request with "
+                             "ttl_only_expired on a non-TTL table: %d",
+                             req_struct->fragPtrP->fragTableId);
+      // return Notfound
+      terrorCode = 626;
+      tupkeyErrorLab(req_struct);
+      return -1;
+    }
+  }
+
   /*
    * Zart
    * Here we check whether the row is expired
@@ -2459,6 +2474,22 @@ int Dbtup::handleUpdateReq(Signal* signal,
                            KeyReqStruct* req_struct,
                            bool disk) 
 {
+  if (unlikely(operPtrP->ttl_ignore == 0 &&
+               operPtrP->ttl_only_expired == 1 &&
+               operPtrP->original_op_type != ZWRITE)) {
+    ndbassert(req_struct->fragPtrP != nullptr);
+    if (!c_lqh->is_ttl_table(req_struct->fragPtrP->fragTableId)) {
+      g_eventLogger->warning("(Update) Received an update request with "
+                             "ttl_only_expired on a non-TTL table: %d",
+                             req_struct->fragPtrP->fragTableId);
+      // return Notfound
+      terrorCode = 626;
+      tupkeyErrorLab(req_struct);
+      return -1;
+    }
+  }
+
+#ifdef TTL_DEBUG
   /*
    * Zart
    * Here we check whether the row is expired
@@ -2469,17 +2500,14 @@ int Dbtup::handleUpdateReq(Signal* signal,
    */
   if (operPtrP->original_op_type == ZWRITE &&
       is_ttl_table(regTabPtr)) {
-#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, (UPDATE) Skip checking TTL since "
                         "the original operation is ZWRITE.");
-#endif  // TTL_DEBUG
   }
   if (operPtrP->ttl_ignore == 1) {
-#ifdef TTL_DEBUG
     g_eventLogger->info("Zart, (Update) Skip checking TTL since "
                         "ttl ignore is set");
-#endif  // TTL_DEBUG
   }
+#endif  // TTL_DEBUG
   if (operPtrP->ttl_ignore == 0 &&
       operPtrP->original_op_type != ZWRITE &&
       is_ttl_table(regTabPtr)) {
@@ -3680,6 +3708,20 @@ int Dbtup::handleDeleteReq(Signal* signal,
                            KeyReqStruct *req_struct,
                            bool disk)
 {
+  if (unlikely(regOperPtr->ttl_ignore == 0
+               && regOperPtr->ttl_only_expired == 1)) {
+    ndbassert(req_struct->fragPtrP != nullptr);
+    if (!c_lqh->is_ttl_table(req_struct->fragPtrP->fragTableId)) {
+      g_eventLogger->warning("(Delete) Received an delete request with "
+                             "ttl_only_expired on a non-TTL table: %d",
+                             req_struct->fragPtrP->fragTableId);
+      // return Notfound
+      terrorCode = 626;
+      tupkeyErrorLab(req_struct);
+      return -1;
+    }
+  }
+
   /*
    * Zart
    * Here we check whether the row is expired
