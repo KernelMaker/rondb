@@ -16395,9 +16395,10 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
         *reason = "Invalid TTL format, column name"
                  "must match a real column";
         return true;
-      } else if (ttl_col->getType() != NdbDictionary::Column::Type::Datetime2) {
+      } else if (ttl_col->getType() != NdbDictionary::Column::Type::Datetime2 &&
+                 ttl_col->getType() != NdbDictionary::Column::Type::Timestamp2) {
         *reason = "Invalid TTL format, column type "
-                 "must be DATETIME";
+                 "must be DATETIME/TIMESTAMP";
         return true;
       }
       ndb_log_info("[API]parse TTL successfully: TTL = %u sec, "
