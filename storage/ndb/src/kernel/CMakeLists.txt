@@ -112,6 +112,6 @@ IF(WITH_NDBMTD)
     DESTINATION ${INSTALL_SBINDIR}
     COMPONENT ClusterDataNode
     ENABLE_EXPORTS
-    LINK_LIBRARIES ${NDBD_LIBS} ndbsched_mt ${LIBDL}
+    LINK_LIBRARIES ${NDBD_LIBS} ndbsched_mt ${LIBDL} simsimd::simsimd
     )
 ENDIF()
