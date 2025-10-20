@@ -30,6 +30,8 @@
 #include "Dbtup.hpp"
 #include "NdbAggregationCommon.hpp"
 
+#include <simsimd/simsimd.h>
+
 /*
  * PA related
  * Turn off the PA_MALLOC to use new instead
@@ -54,9 +56,19 @@ class AggInterpreter {
     agg_results_(nullptr), agg_prog_start_pos_(0),
     gb_map_(nullptr), n_groups_(0),
     buf_pos_(0), processed_rows_(0),
-    result_size_(0), frag_id_(frag_id)/*, pcount_(0)*/ {
+    result_size_(0), frag_id_(frag_id)/*, pcount_(0)*/,
+    vec_search_(false), vec_dims_(0), vec_type_(0),
+    vec_metric_(0), vec_col_idx_(0), vec_top_n_(0),
+    vec_size_in_bytes_(0), vec_buf_(nullptr),
+    vec_buf_pos_(0), vec_start_pos_(0),
+    vec_closest_(std::numeric_limits<double>::max()),
+    vec_candidate_buf_(nullptr),
+    vec_candidate_buf_len_(0) {
 #ifdef PA_MALLOC
-      assert(prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE);
+      // TODO (Zhao)
+      // VS related
+      // assert(prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE);
+      assert(prog_len_ <= MAX_VEC_SEARCH_PROGRAM_WORD_SIZE);
       prog_ = prog_buf_;
 #else
       prog_ = new Uint32[prog_len];
@@ -73,6 +85,8 @@ class AggInterpreter {
       */
       alloc_len_ = 0;
 #endif // PA_MALLOC
+      vec_buf_ = new Uint32[g_vec_buf_len_];
+      vec_candidate_buf_ = new Uint32[g_vec_buf_len_];
   }
   ~AggInterpreter() {
 #ifdef PA_MALLOC
@@ -99,11 +113,14 @@ class AggInterpreter {
       delete gb_map_;
     }
 #endif // PA_MALLOC
+    delete[] vec_buf_;
+    delete[] vec_candidate_buf_;
   }
 
   bool Init();
 
-  Int32 ProcessRec(Dbtup* block_tup, Dbtup::KeyReqStruct* req_struct);
+  Int32 ProcessRec(Dbtup* block_tup, Dbtup::KeyReqStruct* req_struct,
+                   bool* vec_update_candidate);
   void Print();
   Uint32 PrepareAggResIfNeeded(Signal* signal, bool force);
   Uint32 NumOfResRecords(bool last_time = false);
@@ -126,6 +143,12 @@ class AggInterpreter {
   }
   */
 #endif // PA_MALLOC
+  bool vec_search() {
+    return vec_search_;
+  }
+  void CopyVecCandidateFromSignal(Signal* signal, Uint32 ToutBufIndex);
+  Uint32 CopyVecCandidateToSignal(Signal* signal);
+  void PrepareVecSearchResultInfo(Uint32* batch_size_rows, Uint32* batch_size_bytes);
 
  private:
   Uint32* prog_;
@@ -170,5 +193,21 @@ class AggInterpreter {
   Uint32 alloc_len_;
   char* MemAlloc(Uint32 len);
 #endif // PA_MALLOC
+
+  /* Vector */
+  bool vec_search_;
+  Uint32 vec_dims_;
+  Uint32 vec_type_;
+  Uint32 vec_metric_;
+  Uint32 vec_col_idx_;
+  Uint32 vec_top_n_;
+  Uint32 vec_size_in_bytes_;
+  Uint32* vec_buf_;
+  Uint32 vec_buf_pos_;
+  Uint32 vec_start_pos_;
+  double vec_closest_;
+  Uint32* vec_candidate_buf_;
+  Uint32 vec_candidate_buf_len_;
+  static Uint32 g_vec_buf_len_;
 };
 #endif  // AGGINTERPRETER_H_

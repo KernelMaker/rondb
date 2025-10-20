@@ -60,8 +60,8 @@
  * NOTICE: In order to enable DEBUG_PA_TUP,
  * you have to enable DEBUG_PA first.
  */
-#undef DEBUG_PA_TUP
-// #define DEBUG_PA_TUP 1
+// #undef DEBUG_PA_TUP
+#define DEBUG_PA_TUP 1
 #ifdef DEBUG_PA_TUP
 #include "include/my_byteorder.h"
 #include "AggInterpreter.hpp"
@@ -374,17 +374,23 @@ int Dbtup::readAttributes(KeyReqStruct *req_struct, const Uint32 *inBuffer,
   thrjamDebug(req_struct->jamBuffer);
   thrjamDataDebug(req_struct->jamBuffer, inBufLen);
   while (inBufIndex < inBufLen) {
+    g_eventLogger->info("Hello[1], table: %u, frag_id: %u, thread: %ld\n",
+        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
     thrjamDebug(req_struct->jamBuffer);
     tmpAttrBufIndex = req_struct->out_buf_index;
     tmpAttrBufBits = req_struct->out_buf_bits;
     AttributeHeader ahIn(inBuffer[inBufIndex]);
     inBufIndex++;
     attributeId= ahIn.getAttributeId();
- #ifdef DEBUG_PA_TUP
+#ifdef DEBUG_PA_TUP
+    g_eventLogger->info("Hello[2], table: %u, frag_id: %u, thread: %ld\n",
+        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
     if (req_struct->fragPtrP != nullptr &&
         PA_NEED_PRINT(true,
           req_struct->fragPtrP->fragTableId,
           req_struct->fragPtrP->fragmentId)) {
+    g_eventLogger->info("Hello[3], table: %u, frag_id: %u, thread: %ld\n",
+        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
       const Uint32* attrDescriptor = req_struct->tablePtrP->tabDescriptor +
         (attributeId * ZAD_SIZE);
       const Uint32 TattrDesc1 = attrDescriptor[0];
@@ -3493,6 +3499,20 @@ int Dbtup::read_pseudo(const Uint32 *inBuffer, Uint32 inPos,
       ndbrequire(2 <= out_words);
       c_lqh->execREAD_PSEUDO_REQ(req_struct->operPtrP->userpointer, attrId,
                                  outBuffer + 1, out_words);
+      sz = 2;
+      break;
+    }
+    case AttributeHeader::VEC_DISTANCE: {
+      /*
+       * VEC_SEARCH
+       * Here we do nothing.
+       * TODO (Zhao)
+       */
+      {
+        g_eventLogger->info("VEC_DISTANCE");
+        double tmp = 721.721;
+        memcpy(outBuffer + 1, &tmp, 8);
+      }
       sz = 2;
       break;
     }

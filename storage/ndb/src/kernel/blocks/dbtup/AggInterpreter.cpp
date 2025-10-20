@@ -37,6 +37,7 @@ Uint32 AggInterpreter::g_buf_len_ = READ_BUF_WORD_SIZE;
 Uint32 AggInterpreter::g_result_header_size_ = 3 * sizeof(Uint32);
 Uint32 AggInterpreter::g_result_header_size_per_group_ = sizeof(Uint32);
 
+Uint32 AggInterpreter::g_vec_buf_len_ = 2048; /* float */
 
 /*
  * PA related
@@ -90,9 +91,36 @@ bool AggInterpreter::Init() {
      */
     return true;
   }
-  // Skip the next 5 reserved Uint32 elements
-  assert(prog_[cur_pos_] == 0);
-  cur_pos_ += 5;
+
+  if (prog_[cur_pos_] & 0x80000000) {
+    vec_search_ = true;
+    assert((prog_[cur_pos_] & 0x7FFFFFFF) == 0);
+    cur_pos_++;
+  } else {
+    assert(vec_search_ == false);
+    // Skip the next 5 reserved Uint32 elements
+    assert(prog_[cur_pos_] == 0);
+    cur_pos_ += 5;
+  }
+
+  if (vec_search_) {
+    value = prog_[cur_pos_++];
+    vec_type_ = (value >> 16) & 0xFF00;
+    vec_metric_ = (value >> 16) & 0xFF;
+    vec_dims_ = value & 0xFFFF;
+
+    value = prog_[cur_pos_++];
+    vec_top_n_ = (value >> 24) & 0xFF;
+    vec_col_idx_ = (value >> 16) & 0x00FF;
+    vec_size_in_bytes_ = (value & 0xFFFF);
+    g_eventLogger->info("frag_id: %lld, type: %u, metric: %u, dims: %u, vec_col_idx: %u, vec_top_n: %u, size: %u\n",
+        frag_id_, vec_type_, vec_metric_, vec_dims_, vec_col_idx_, vec_top_n_, vec_size_in_bytes_);
+
+    vec_start_pos_ = cur_pos_;
+
+    inited_ = true;
+    return true;
+  }
 
   /*
    * 3. Get all the group by columns id.
@@ -567,13 +595,103 @@ static Int32 Count(const Register& a, AggResItem* res, bool print) {
  *          Others returned by readAttributes
  */
 Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
-        Dbtup::KeyReqStruct* req_struct) {
+        Dbtup::KeyReqStruct* req_struct,
+        bool* vec_update_candidate) {
   // assert(inited_);
   // assert(req_struct->read_length == 0);
   if (!inited_ || req_struct->read_length != 0) {
     g_eventLogger->debug("AggInterpreter::ProcessRec error, inited: %d, read_length: %u",
             inited_, req_struct->read_length);
     return ZAGG_OTHER_ERROR;
+  }
+
+  *vec_update_candidate = false;
+  if (vec_search_) {
+    Uint32 vec_col_idx = (vec_col_idx_ & 0x0000FFFF) << 16;
+    int ret = block_tup->readAttributes(req_struct, &(vec_col_idx), 1,
+                  vec_buf_ + vec_buf_pos_, g_vec_buf_len_ - vec_buf_pos_);
+    if (ret < 0) {
+      g_eventLogger->debug("read vector column error: %d", ret);
+      return -ret;
+    }
+    AttributeHeader* header = nullptr;
+    header = reinterpret_cast<AttributeHeader*>(vec_buf_ + vec_buf_pos_);
+    const Uint32* attrDescriptor = req_struct->tablePtrP->tabDescriptor +
+      (((vec_col_idx) >> 16) * ZAD_SIZE);
+    const Uint32 attributeId = header->getAttributeId();
+    assert(attributeId == (vec_col_idx >> 16));
+
+    const Uint32 TattrDesc1 = attrDescriptor[0];
+    // const Uint32 TattrDesc2 = attrDescriptor[1];
+    const Uint32 type_id = AttributeDescriptor::getType(TattrDesc1);
+    const Uint32 size = AttributeDescriptor::getSize(TattrDesc1);
+    const Uint32 size_in_bytes = AttributeDescriptor::getSizeInBytes(TattrDesc1);
+    const Uint32 size_in_words = AttributeDescriptor::getSizeInWords(TattrDesc1);
+    const Uint32 array_type = AttributeDescriptor::getArrayType(TattrDesc1);
+    const Uint32 array_size = AttributeDescriptor::getArraySize(TattrDesc1);
+    const Uint32 nullable = AttributeDescriptor::getNullable(TattrDesc1);
+    const Uint32 distri_key = AttributeDescriptor::getDKey(TattrDesc1);
+    const Uint32 primary_key = AttributeDescriptor::getPrimaryKey(TattrDesc1);
+    const Uint32 dynamic = AttributeDescriptor::getDynamic(TattrDesc1);
+    const Uint32 disk_based = AttributeDescriptor::getDiskBased(TattrDesc1);
+    if (frag_id_ == 0) {
+    g_eventLogger->info("[VS_TUP_DEBUG] Dbtup::readAttributes(), "
+           "AttributeDescriptor, attributeId: %u, type_id: %u, size: %u, "
+           "size_in_bytes: %u, size_in_words: %u, array_type: %u, "
+           "array_size: %u, nullable: %u, distri_key: %u, primary_key: %u "
+           "dynamic: %u, disk_based: %u",
+           attributeId, type_id, size, size_in_bytes, size_in_words, array_type,
+           array_size, nullable, distri_key, primary_key, dynamic, disk_based);
+    }
+
+    if (type_id != NDB_TYPE_LONGVARBINARY) {
+      g_eventLogger->debug("Unsupported vector column type: %u", type_id);
+      return ZAGG_COL_TYPE_UNSUPPORTED;
+    }
+
+    Uint32 length_bytes = 0;
+    if (array_type == NDB_ARRAYTYPE_SHORT_VAR) {
+      length_bytes = 1;
+    } else if (array_type == NDB_ARRAYTYPE_MEDIUM_VAR) {
+      length_bytes = 2;
+    } else {
+      assert(0);
+    }
+    Uint32 dims = 0;
+    if (!header->isNULL()) {
+      Uint32 len = header->getByteSize();
+      assert(len >= length_bytes);
+      if (length_bytes == 1) {
+        dims = *((Uint8*)header->getDataPtr());
+      } else {
+        dims = *((Uint16*)header->getDataPtr());
+        // assert((dims & 0x00008000) == 1);
+        // dims = (dims & 0x00007FFF);
+      }
+      assert(vec_dims_ == dims / sizeof(float));
+    } else {
+      assert(0);
+    }
+
+    double distance = 0;
+    float* target = (float* )&(prog_[vec_start_pos_]);
+    float* current = (float* )((char*)header->getDataPtr() + length_bytes);
+    // fprintf(stdout, "target: %f, %f, %f, %f, %f\n", target[0], target[1], target[2], target[3], target[4]);
+    // fprintf(stdout, "current: %f, %f, %f, %f, %f\n", current[0], current[1], current[2], current[3], current[4]);
+    simsimd_l2sq_f32(current, target, vec_dims_, &distance);
+    // simsimd_l2sq_f32_serial(current, target, vec_dims_, &distance);
+    if (frag_id_ == 0) {
+      g_eventLogger->info("distance: %lf, vec_closest: %lf\n", distance, vec_closest_);
+    }
+    if (distance < vec_closest_) {
+      if (frag_id_ == 0) {
+        g_eventLogger->info("update distance to %lf\n", distance);
+      }
+      vec_closest_ = distance;
+      *vec_update_candidate = true;
+    }
+
+    return 0;
   }
 
   AggResItem* agg_res_ptr = nullptr;
@@ -1661,3 +1779,63 @@ void AggInterpreter::Destruct(AggInterpreter* ptr) {
   lc_ndbd_pool_free(ptr);
 }
 #endif // PA_MALLOC
+void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
+                                                Uint32 ToutBufIndex) {
+  memcpy(vec_candidate_buf_, (void*)(&signal->theData[25]),
+                             ToutBufIndex * sizeof(Uint32));
+  vec_candidate_buf_len_ = ToutBufIndex;
+  if (frag_id_ == 0) {
+  g_eventLogger->info("CopyFromSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
+      (vec_candidate_buf_[0]), 
+      (vec_candidate_buf_[1]));
+  }
+}
+
+Uint32 AggInterpreter::CopyVecCandidateToSignal(Signal* signal) {
+
+  if (vec_candidate_buf_len_ > 3) {
+    // Fast path
+    AttributeHeader header = *(AttributeHeader*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 3);
+    if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE &&
+        *(double*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 2) == 721.721) {
+      /* Fill in the vec_closes_ to the reserved area which contains the magic word 721.721*/
+      *(double*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 2) = vec_closest_;
+    }
+  } else {
+    Uint32 pos = 0;
+    while (pos < vec_candidate_buf_len_) {
+      AttributeHeader header = *(AttributeHeader*)(vec_candidate_buf_ + pos);
+      if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
+        double value = *(double*)(vec_candidate_buf_ + pos + 1);
+        g_eventLogger->info("CopyToSignal, attributeId: %d, value: %lf", header.getAttributeId(), value);
+        *(double*)(vec_candidate_buf_ + pos + 1) = vec_closest_;
+      }
+      pos += header.getDataSize() + 1;
+    }
+  }
+	/*
+	 * VS related
+	 * vec_candidate_buf_len_ could be 0 when performing a vector search
+	 * with a filter and all rows are filtered out by the conditions.
+	 * In this case, the function simply returns 0, and the caller
+	 * will handle it appropriately.
+	 */
+  if (vec_candidate_buf_len_ != 0) {
+    memcpy((void*)(&signal->theData[25]), vec_candidate_buf_,
+        vec_candidate_buf_len_ * sizeof(Uint32));
+    g_eventLogger->info("CopyToSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
+        signal->theData[25], signal->theData[26]);
+  }
+  return vec_candidate_buf_len_;
+}
+void AggInterpreter::PrepareVecSearchResultInfo(Uint32* batch_size_rows,
+                                                Uint32* batch_size_bytes) {
+  if (vec_candidate_buf_len_ != 0) {
+  *batch_size_rows = 1;
+  *batch_size_bytes = vec_candidate_buf_len_ * sizeof(Uint32);
+  // *batch_size_bytes += sizeof(vec_closest_);
+  } else {
+    *batch_size_rows = 0;
+    *batch_size_bytes = 0;
+  }
+}

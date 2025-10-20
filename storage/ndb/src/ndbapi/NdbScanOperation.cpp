@@ -1531,6 +1531,51 @@ int NdbScanOperation::DoAggregation() {
   return 0;
 }
 
+int NdbScanOperation::DoVectorSearch(NdbRecAttr** userAttrs, Uint32 n_userAttrs) {
+  DEB_TRACE();
+
+  if (m_aggregation_code == nullptr ||
+      !m_aggregation_code->finalized())
+  {
+    DEB_TRACE();
+    setErrorCodeAbort(4560); //  NdbAggregatior::Finalise() not called.
+    return -1;
+  }
+
+  NdbRecAttr* vecDistanceAttr;
+  DEB_TRACE();
+  vecDistanceAttr = getValue(NdbDictionary::Column::VEC_DISTANCE);
+  DEB_TRACE();
+  if (vecDistanceAttr == nullptr) {
+    return -1;
+  }
+
+  DEB_TRACE();
+  if (m_transConnection->execute(NdbTransaction::NoCommit) != 0) {
+    return -1;
+  }
+
+  DEB_TRACE();
+  int check = -1;
+  while ((check = nextResult(true)) == 0) {
+    // TODO (Zhao) handle return value;
+    DEB_TRACE();
+    if (!m_aggregation_code->VecProcessRes(userAttrs, n_userAttrs, vecDistanceAttr)) {
+      DEB_TRACE();
+      return -1;
+    }
+    DEB_TRACE();
+  }
+  DEB_TRACE();
+  if (check < 0) {
+    return check;
+  }
+  DEB_TRACE();
+  m_aggregation_code->VecPrepareResults(userAttrs, n_userAttrs);
+  DEB_TRACE();
+  return 0;
+}
+
 void NdbScanOperation::setReadLockMode(LockMode lockMode) {
   bool lockExcl, lockHoldMode, readCommitted;
   switch (lockMode) {
