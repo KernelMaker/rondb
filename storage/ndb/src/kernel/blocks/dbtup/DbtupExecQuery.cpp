@@ -5070,18 +5070,18 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
   req_struct->m_write_log_memory_in_update = true;
   Uint32 op_type = regOperPtr->op_type;
 
-  bool debug_print = false;
-  if (req_struct->fragPtrP != nullptr &&
-      PA_NEED_PRINT(true,
-        req_struct->fragPtrP->fragTableId,
-        req_struct->fragPtrP->fragmentId)) {
-    debug_print = true;
-  }
-  if (debug_print) {
-    g_eventLogger->info("Zhao interpreterStartLab, %u, %u, %u, %u, %u, %u, %u\n",
-        RinitReadLen, RexecRegionLen, RfinalUpdateLen, RfinalRLen, RsubLen,
-        RtotalLen, RattrinbufLen);
-  }
+  // bool debug_print = false;
+  // if (req_struct->fragPtrP != nullptr &&
+  //     PA_NEED_PRINT(true,
+  //       req_struct->fragPtrP->fragTableId,
+  //       req_struct->fragPtrP->fragmentId)) {
+  //   debug_print = true;
+  // }
+  // if (debug_print) {
+  //   g_eventLogger->info("Zhao interpreterStartLab, %u, %u, %u, %u, %u, %u, %u\n",
+  //       RinitReadLen, RexecRegionLen, RfinalUpdateLen, RfinalRLen, RsubLen,
+  //       RtotalLen, RattrinbufLen);
+  // }
   if (likely(((RtotalLen + 5) <= RattrinbufLen) &&
         (RattrinbufLen >= 5) &&
         (RtotalLen + 5 < ZATTR_BUFFER_SIZE))) {
@@ -5244,18 +5244,18 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
       g_eventLogger->info("(%u) %u words for initial read after interpreter",
         instance(), RinitReadLen);
 #endif
-      if (debug_print) {
-        g_eventLogger->info("RinitReadLen %u, inputParamLen: %u, [%d], req_struct->out_buf_index: %u\n",
-            RinitReadLen, inputParamLen, cinBuffer[5 + inputParamLen], req_struct->out_buf_index);
-      }
+      // if (debug_print) {
+      //   g_eventLogger->info("RinitReadLen %u, inputParamLen: %u, [%d], req_struct->out_buf_index: %u\n",
+      //       RinitReadLen, inputParamLen, cinBuffer[5 + inputParamLen], req_struct->out_buf_index);
+      // }
       TnoDataRW = readAttributes(req_struct,
                                  &cinBuffer[5 + inputParamLen],
                                  RinitReadLen,
                                  &dst[0],
                                  dstLen);
-      if (debug_print) {
-        g_eventLogger->info("TnoDataRw %u, dst: %u %u\n", TnoDataRW, dst[0], dst[1]);
-      }
+      // if (debug_print) {
+      //   g_eventLogger->info("TnoDataRw %u, dst: %u %u\n", TnoDataRW, dst[0], dst[1]);
+      // }
       if (TnoDataRW >= 0) {
         jamDebug();
         RattroutCounter = TnoDataRW;
@@ -5346,8 +5346,8 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
           req_struct->agg_n_res_recs = scan_rec_ptr->
             m_agg_interpreter->NumOfResRecords();
         } else if (vec_update_candidate) {
-          Uint32* ptr = &signal->theData[25];
-          g_eventLogger->info("Prepare Copy: %u %u", ptr[0], ptr[1]);
+          // Uint32* ptr = &signal->theData[25];
+          // g_eventLogger->info("Prepare Copy: %u %u", ptr[0], ptr[1]);
           scan_rec_ptr->m_agg_interpreter->CopyVecCandidateFromSignal(signal,
                                               RattroutCounter);
         } else {

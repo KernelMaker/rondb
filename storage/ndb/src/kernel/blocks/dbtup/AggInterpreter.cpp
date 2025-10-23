@@ -33,6 +33,8 @@
 #include "decimal.h"
 #include "Dbtup.hpp"
 
+#include <simsimd/simsimd.h>
+
 Uint32 AggInterpreter::g_buf_len_ = READ_BUF_WORD_SIZE;
 Uint32 AggInterpreter::g_result_header_size_ = 3 * sizeof(Uint32);
 Uint32 AggInterpreter::g_result_header_size_per_group_ = sizeof(Uint32);
@@ -57,6 +59,25 @@ Uint32 AggInterpreter::g_vec_buf_len_ = 2048; /* float */
 #else
 #define PA_INTERP_TRACE(part_id, format, ...) {}
 #endif // DEBUG_PA_INTERP
+
+/*
+ * VS related
+ * Turn on the DEBUG_VS_INTERP
+ * to trace AggInterpreter on partition DEBUG_VS_INTERP_PART_ID
+ */
+#undef DEBUG_VS_INTERP
+// #define DEBUG_VS_INTERP 1
+#define DEBUG_VS_INTERP_PART_ID 0
+#ifdef DEBUG_VS_INTERP
+#define VS_INTERP_TRACE(part_id, format, ...) \
+  do {\
+    if ((part_id == DEBUG_VS_INTERP_PART_ID)) {\
+      g_eventLogger->info("[VS_INTERP_TRACE] " format, ##__VA_ARGS__); \
+    }\
+  } while (0)
+#else
+#define VS_INTERP_TRACE(part_id, format, ...) {}
+#endif // DEBUG_VS_INTERP
 
 bool AggInterpreter::Init() {
   if (inited_) {
@@ -113,8 +134,8 @@ bool AggInterpreter::Init() {
     vec_top_n_ = (value >> 24) & 0xFF;
     vec_col_idx_ = (value >> 16) & 0x00FF;
     vec_size_in_bytes_ = (value & 0xFFFF);
-    g_eventLogger->info("frag_id: %lld, type: %u, metric: %u, dims: %u, vec_col_idx: %u, vec_top_n: %u, size: %u\n",
-        frag_id_, vec_type_, vec_metric_, vec_dims_, vec_col_idx_, vec_top_n_, vec_size_in_bytes_);
+    // g_eventLogger->info("frag_id: %lld, type: %u, metric: %u, dims: %u, vec_col_idx: %u, vec_top_n: %u, size: %u\n",
+    //     frag_id_, vec_type_, vec_metric_, vec_dims_, vec_col_idx_, vec_top_n_, vec_size_in_bytes_);
 
     vec_start_pos_ = cur_pos_;
 
@@ -618,31 +639,31 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     header = reinterpret_cast<AttributeHeader*>(vec_buf_ + vec_buf_pos_);
     const Uint32* attrDescriptor = req_struct->tablePtrP->tabDescriptor +
       (((vec_col_idx) >> 16) * ZAD_SIZE);
-    const Uint32 attributeId = header->getAttributeId();
-    assert(attributeId == (vec_col_idx >> 16));
-
     const Uint32 TattrDesc1 = attrDescriptor[0];
     // const Uint32 TattrDesc2 = attrDescriptor[1];
     const Uint32 type_id = AttributeDescriptor::getType(TattrDesc1);
+    const Uint32 array_type = AttributeDescriptor::getArrayType(TattrDesc1);
+
+#ifdef DEBUG_VS_INTERP
+    const Uint32 attributeId = header->getAttributeId();
+    assert(attributeId == (vec_col_idx >> 16));
     const Uint32 size = AttributeDescriptor::getSize(TattrDesc1);
     const Uint32 size_in_bytes = AttributeDescriptor::getSizeInBytes(TattrDesc1);
     const Uint32 size_in_words = AttributeDescriptor::getSizeInWords(TattrDesc1);
-    const Uint32 array_type = AttributeDescriptor::getArrayType(TattrDesc1);
     const Uint32 array_size = AttributeDescriptor::getArraySize(TattrDesc1);
     const Uint32 nullable = AttributeDescriptor::getNullable(TattrDesc1);
     const Uint32 distri_key = AttributeDescriptor::getDKey(TattrDesc1);
     const Uint32 primary_key = AttributeDescriptor::getPrimaryKey(TattrDesc1);
     const Uint32 dynamic = AttributeDescriptor::getDynamic(TattrDesc1);
     const Uint32 disk_based = AttributeDescriptor::getDiskBased(TattrDesc1);
-    if (frag_id_ == 0) {
-    g_eventLogger->info("[VS_TUP_DEBUG] Dbtup::readAttributes(), "
-           "AttributeDescriptor, attributeId: %u, type_id: %u, size: %u, "
-           "size_in_bytes: %u, size_in_words: %u, array_type: %u, "
-           "array_size: %u, nullable: %u, distri_key: %u, primary_key: %u "
-           "dynamic: %u, disk_based: %u",
-           attributeId, type_id, size, size_in_bytes, size_in_words, array_type,
-           array_size, nullable, distri_key, primary_key, dynamic, disk_based);
-    }
+    VS_INTERP_TRACE(frag_id_,
+         "AttributeDescriptor, attributeId: %u, type_id: %u, size: %u, "
+         "size_in_bytes: %u, size_in_words: %u, array_type: %u, "
+         "array_size: %u, nullable: %u, distri_key: %u, primary_key: %u "
+         "dynamic: %u, disk_based: %u",
+         attributeId, type_id, size, size_in_bytes, size_in_words, array_type,
+         array_size, nullable, distri_key, primary_key, dynamic, disk_based);
+#endif  // DEBUG_VS_INTERP
 
     if (type_id != NDB_TYPE_LONGVARBINARY) {
       g_eventLogger->debug("Unsupported vector column type: %u", type_id);
@@ -659,8 +680,10 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     }
     Uint32 dims = 0;
     if (!header->isNULL()) {
+#if DEBUG
       Uint32 len = header->getByteSize();
       assert(len >= length_bytes);
+#endif  // DEBUG
       if (length_bytes == 1) {
         dims = *((Uint8*)header->getDataPtr());
       } else {
@@ -676,17 +699,39 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     double distance = 0;
     float* target = (float* )&(prog_[vec_start_pos_]);
     float* current = (float* )((char*)header->getDataPtr() + length_bytes);
+    // {
+    // int dynamic_dispatch = simsimd_uses_dynamic_dispatch();
+    // simsimd_metric_kind_t kind = simsimd_metric_l2sq_k;
+    // simsimd_datatype_t datatype = simsimd_datatype_f32_k;
+    // simsimd_kernel_punned_t result = 0;
+    // simsimd_capability_t c = simsimd_cap_serial_k;
+    // simsimd_capability_t supported = simsimd_capabilities();
+    // simsimd_capability_t allowed = simsimd_cap_any_k;
+    // simsimd_find_kernel_punned(kind, datatype, supported, allowed, &result, &c);
+
+    // g_eventLogger->info("SimSIMD use_dynamic_dispatch: %d, capabilities: %d, choose: [%p, %d]\n",
+    //         dynamic_dispatch, supported, result, c);
+    // g_eventLogger->info("SimSIMD capabilities: %d, NEON[%d], SVE[%d], HASWELL[%d], "
+    //                     "SKYLAKE[%d], ICE[%d], GENOA[%d], SAPPHIRE[%d], "
+    //                     "TURIN[%d], SIERRA[%d]",
+    //                     simsimd_capabilities(),
+    //                     simsimd_uses_neon(),
+    //                     simsimd_uses_sve(),
+    //                     simsimd_uses_haswell(),
+    //                     simsimd_uses_skylake(),
+    //                     simsimd_uses_ice(),
+    //                     simsimd_uses_genoa(),
+    //                     simsimd_uses_sapphire(),
+    //                     simsimd_uses_turin(),
+    //                     simsimd_uses_sierra());
+    // }
     // fprintf(stdout, "target: %f, %f, %f, %f, %f\n", target[0], target[1], target[2], target[3], target[4]);
     // fprintf(stdout, "current: %f, %f, %f, %f, %f\n", current[0], current[1], current[2], current[3], current[4]);
     simsimd_l2sq_f32(current, target, vec_dims_, &distance);
     // simsimd_l2sq_f32_serial(current, target, vec_dims_, &distance);
-    if (frag_id_ == 0) {
-      g_eventLogger->info("distance: %lf, vec_closest: %lf\n", distance, vec_closest_);
-    }
+    VS_INTERP_TRACE(frag_id_, "distance: %lf, vec_closest: %lf\n", distance, vec_closest_);
     if (distance < vec_closest_) {
-      if (frag_id_ == 0) {
-        g_eventLogger->info("update distance to %lf\n", distance);
-      }
+      VS_INTERP_TRACE(frag_id_, "update distance to %lf\n", distance);
       vec_closest_ = distance;
       *vec_update_candidate = true;
     }
@@ -1784,11 +1829,8 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
   memcpy(vec_candidate_buf_, (void*)(&signal->theData[25]),
                              ToutBufIndex * sizeof(Uint32));
   vec_candidate_buf_len_ = ToutBufIndex;
-  if (frag_id_ == 0) {
-  g_eventLogger->info("CopyFromSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
-      (vec_candidate_buf_[0]), 
-      (vec_candidate_buf_[1]));
-  }
+  VS_INTERP_TRACE(frag_id_, "CopyFromSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
+                  (vec_candidate_buf_[0]), (vec_candidate_buf_[1]));
 }
 
 Uint32 AggInterpreter::CopyVecCandidateToSignal(Signal* signal) {
@@ -1806,8 +1848,11 @@ Uint32 AggInterpreter::CopyVecCandidateToSignal(Signal* signal) {
     while (pos < vec_candidate_buf_len_) {
       AttributeHeader header = *(AttributeHeader*)(vec_candidate_buf_ + pos);
       if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
+#ifdef DEBUG_VS_INTERP
         double value = *(double*)(vec_candidate_buf_ + pos + 1);
-        g_eventLogger->info("CopyToSignal, attributeId: %d, value: %lf", header.getAttributeId(), value);
+        VS_INTERP_TRACE(frag_id_, "CopyToSignal, attributeId: %d, value: %lf",
+                        header.getAttributeId(), value);
+#endif  // DEBUG_VS_INTERP
         *(double*)(vec_candidate_buf_ + pos + 1) = vec_closest_;
       }
       pos += header.getDataSize() + 1;
@@ -1823,7 +1868,7 @@ Uint32 AggInterpreter::CopyVecCandidateToSignal(Signal* signal) {
   if (vec_candidate_buf_len_ != 0) {
     memcpy((void*)(&signal->theData[25]), vec_candidate_buf_,
         vec_candidate_buf_len_ * sizeof(Uint32));
-    g_eventLogger->info("CopyToSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
+    VS_INTERP_TRACE(frag_id_, "CopyToSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
         signal->theData[25], signal->theData[26]);
   }
   return vec_candidate_buf_len_;

@@ -135,7 +135,7 @@ ADD_STATIC_LIBRARY(ndbblocks
   trpman.cpp
   tsman.cpp
   ${EXTRA_SRC}
-  LINK_LIBRARIES ext::zlib
+  LINK_LIBRARIES ext::zlib simsimd::simsimd
   )
 
 MYSQL_ADD_EXECUTABLE(ndb_print_file

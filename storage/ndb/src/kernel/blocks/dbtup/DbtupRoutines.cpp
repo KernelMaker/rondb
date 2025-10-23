@@ -374,8 +374,8 @@ int Dbtup::readAttributes(KeyReqStruct *req_struct, const Uint32 *inBuffer,
   thrjamDebug(req_struct->jamBuffer);
   thrjamDataDebug(req_struct->jamBuffer, inBufLen);
   while (inBufIndex < inBufLen) {
-    g_eventLogger->info("Hello[1], table: %u, frag_id: %u, thread: %ld\n",
-        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
+    // g_eventLogger->info("Hello[1], table: %u, frag_id: %u, thread: %ld\n",
+    //     req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
     thrjamDebug(req_struct->jamBuffer);
     tmpAttrBufIndex = req_struct->out_buf_index;
     tmpAttrBufBits = req_struct->out_buf_bits;
@@ -383,14 +383,14 @@ int Dbtup::readAttributes(KeyReqStruct *req_struct, const Uint32 *inBuffer,
     inBufIndex++;
     attributeId= ahIn.getAttributeId();
 #ifdef DEBUG_PA_TUP
-    g_eventLogger->info("Hello[2], table: %u, frag_id: %u, thread: %ld\n",
-        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
+    // g_eventLogger->info("Hello[2], table: %u, frag_id: %u, thread: %ld\n",
+    //     req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
     if (req_struct->fragPtrP != nullptr &&
         PA_NEED_PRINT(true,
           req_struct->fragPtrP->fragTableId,
           req_struct->fragPtrP->fragmentId)) {
-    g_eventLogger->info("Hello[3], table: %u, frag_id: %u, thread: %ld\n",
-        req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
+    // g_eventLogger->info("Hello[3], table: %u, frag_id: %u, thread: %ld\n",
+    //     req_struct->fragPtrP->fragTableId, req_struct->fragPtrP->fragmentId, pthread_self());
       const Uint32* attrDescriptor = req_struct->tablePtrP->tabDescriptor +
         (attributeId * ZAD_SIZE);
       const Uint32 TattrDesc1 = attrDescriptor[0];
@@ -3509,7 +3509,7 @@ int Dbtup::read_pseudo(const Uint32 *inBuffer, Uint32 inPos,
        * TODO (Zhao)
        */
       {
-        g_eventLogger->info("VEC_DISTANCE");
+        // g_eventLogger->info("VEC_DISTANCE");
         double tmp = 721.721;
         memcpy(outBuffer + 1, &tmp, 8);
       }

@@ -145,6 +145,7 @@ int NdbScanOperation::init(const NdbTableImpl *tab,
   m_conf_receivers_count = 0;
   m_kernel_error_code = 0;
   assert(m_scan_buffer == nullptr);
+  m_aggregation_code = nullptr;
 
   theNdb->theRemainingStartTransactions++;  // will be checked in hupp...
   NdbTransaction *aScanConnection = theNdb->hupp(myConnection);

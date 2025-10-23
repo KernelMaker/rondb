@@ -83,8 +83,8 @@ class FsReadWriteReq;
  * Turn on the DEBUG_PA
  * to trace lqh behaviors on table PA_TABLE_ID partition PA_PART_ID
  */
-// #undef DEBUG_PA
-#define DEBUG_PA 1
+#undef DEBUG_PA
+// #define DEBUG_PA 1
 
 #define PA_TABLE_ID 17
 #define PA_PART_ID 0

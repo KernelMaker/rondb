@@ -20335,16 +20335,6 @@ void Dblqh::sendScanFragConf(Signal *signal, Uint32 scanCompleted,
     ndbrequire(c_fragment_pool.getPtr(regFragptr));
     debug_pa_print = PA_NEED_PRINT(scanPtr->m_aggregation,
                             regFragptr.p->tabRef, regFragptr.p->fragId);
-    // In VS mode, we need to adjust m_curr_batch_size_rows, m_curr_batch_size_bytes here
-    if (scanPtr->m_agg_interpreter && scanPtr->m_agg_interpreter->vec_search()) {
-      Uint32 batch_size_rows = 0;
-      Uint32 batch_size_bytes = 0;
-      scanPtr->m_agg_interpreter->PrepareVecSearchResultInfo(&batch_size_rows,
-                                                             &batch_size_bytes);
-      scanPtr->m_curr_batch_size_rows = batch_size_rows;
-      scanPtr->m_curr_batch_size_bytes = batch_size_bytes;
-      scanPtr->m_agg_n_res_recs = 0;
-    }
     if (debug_pa_print) {
       ndbrequire(regFragptr.p->fragId == scanPtr->m_agg_interpreter->frag_id());
       PA_RONDB_TRACE_2(debug_pa_print,
@@ -20358,6 +20348,16 @@ void Dblqh::sendScanFragConf(Signal *signal, Uint32 scanCompleted,
     }
   }
 #endif // DEBUG_PA
+  // In VS mode, we need to adjust m_curr_batch_size_rows, m_curr_batch_size_bytes here
+  if (scanPtr->m_agg_interpreter && scanPtr->m_agg_interpreter->vec_search()) {
+    Uint32 batch_size_rows = 0;
+    Uint32 batch_size_bytes = 0;
+    scanPtr->m_agg_interpreter->PrepareVecSearchResultInfo(&batch_size_rows,
+                                                           &batch_size_bytes);
+    scanPtr->m_curr_batch_size_rows = batch_size_rows;
+    scanPtr->m_curr_batch_size_bytes = batch_size_bytes;
+    scanPtr->m_agg_n_res_recs = 0;
+  }
   /*
    * PA related
    * In pushdown aggregation mode, before we send

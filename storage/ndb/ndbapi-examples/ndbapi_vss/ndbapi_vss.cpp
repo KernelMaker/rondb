@@ -43,6 +43,9 @@
 #include <NdbSleep.h>
 
 #include <queue>
+#include <chrono>
+#include <simsimd/simsimd.h>
+
 
 /**
  * Helper debugging macros
@@ -500,12 +503,14 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
       myNdb->closeTransaction(myTrans);
       return -1;
     }
+    auto start = std::chrono::high_resolution_clock::now();
     if (myScanOp->DoVectorSearch(myRecAttr, 2) == -1) {
       err = myTrans->getNdbError();
       std::cout << "DoVectorSearch failed: " << err.message << std::endl;
       myNdb->closeTransaction(myTrans);
       return -1;
     }
+    auto end = std::chrono::high_resolution_clock::now();
     
     fprintf(stderr, "FINAL ------\n");
     while (aggregator.VecFetchNextResult()) {
@@ -513,6 +518,9 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
           myRecAttr[0]->int32_value(),
           myRecAttr[1]->int32_value());
     }
+
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+    std::cout << "Time cost: " << elapsed.count() << " ms" << std::endl;
 
     myNdb->closeTransaction(myTrans);
     return 1;
@@ -603,12 +611,14 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
     myNdb->closeTransaction(myTrans);
     return -1;
   }
+  auto start = std::chrono::high_resolution_clock::now();
   if (myIndexScanOp->DoVectorSearch(myRecAttr, 2) == -1) {
     err = myTrans->getNdbError();
     std::cout << "DoVectorSearch failed: " << err.message << std::endl;
     myNdb->closeTransaction(myTrans);
     return -1;
   }
+  auto end = std::chrono::high_resolution_clock::now();
 
   fprintf(stderr, "FINAL ------\n");
   while (aggregator.VecFetchNextResult()) {
@@ -616,6 +626,8 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
         myRecAttr[0]->int32_value(),
         myRecAttr[1]->int32_value());
   }
+  std::chrono::duration<double, std::milli> elapsed = end - start;
+  std::cout << "Time cost: " << elapsed.count() << " ms" << std::endl;
 
   myNdb->closeTransaction(myTrans);
   return 1;
@@ -654,6 +666,129 @@ void mysql_connect_and_create(MYSQL & mysql, const char *socket, bool load)
   }
 
   if(! ok) MYSQLERROR(mysql);
+}
+
+int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
+{
+  // Scan all records exclusive and update
+  // them one by one
+  int                  retryAttempt = 0;
+  const int            retryMax = 10;
+  NdbError              err;
+  NdbTransaction	*myTrans;
+  NdbScanOperation	*myScanOp;
+
+  const NdbDictionary::Dictionary* myDict= myNdb->getDictionary();
+  const NdbDictionary::Table *myTable= myDict->getTable("vec_tbl");
+
+  if (myTable == NULL)
+    APIERROR(myDict->getNdbError());
+  while (true)
+  {
+
+    if (retryAttempt >= retryMax)
+    {
+      std::cout << "ERROR: has retried this operation " << retryAttempt
+        << " times, failing!" << std::endl;
+      return -1;
+    }
+
+    myTrans = myNdb->startTransaction();
+    if (myTrans == NULL)
+    {
+      const NdbError err = myNdb->getNdbError();
+
+      if (err.status == NdbError::TemporaryError)
+      {
+        NdbSleep_MilliSleep(50);
+        retryAttempt++;
+        continue;
+      }
+      std::cout << err.message << std::endl;
+      return -1;
+    }
+    /*
+     * Define a scan operation.
+     * NDBAPI.
+     */
+    myScanOp = myTrans->getNdbScanOperation(myTable);
+    if (myScanOp == NULL)
+    {
+      std::cout << myTrans->getNdbError().message << std::endl;
+      myNdb->closeTransaction(myTrans);
+      return -1;
+    }
+
+    if (myScanOp->readTuples(NdbOperation::LM_CommittedRead) != 0) {
+      APIERROR (myTrans->getNdbError());
+    }
+
+    NdbRecAttr* myRecAttr[3];
+    myRecAttr[0] = myScanOp->getValue("pk");
+    myRecAttr[1] = myScanOp->getValue("val");
+    myRecAttr[2] = myScanOp->getValue("vec");
+    if (myRecAttr[0] == nullptr || myRecAttr[1] == nullptr || myRecAttr[2] == nullptr) {
+      std::cout << myTrans->getNdbError().message << std::endl;
+      myNdb->closeTransaction(myTrans);
+    }
+
+    /*
+     * Define the target vector
+     */
+    float vec[DIMS];
+    for (int i = 0; i < DIMS; i++) {
+      vec[i] = 0.5;
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+    if (myTrans->execute(NdbTransaction::NoCommit) != 0) {
+      return -1;
+    }
+
+    int check = -1;
+    double distance = 0;
+    int count = 0;
+    double vec_closest = std::numeric_limits<double>::max();
+    NdbRecAttr* resultCol[2];
+    resultCol[0] = nullptr;
+    resultCol[1] = nullptr;
+    while ((check = myScanOp->nextResult(true)) == 0) {
+      do {
+        count++;
+        Uint16 len = *(Uint16*)(myRecAttr[2]->aRef());
+        float* current = (float*)((char*)(myRecAttr[2]->aRef()) + 2);
+        simsimd_l2sq_f32(current, vec, DIMS, &distance);
+        if (vec_closest > distance) {
+          vec_closest = distance;
+          if (resultCol[0] != nullptr) {
+            delete resultCol[0];
+          }
+          resultCol[0] = myRecAttr[0]->clone();
+          if (resultCol[1] != nullptr) {
+            delete resultCol[1];
+          }
+          resultCol[1] = myRecAttr[1]->clone();
+
+        }
+      } while ((check = myScanOp->nextResult(false)) == 0);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+    std::cout << "Time cost: " << elapsed.count() << " ms, count: " << count
+              << " Closest distance: " << vec_closest
+              << ", pk: " << resultCol[0]->int32_value()
+              << ", val: " << resultCol[1]->int32_value() << std::endl;
+
+    myNdb->closeTransaction(myTrans);
+    if (resultCol[0] != nullptr) {
+      delete resultCol[0];
+    }
+    if (resultCol[1] != nullptr) {
+      delete resultCol[1];
+    }
+    return 1;
+  }
+  return -1;
 }
 
 void ndb_run_scan(const char * connectstring, MYSQL& mysql,
@@ -698,6 +833,10 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     fprintf(stderr, "populate 2 tables done\n");
   }
 
+  // if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
+  //   std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
+  // }
+
   fprintf(stderr, "-----------------------START PUSHDOWN VECTOR SEARCH--------------------\n");
 
   // fprintf(stderr, "1. TABLE SCAN:\n");
@@ -712,6 +851,11 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
   }
 
+  fprintf(stderr, "-----------------------START REGULAR VECTOR SEARCH--------------------\n");
+  if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
+    std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
+  }
+
   // fprintf(stderr, "2. INDEX SCAN:\n");
   // fprintf(stderr, "SELECT CCHAR, CMEDIUMINT, "
   //                 "SUM(CUBIGINT+CUTINYINT+6666), "
@@ -721,9 +865,10 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
   //                 "WHERE CMEDIUMINT >= 6 AND CMEDIUMINT < 8 " // Index range scan
   //                 " AND CTINYINT = 66 "                       // Filter
   //                 "GROUP BY CCHAR, CMEDIUMINT;\n");
-  if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Index scan vector search Success!" << std::endl  << std::endl;
-  }
+  // if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
+  //   std::cout << "Index scan vector search Success!" << std::endl  << std::endl;
+  // }
+
 }
 
 int main(int argc, char** argv)
