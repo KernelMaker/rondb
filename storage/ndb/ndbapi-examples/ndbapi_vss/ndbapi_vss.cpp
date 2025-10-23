@@ -61,362 +61,12 @@
   PRINT_ERROR(error.code,error.message); \
   exit(-1); }
 
-struct Row {
-  Int32 cint32;
-  Int8 cint8;
-  Int16 cint16;
-  Int32 cint24;
-  Int64 cint64;
-
-  Uint8 cuint8;
-  Uint16 cuint16;
-  Uint32 cuint24;
-  Uint32 cuint32;
-  Uint64 cuint64;
-
-  float cfloat;
-  double cdouble;
-
-  double cdecimal;
-  Uint64 cdecimal2;
-
-  char cchar[32];
-};
-
-void drop_table(MYSQL &mysql)
-{
-  if (mysql_query(&mysql, "DROP TABLE IF EXISTS api_scan"))
-    MYSQLERROR(mysql);
-}
-
-void drop_table_inno(MYSQL &mysql)
-{
-  if (mysql_query(&mysql, "DROP TABLE IF EXISTS api_scan_inno"))
-    MYSQLERROR(mysql);
-}
-
-void create_table(MYSQL &mysql)
-{
-  /* Disk column table
-  while (mysql_query(&mysql,
-        "CREATE TABLE agg.api_scan ("
-        "CINT INT NOT NULL,"
-        "CTINYINT TINYINT NOT NULL,"
-        "CSMALLINT SMALLINT NOT NULL,"
-        "CMEDIUMINT MEDIUMINT NOT NULL,"
-        "CBIGINT BIGINT NOT NULL,"
-        "CUTINYINT TINYINT UNSIGNED NOT NULL,"
-        "CUSMALLINT SMALLINT UNSIGNED NOT NULL,"
-        "CUMEDIUMINT MEDIUMINT UNSIGNED NOT NULL,"
-        "CUINT INT UNSIGNED NOT NULL,"
-        "CUBIGINT BIGINT UNSIGNED NOT NULL,"
-        "CFLOAT FLOAT NOT NULL,"
-        "CDOUBLE DOUBLE NOT NULL STORAGE DISK,"
-        "CCHAR VARCHAR(29) NOT NULL,"
-        "CDECIMAL DECIMAL(10,2) NOT NULL,"
-        "CDECIMAL2 DECIMAL(10,0) UNSIGNED NOT NULL,"
-        "PRIMARY KEY USING HASH (CINT)) TABLESPACE ts_1 ENGINE=NDB CHARSET=latin1"))
-  */
-  while (mysql_query(&mysql,
-        "CREATE TABLE agg.api_scan ("
-        "CINT INT NOT NULL,"
-        "CTINYINT TINYINT NOT NULL,"
-        "CSMALLINT SMALLINT NOT NULL,"
-        "CMEDIUMINT MEDIUMINT NOT NULL,"
-        "CBIGINT BIGINT NOT NULL,"
-        "CUTINYINT TINYINT UNSIGNED NOT NULL,"
-        "CUSMALLINT SMALLINT UNSIGNED NOT NULL,"
-        "CUMEDIUMINT MEDIUMINT UNSIGNED NOT NULL,"
-        "CUINT INT UNSIGNED NOT NULL,"
-        "CUBIGINT BIGINT UNSIGNED NOT NULL,"
-        "CFLOAT FLOAT NOT NULL,"
-        "CDOUBLE DOUBLE NOT NULL,"
-        "CCHAR VARCHAR(29) NOT NULL,"
-        "CDECIMAL DECIMAL(10,2) NOT NULL,"
-        "CDECIMAL2 DECIMAL(10,0) UNSIGNED NOT NULL,"
-        "PRIMARY KEY USING HASH (CINT)) ENGINE=NDB CHARSET=latin1"))
-  {
-    if (mysql_errno(&mysql) != ER_TABLE_EXISTS_ERROR)
-      MYSQLERROR(mysql);
-    std::cout << "MySQL Cluster already has example table: api_scan. "
-      << "Dropping it..." << std::endl;
-    drop_table(mysql);
-  }
-
-  if (mysql_query(&mysql,
-                  "CREATE INDEX"
-                  "  INDEX_CMEDIUMINT"
-                  "  ON api_scan"
-                  "  (CMEDIUMINT)")) {
-    MYSQLERROR(mysql);
-  }
-}
-
-void create_table_innodb(MYSQL &mysql)
-{
-  while (mysql_query(&mysql,
-        "CREATE TABLE agg.api_scan_inno ("
-        "CINT INT NOT NULL,"
-        "CTINYINT TINYINT NOT NULL,"
-        "CSMALLINT SMALLINT NOT NULL,"
-        "CMEDIUMINT MEDIUMINT NOT NULL,"
-        "CBIGINT BIGINT NOT NULL,"
-        "CUTINYINT TINYINT UNSIGNED NOT NULL,"
-        "CUSMALLINT SMALLINT UNSIGNED NOT NULL,"
-        "CUMEDIUMINT MEDIUMINT UNSIGNED NOT NULL,"
-        "CUINT INT UNSIGNED NOT NULL,"
-        "CUBIGINT BIGINT UNSIGNED NOT NULL,"
-        "CFLOAT FLOAT NOT NULL,"
-        "CDOUBLE DOUBLE NOT NULL,"
-        "CCHAR VARCHAR(29) NOT NULL,"
-        "CDECIMAL DECIMAL(10,2) NOT NULL,"
-        "CDECIMAL2 DECIMAL(10,0) UNSIGNED NOT NULL,"
-        "PRIMARY KEY(CINT)) ENGINE=INNODB CHARSET=latin1"))
-  {
-    if (mysql_errno(&mysql) != ER_TABLE_EXISTS_ERROR)
-      MYSQLERROR(mysql);
-    std::cout << "MySQL Cluster already has example table: api_scan_inno. "
-      << "Dropping it..." << std::endl;
-    drop_table_inno(mysql);
-  }
-
-  if (mysql_query(&mysql,
-                  "CREATE INDEX"
-                  "  INDEX_CMEDIUMINT"
-                  "  ON api_scan_inno"
-                  "  (CMEDIUMINT)")) {
-    MYSQLERROR(mysql);
-  }
-}
-
 std::random_device rd;
 std::mt19937 gen(rd());
-
-/*
-   std::uniform_int_distribution<Int64> g_bigint(0xFFFFFFFF, 0x7FFFFFFF);
-   std::uniform_int_distribution<Uint64> g_ubigint(0, 0xFFFFFFFF);
-   std::uniform_int_distribution<Int32> g_int(0xFFFF, 0x7FFF);
-   std::uniform_int_distribution<Uint32> g_uint(0, 0xFFFF);
-   std::uniform_int_distribution<Int32> g_mediumint(0x0FFF, 0x7FF);
-   std::uniform_int_distribution<Uint32> g_umediumint(0, 0xFFF);
-   std::uniform_int_distribution<Int16> g_smallint(0xFF, 0x7F);
-   std::uniform_int_distribution<Uint16> g_usmallint(0, 0xFF);
-   std::uniform_int_distribution<Int8> g_tinyint(0xF, 0x7);
-   std::uniform_int_distribution<Uint8> g_utinyint(0, 0xF);
-   std::uniform_real_distribution<float> g_float(0xFFFF, 0x7FFF);
-   std::uniform_real_distribution<double> g_double(0xFFFFFFFF, 0x7FFFFFFF);
-*/
-
-std::uniform_int_distribution<Int64> g_bigint(-3147483648, 3147483648);
-std::uniform_int_distribution<Uint64> g_ubigint(0, 5294967295);
-std::uniform_int_distribution<Int32> g_int(-2147483648, 2147483647);
-std::uniform_int_distribution<Uint32> g_uint(0, 4294967295);
-// std::uniform_int_distribution<Int32> g_mediumint(-8388608, 8388607);
-std::uniform_int_distribution<Int32> g_mediumint(-10, 10);
-std::uniform_int_distribution<Uint32> g_umediumint(0, 8388607);
-std::uniform_int_distribution<Int16> g_smallint(-32768, 32767);
-std::uniform_int_distribution<Uint16> g_usmallint(0, 32768);
-// std::uniform_int_distribution<Int8> g_tinyint(-128, 127);
-std::uniform_int_distribution<Int8> g_tinyint(60, 70);
-std::uniform_int_distribution<Uint8> g_utinyint(0, 255);
-std::uniform_real_distribution<float> g_float(-32768, 32767);
-std::uniform_real_distribution<double> g_double(-8388608, 8388607);
-
-std::uniform_int_distribution<Uint8> g_zero(0, 19);
-
-#define NUM 10000
-int populate(Ndb * myNdb, MYSQL& mysql)
-{
-  int i;
-  Row rows[NUM];
-
-  const NdbDictionary::Dictionary* myDict= myNdb->getDictionary();
-  const NdbDictionary::Table *myTable= myDict->getTable("api_scan");
-
-  if (myTable == NULL)
-    APIERROR(myDict->getNdbError());
-
-  std::fstream fs;
-  fs.open("/tmp/agg_data.txt", std::fstream::out | std::ofstream::trunc);
-
-  for (i = 0; i < NUM; i++)
-  {
-    // rows[i].cint32 = g_int(gen);
-    rows[i].cint32 = i;
-    rows[i].cint8 = g_tinyint(gen);
-    rows[i].cint16 = g_smallint(gen);
-    rows[i].cint24 = g_mediumint(gen);
-    rows[i].cint64 = g_bigint(gen);
-
-    rows[i].cuint8 = g_utinyint(gen);
-    rows[i].cuint16 = g_usmallint(gen);
-    if (g_zero(gen) == 6) {
-      rows[i].cuint16 = 0;
-    }
-    rows[i].cuint24 = g_umediumint(gen);
-    rows[i].cuint32 = g_uint(gen);
-    rows[i].cuint64 = g_ubigint(gen);
-    if (g_zero(gen) == 6) {
-      rows[i].cuint64 = 0;
-    }
-
-    rows[i].cfloat = g_float(gen);
-    rows[i].cdouble = g_double(gen);
-    if (g_zero(gen) == 6) {
-      rows[i].cdouble = 0;
-    }
-
-    // Simple for debug
-    // rows[i].cint32 = i;
-    // rows[i].cint8 = i;
-    // rows[i].cint16 = i;
-    // rows[i].cint24 = i;
-    // rows[i].cint64 = i;
-    // rows[i].cuint8 = i * 2;
-    // rows[i].cuint16 = i * 2;
-    // rows[i].cuint24 = i * 2;
-    // rows[i].cuint32 = i * 2;
-    // rows[i].cuint64 = i * 2;
-    // rows[i].cfloat = i * 1.1;
-    // rows[i].cdouble = i * 1.11;
-
-
-    // Must memset here, otherwise group by this
-    // column in aggregation interpreter would be undefined.
-    memset(rows[i].cchar, 0, sizeof(rows[i].cchar));
-
-    rows[i].cdecimal = rows[i].cdouble;
-    rows[i].cdecimal2 = rows[i].cuint64;
-
-    rows[i].cchar[0] = 10;
-    switch (i % 4) {
-      case 0:
-        sprintf(&(rows[i].cchar[1]), "GROUPxxx_1");
-        break;
-      case 1:
-        sprintf(&(rows[i].cchar[1]), "GROUPxxx_2");
-        break;
-      case 2:
-        sprintf(&(rows[i].cchar[1]), "GROUPxxx_3");
-        break;
-      case 3:
-        sprintf(&(rows[i].cchar[1]), "GROUPxxx_4");
-        break;
-      default:
-        assert(0);
-    }
-		std::string str = std::to_string(rows[i].cint32) + "," +
-                      std::to_string(rows[i].cint8) + "," +
-                      std::to_string(rows[i].cint16) + "," +
-                      std::to_string(rows[i].cint24) + "," +
-                      std::to_string(rows[i].cint64) + "," +
-                      std::to_string(rows[i].cuint8) + "," +
-                      std::to_string(rows[i].cuint16) + "," +
-                      std::to_string(rows[i].cuint24) + "," +
-                      std::to_string(rows[i].cuint32) + "," +
-                      std::to_string(rows[i].cuint64) + "," +
-                      std::to_string(rows[i].cfloat) + "," +
-                      std::to_string(rows[i].cdouble) + "," +
-                      "'" +
-                      std::string(&(rows[i].cchar[1]), 10) +
-                      "'" + "," +
-                      std::to_string(rows[i].cdecimal) + "," +
-                      std::to_string(rows[i].cdecimal2);
-    std::string insert_sql = "INSERT INTO agg.api_scan_inno VALUES(" + str + ")";
-    if (mysql_real_query(&mysql, insert_sql.data(), insert_sql.length())) {
-      MYSQLERROR(mysql);
-    }
-    std::string insert_sql_ndb = "INSERT INTO agg.api_scan VALUES(" + str + ")";
-    if (mysql_real_query(&mysql, insert_sql_ndb.data(), insert_sql_ndb.length())) {
-      MYSQLERROR(mysql);
-    }
-    fs << str;
-    fs << std::endl;
-  }
-  return 1;
-
-  /*
-   * PA related
-   * Since we're populating a table with DECIMAL columns, which NDBAPI doesn't
-   * support.
-   * Here we use mysql client instead.
-   *
-  NdbTransaction* myTrans = myNdb->startTransaction();
-  if (myTrans == NULL)
-    APIERROR(myNdb->getNdbError());
-
-  for (i = 0; i < NUM; i++)
-  {
-    NdbOperation* myNdbOperation = myTrans->getNdbOperation(myTable);
-    if (myNdbOperation == NULL)
-      APIERROR(myTrans->getNdbError());
-    myNdbOperation->insertTuple();
-#ifdef NDEBUG
-    myNdbOperation->equal("CINT", rows[i].cint32);
-    myNdbOperation->setValue("CTINYINT", rows[i].cint8);
-    myNdbOperation->setValue("CSMALLINT", rows[i].cint16);
-    myNdbOperation->setValue("CMEDIUMINT", rows[i].cint24);
-    myNdbOperation->setValue("CBIGINT", rows[i].cint64);
-
-    myNdbOperation->setValue("CUTINYINT", rows[i].cuint8);
-    myNdbOperation->setValue("CUSMALLINT", rows[i].cuint16);
-    myNdbOperation->setValue("CUMEDIUMINT", rows[i].cuint24);
-    myNdbOperation->setValue("CUINT", rows[i].cuint32);
-    myNdbOperation->setValue("CUBIGINT", rows[i].cuint64);
-
-    myNdbOperation->setValue("CFLOAT", rows[i].cfloat);
-    myNdbOperation->setValue("CDOUBLE", rows[i].cdouble);
-
-    myNdbOperation->setValue("CCHAR", rows[i].cchar);
-#else
-    assert(myNdbOperation->equal("CINT", rows[i].cint32) != -1);
-    assert(myNdbOperation->setValue("CTINYINT", rows[i].cint8) != -1);
-    assert(myNdbOperation->setValue("CSMALLINT", rows[i].cint16) != -1);
-    assert(myNdbOperation->setValue("CMEDIUMINT", rows[i].cint24) != -1);
-    assert(myNdbOperation->setValue("CBIGINT", rows[i].cint64) != -1);
-
-    assert(myNdbOperation->setValue("CUTINYINT", rows[i].cuint8) != -1);
-    assert(myNdbOperation->setValue("CUSMALLINT", rows[i].cuint16) != -1);
-    assert(myNdbOperation->setValue("CUMEDIUMINT", rows[i].cuint24) != -1);
-    assert(myNdbOperation->setValue("CUINT", rows[i].cuint32) != -1);
-    assert(myNdbOperation->setValue("CUBIGINT", rows[i].cuint64) != -1);
-
-    assert(myNdbOperation->setValue("CFLOAT", rows[i].cfloat) != -1);
-    assert(myNdbOperation->setValue("CDOUBLE", rows[i].cdouble) != -1);
-
-    assert(myNdbOperation->setValue("CCHAR", rows[i].cchar) != -1);
-#endif // NDEBUG
-  }
-
-  int check = myTrans->execute(NdbTransaction::Commit);
-  if (check != 0) {
-    std::cout <<  myTrans->getNdbError().message << std::endl;
-  }
-
-  myTrans->close();
-
-  return check != -1;
-  */
-}
-
-#define sint3korr(A)  ((Int32) ((((Uint8) (A)[2]) & 128) ? \
-                                  (((Uint32) 255L << 24) | \
-                                  (((Uint32) (Uint8) (A)[2]) << 16) |\
-                                  (((Uint32) (Uint8) (A)[1]) << 8) | \
-                                   ((Uint32) (Uint8) (A)[0])) : \
-                                 (((Uint32) (Uint8) (A)[2]) << 16) |\
-                                 (((Uint32) (Uint8) (A)[1]) << 8) | \
-                                  ((Uint32) (Uint8) (A)[0])))
-
-#define uint3korr(A)  (Uint32) (((Uint32) ((Uint8) (A)[0])) +\
-                                  (((Uint32) ((Uint8) (A)[1])) << 8) +\
-                                  (((Uint32) ((Uint8) (A)[2])) << 16))
 
 #define DIMS 1024
 int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
 {
-  // Scan all records exclusive and update
-  // them one by one
   int                  retryAttempt = 0;
   const int            retryMax = 10;
   NdbError              err;
@@ -512,7 +162,7 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
     }
     auto end = std::chrono::high_resolution_clock::now();
     
-    fprintf(stderr, "FINAL ------\n");
+    fprintf(stderr, "------FINAL RESULT------\n");
     while (aggregator.VecFetchNextResult()) {
       fprintf(stderr, "pk: %d, val: %d\n",
           myRecAttr[0]->int32_value(),
@@ -558,9 +208,9 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
     APIERROR (myTrans->getNdbError());
   }
 
-  /* Index range: val >= 0 and val < 18001 */
-  Uint32 low=0;
-  Uint32 high=18001;
+  /* Index range: val >= 10000 and val < 100000 */
+  Uint32 low=10000;
+  Uint32 high=100000;
 
   if (myIndexScanOp->setBound("val", NdbIndexScanOperation::BoundLE, (char*)&low)) {
     APIERROR(myTrans->getNdbError());
@@ -572,8 +222,8 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
     APIERROR(myIndexScanOp->getNdbError());
   }
 
-  /* Filter: pk < 181 */
-  Uint32 val = 2;
+  /* Filter: pk < 200 */
+  Uint32 val = 500;
   NdbScanFilter filter(myIndexScanOp);
   if (filter.begin(NdbScanFilter::AND) < 0  ||
       filter.cmp(NdbScanFilter::COND_LT, 0, &val, sizeof(val)) < 0 ||
@@ -620,7 +270,7 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
   }
   auto end = std::chrono::high_resolution_clock::now();
 
-  fprintf(stderr, "FINAL ------\n");
+  fprintf(stderr, "------FINAL RESULT------\n");
   while (aggregator.VecFetchNextResult()) {
     fprintf(stderr, "pk: %d, val: %d\n",
         myRecAttr[0]->int32_value(),
@@ -631,41 +281,6 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
 
   myNdb->closeTransaction(myTrans);
   return 1;
-}
-
-void populate_table_from_dataset(MYSQL& mysql) {
-  std::fstream fs;
-  fs.open("/tmp/agg_data.txt", std::fstream::in);
-  std::string str;
-  while (getline(fs, str)) {
-    std::string insert_sql = "INSERT INTO agg.api_scan VALUES(" + str + ")";
-    if (mysql_real_query(&mysql, insert_sql.data(), insert_sql.length())) {
-      MYSQLERROR(mysql);
-    }
-    insert_sql = "INSERT INTO agg.api_scan_inno VALUES(" + str + ")";
-    if (mysql_real_query(&mysql, insert_sql.data(), insert_sql.length())) {
-      MYSQLERROR(mysql);
-    }
-  }
-}
-
-void mysql_connect_and_create(MYSQL & mysql, const char *socket, bool load)
-{
-  bool ok;
-
-  ok = mysql_real_connect(&mysql, "localhost", "root", "", "", 0, socket, 0);
-  if(ok) {
-    mysql_query(&mysql, "CREATE DATABASE agg");
-    ok = ! mysql_select_db(&mysql, "agg");
-  }
-  if(ok && load) {
-    fprintf(stderr, "Creating 2 tables...\n");
-    create_table(mysql);
-    create_table_innodb(mysql);
-    fprintf(stderr, "Create 2 tables done\n");
-  }
-
-  if(! ok) MYSQLERROR(mysql);
 }
 
 int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
@@ -774,10 +389,10 @@ int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
     }
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
-    std::cout << "Time cost: " << elapsed.count() << " ms, count: " << count
-              << " Closest distance: " << vec_closest
-              << ", pk: " << resultCol[0]->int32_value()
+    fprintf(stderr, "------FINAL RESULT------\n");
+    std::cout << "pk: " << resultCol[0]->int32_value()
               << ", val: " << resultCol[1]->int32_value() << std::endl;
+    std::cout << "Time cost: " << elapsed.count() << " ms" << std::endl;
 
     myNdb->closeTransaction(myTrans);
     if (resultCol[0] != nullptr) {
@@ -818,109 +433,40 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     exit(-1);
   }
 
-  if (load) {
-    if (populate_data) {
-      fprintf(stderr, "populating 2 tables with a random datasets...\n");
-      for (int i = 0; i < 1; i++) {
-        if (populate(&myNdb, mysql) != 1) {
-          std::cout << "populate: Failed!" << std::endl;
-        }
-      }
-    } else {
-      fprintf(stderr, "populating 2 tables with the datasets /tmp/agg_data.txt...\n");
-      populate_table_from_dataset(mysql);
-    }
-    fprintf(stderr, "populate 2 tables done\n");
-  }
-
-  // if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
-  //   std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
-  // }
-
-  fprintf(stderr, "-----------------------START PUSHDOWN VECTOR SEARCH--------------------\n");
-
-  // fprintf(stderr, "1. TABLE SCAN:\n");
-  // fprintf(stderr, "SELECT CCHAR, CMEDIUMINT, "
-  //                 "SUM(CUBIGINT+CUTINYINT+6666), "
-  //                 "MIN(CDOUBLE-(-8888)), MAX(CUMEDIUMINT*6.6), "
-  //                 "MAX(CUINT/CINT) "
-  //                 "FROM agg.api_scan "
-  //                 "WHERE CTINYINT = 66 "                      // Filter
-  //                 "GROUP BY CCHAR, CMEDIUMINT;\n");
+  fprintf(stderr, "1. Pushdown Vector Search via TABLE Scan\n");
+  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+  fprintf(stderr, "                 LIMIT 1;\n");
   if(scan_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
+    std::cout << "Query 1: success!" << std::endl  << std::endl;
   }
 
-  fprintf(stderr, "-----------------------START REGULAR VECTOR SEARCH--------------------\n");
+  fprintf(stderr, "2. Non-pushdown Vector Search via TABLE Scan\n");
+  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+  fprintf(stderr, "                 LIMIT 1;\n");
   if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Table scan vector search Success!" << std::endl  << std::endl;
+    std::cout << "Query 2: success!" << std::endl  << std::endl;
   }
 
-  // fprintf(stderr, "2. INDEX SCAN:\n");
-  // fprintf(stderr, "SELECT CCHAR, CMEDIUMINT, "
-  //                 "SUM(CUBIGINT+CUTINYINT+6666), "
-  //                 "MIN(CDOUBLE-(-8888)), MAX(CUMEDIUMINT*6.6), "
-  //                 "SUM(CDOUBLE DIV CFLOAT) "
-  //                 "FROM agg.api_scan "
-  //                 "WHERE CMEDIUMINT >= 6 AND CMEDIUMINT < 8 " // Index range scan
-  //                 " AND CTINYINT = 66 "                       // Filter
-  //                 "GROUP BY CCHAR, CMEDIUMINT;\n");
-  // if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
-  //   std::cout << "Index scan vector search Success!" << std::endl  << std::endl;
-  // }
+  fprintf(stderr, "3. Pushdown Vector Search via Index Scan with Lower–Upper Bounds and Filter\n");
+  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+  fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
+  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+  fprintf(stderr, "                 LIMIT 1;\n");
+  if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
+    std::cout << "Query 3: success!" << std::endl  << std::endl;
+  }
 
 }
 
 int main(int argc, char** argv)
 {
-  // Usage: binary <socket mysqld> <connect_string cluster> <load> <new dataset> <validation>
-  //        <load>(true)        create table and load data before running aggregation
-  //        <new dataset>(true) populate table with new random dataset or reuse /tmp/agg_data.txt
-  //        <validation>(true)  for each pushdown aggregation result, validate it with InnoDB.
   char * mysqld_sock  = argv[1];
   const char *connectstring = argv[2];
   MYSQL mysql;
 
-  // bool load = true;
-  // if (argc >= 4) {
-  //   if (strcmp(argv[3], "false") == 0) {
-  //     load = false;
-  //   } else if (strcmp(argv[3], "true") != 0) {
-  //     fprintf(stderr, "WRONG arguments[load]:(true / false)\n");
-  //     exit(-1);
-  //   }
-  // }
-  // bool populate = true;
-  // if (argc >= 5) {
-  //   if (strcmp(argv[4], "false") == 0) {
-  //     populate = false;
-  //   } else if (strcmp(argv[4], "true") != 0) {
-  //     fprintf(stderr, "WRONG arguments[populate]:(true / false)\n");
-  //     exit(-1);
-  //   }
-  //   std::fstream tmp("/tmp/agg_data.txt");
-  //   if ((populate &&!load) || !tmp.good()) {
-  //     fprintf(stderr, "populate==true can only work with load mode(load==true). "
-  //                     "If populate==false in load mode, it requires that "
-  //                     "/tmp/agg_data.txt file must"
-  //                     "exists");
-  //     exit(-1);
-  //   }
-  // }
-
-  // bool validation = true;
-  // if (argc == 6) {
-  //   if (strcmp(argv[5], "false") == 0) {
-  //     validation = false;
-  //   } else if (strcmp(argv[5], "true") != 0) {
-  //     fprintf(stderr, "WRONG arguments[validation]:(true / false)\n");
-  //     exit(-1);
-  //   }
-  // }
-
   mysql_init(& mysql);
-  std::cout << "mysqld_sock: " << mysqld_sock << std::endl;
-  // mysql_connect_and_create(mysql, mysqld_sock, load);
 
   ndb_init();
   bool load = false;

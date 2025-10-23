@@ -973,7 +973,8 @@ bool NdbAggregator::VectorSearch(const char* name,
 
 bool NdbAggregator::VecProcessRes(NdbRecAttr** userAttrs, Uint32 n_userAttrs,
                                   NdbRecAttr* vecDistanceAttr) {
-  fprintf(stderr, "Receive pk: %d, distance: %lf, n_userAttrs: %u\n",
+  fprintf(stderr, "  Receive a result from 1 fragment, "
+          "pk: %d, distance: %lf, n_userAttrs: %u\n",
       (userAttrs[0])->int32_value(), vecDistanceAttr->double_value(),
       n_userAttrs);
 
@@ -988,13 +989,8 @@ bool NdbAggregator::VecProcessRes(NdbRecAttr** userAttrs, Uint32 n_userAttrs,
 }
 
 bool NdbAggregator::VecPrepareResults(NdbRecAttr** userAttrs, Uint32 n_userAttrs) {
-  fprintf(stderr, "\n----------------\n");
-  fprintf(stderr, "Vector search top-%u results:\n", vec_top_n_);
   while (!vec_result_->empty()) {
     VectorSearchResult* result = vec_result_->top();
-    fprintf(stderr, "pk: %d, val: %d\n",
-        result->attrs_[0]->int32_value(),
-        result->attrs_[1]->int32_value());
     vec_result_final_.push_back(result);
     vec_result_->pop();
   }
