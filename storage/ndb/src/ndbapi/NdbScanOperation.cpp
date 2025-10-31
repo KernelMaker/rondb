@@ -2406,7 +2406,7 @@ int NdbScanOperation::prepareSendScan(Uint32 /*aTC_ConnectPtr*/,
 
   if (m_aggregation_code != nullptr) {
     // In aggregation mode, we redefine the batch
-    batch_size = 1;
+    batch_size = m_aggregation_code->ProperBatchSize();
     batch_byte_size = DEF_AGG_RESULT_BATCH_BYTES;
     bufsize = MAX_AGG_RESULT_BATCH_BYTES;
   }

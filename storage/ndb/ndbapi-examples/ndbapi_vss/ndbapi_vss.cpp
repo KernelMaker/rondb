@@ -65,6 +65,7 @@ std::random_device rd;
 std::mt19937 gen(rd());
 
 #define DIMS 1024
+#define VEC_TOP_N 10
 int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
 {
   int                  retryAttempt = 0;
@@ -146,7 +147,7 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
     }
 
     NdbAggregator aggregator(myTable);
-    bool ret = aggregator.VectorSearch("vec", vec, DIMS, 1);
+    bool ret = aggregator.VectorSearch("vec", vec, DIMS, VEC_TOP_N);
     assert(ret);
     if (myScanOp->setAggregationCode(&aggregator) == -1) {
       std::cout << myTrans->getNdbError().message << std::endl;
@@ -254,7 +255,7 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
   }
 
   NdbAggregator aggregator(myTable);
-  bool ret = aggregator.VectorSearch("vec", vec, DIMS, 1);
+  bool ret = aggregator.VectorSearch("vec", vec, DIMS, VEC_TOP_N);
   assert(ret);
   if (myIndexScanOp->setAggregationCode(&aggregator) == -1) {
     std::cout << myTrans->getNdbError().message << std::endl;
@@ -360,47 +361,46 @@ int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
       return -1;
     }
 
+    std::priority_queue<NdbAggregator::VectorSearchResult*,
+      std::vector<NdbAggregator::VectorSearchResult*>,
+      NdbAggregator::ByDistance> vec_results;
     int check = -1;
     double distance = 0;
     int count = 0;
-    double vec_closest = std::numeric_limits<double>::max();
-    NdbRecAttr* resultCol[2];
-    resultCol[0] = nullptr;
-    resultCol[1] = nullptr;
     while ((check = myScanOp->nextResult(true)) == 0) {
-      do {
-        count++;
-        Uint16 len = *(Uint16*)(myRecAttr[2]->aRef());
-        float* current = (float*)((char*)(myRecAttr[2]->aRef()) + 2);
-        simsimd_l2sq_f32(current, vec, DIMS, &distance);
-        if (vec_closest > distance) {
-          vec_closest = distance;
-          if (resultCol[0] != nullptr) {
-            delete resultCol[0];
-          }
-          resultCol[0] = myRecAttr[0]->clone();
-          if (resultCol[1] != nullptr) {
-            delete resultCol[1];
-          }
-          resultCol[1] = myRecAttr[1]->clone();
-
+      count++;
+      Uint16 len = *(Uint16*)(myRecAttr[2]->aRef());
+      float* current = (float*)((char*)(myRecAttr[2]->aRef()) + 2);
+      simsimd_l2sq_f32(current, vec, DIMS, &distance);
+      if (vec_results.size() < VEC_TOP_N ||
+          distance < vec_results.top()->distance_) {
+        NdbAggregator::VectorSearchResult* candidate =
+          new NdbAggregator::VectorSearchResult(distance, 2, myRecAttr);
+        vec_results.push(candidate);
+        if (vec_results.size() > VEC_TOP_N) {
+          NdbAggregator::VectorSearchResult* kickout = vec_results.top();
+          vec_results.pop();
+          delete kickout;
         }
-      } while ((check = myScanOp->nextResult(false)) == 0);
+      }
     }
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
     fprintf(stderr, "------FINAL RESULT------\n");
-    std::cout << "pk: " << resultCol[0]->int32_value()
-              << ", val: " << resultCol[1]->int32_value() << std::endl;
+    std::vector<NdbAggregator::VectorSearchResult*> vec_results_final;
+    while (!vec_results.empty()) {
+      vec_results_final.push_back(vec_results.top());
+      vec_results.pop();
+    }
+    std::for_each(vec_results_final.rbegin(), vec_results_final.rend(),
+        [](NdbAggregator::VectorSearchResult* candidate) {
+          std::cout << "pk: " << candidate->attrs_[0]->int32_value();
+          std::cout << ", val: " << candidate->attrs_[1]->int32_value() << std::endl;
+          delete candidate;
+        });
     std::cout << "Time cost: " << elapsed.count() << " ms" << std::endl;
 
     myNdb->closeTransaction(myTrans);
-    if (resultCol[0] != nullptr) {
-      delete resultCol[0];
-    }
-    if (resultCol[1] != nullptr) {
-      delete resultCol[1];
-    }
     return 1;
   }
   return -1;
@@ -436,7 +436,7 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
   fprintf(stderr, "1. Pushdown Vector Search via TABLE Scan\n");
   fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
   fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT 1;\n");
+  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
   if(scan_vector_search(&myNdb, mysql, validation) > 0) {
     std::cout << "Query 1: success!" << std::endl  << std::endl;
   }
@@ -444,7 +444,7 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
   fprintf(stderr, "2. Non-pushdown Vector Search via TABLE Scan\n");
   fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
   fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT 1;\n");
+  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
   if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
     std::cout << "Query 2: success!" << std::endl  << std::endl;
   }
@@ -453,7 +453,7 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
   fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
   fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
   fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT 1;\n");
+  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
   if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
     std::cout << "Query 3: success!" << std::endl  << std::endl;
   }

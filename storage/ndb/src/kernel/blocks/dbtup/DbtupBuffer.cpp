@@ -486,25 +486,20 @@ void Dbtup::SendAggResToAPI(Signal* signal, const void* lqhTcConnectrec,
         lqhScanPtrP->m_curr_batch_size_bytes,
         lqhScanPtrP->m_agg_n_res_recs);
   } else {
-    Uint32 res_len = lqhScanPtrP->m_agg_interpreter->CopyVecCandidateToSignal(signal);
-    if (res_len != 0) {
-      // sendReadAttrinfo(signal, req_struct, data_len);
-      TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
-      transIdAI->connectPtr = lqhScanPtrP->scanApiOpPtr;
-      transIdAI->transId[0] = lqhOpPtrP->transid[0];
-      transIdAI->transId[1] = lqhOpPtrP->transid[1];
-      SendAggregationResult(signal, res_len, lqhScanPtrP->scanApiBlockref);
-    } else {
-      /*
-       * VS related
-			 * When performing a vector search with a filter, it’s possible that all rows
-			 * are filtered out by the condition. In this case, the vector search handler
-			 * won’t explicitly send anything back to the API, this behavior is consistent
-			 * with a normal scan operation with filters applied.
-       */
-      PA_RONDB_TRACE(lqhScanPtrP->m_aggregation,
-          lqhOpPtrP->tableref, lqhScanPtrP->m_agg_interpreter->frag_id(),
-        "Dbtup::SendAggResToAPI(), CopyVecCandidateToSignal is 0"); 
+    Uint32 res_len = 0;
+    lqhScanPtrP->m_agg_interpreter->PrepareVecCandidates();
+    while (true) {
+      res_len = lqhScanPtrP->m_agg_interpreter->CopyOneVecCandidateToSignal(signal);
+      if (res_len != 0) {
+        TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
+        transIdAI->connectPtr = lqhScanPtrP->scanApiOpPtr;
+        transIdAI->transId[0] = lqhOpPtrP->transid[0];
+        transIdAI->transId[1] = lqhOpPtrP->transid[1];
+        SendAggregationResult(signal, res_len, lqhScanPtrP->scanApiBlockref);
+      } else {
+        // All results have been copied and sent
+        break;
+      }
     }
   }
 }

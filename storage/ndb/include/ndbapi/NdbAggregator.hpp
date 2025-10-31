@@ -315,6 +315,19 @@ class NdbAggregator {
                      NdbRecAttr* vecDistanceAttr);
   bool VecPrepareResults(NdbRecAttr** userAttrs, Uint32 n_userAttrs);
   bool VecFetchNextResult();
+  Uint32 ProperBatchSize() {
+    /*
+     * VS Related
+     * TODO (Zhao)
+     */
+    if (vec_result_ != nullptr) {
+      return vec_top_n_;
+    } else {
+      // Normal pushdown aggregation,
+      // Not in the vector search mode
+      return 1;
+    }
+  }
 
  private:
   bool TypeSupported(NdbDictionary::Column::Type type);

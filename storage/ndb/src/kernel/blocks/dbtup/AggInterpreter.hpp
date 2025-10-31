@@ -31,6 +31,7 @@
 #include "NdbAggregationCommon.hpp"
 
 #include <simsimd/simsimd.h>
+#include <queue>
 
 /*
  * PA related
@@ -61,9 +62,10 @@ class AggInterpreter {
     vec_metric_(0), vec_col_idx_(0), vec_top_n_(0),
     vec_size_in_bytes_(0), vec_buf_(nullptr),
     vec_buf_pos_(0), vec_start_pos_(0),
-    vec_closest_(std::numeric_limits<double>::max()),
-    vec_candidate_buf_(nullptr),
-    vec_candidate_buf_len_(0) {
+    curr_distance_(std::numeric_limits<double>::max()),
+    vec_n_candidates_sent_(0),
+    vec_size_candidates_sent_(0),
+    next_send_idx_(-1) {
 #ifdef PA_MALLOC
       // TODO (Zhao)
       // VS related
@@ -86,7 +88,6 @@ class AggInterpreter {
       alloc_len_ = 0;
 #endif // PA_MALLOC
       vec_buf_ = new Uint32[g_vec_buf_len_];
-      vec_candidate_buf_ = new Uint32[g_vec_buf_len_];
   }
   ~AggInterpreter() {
 #ifdef PA_MALLOC
@@ -114,7 +115,11 @@ class AggInterpreter {
     }
 #endif // PA_MALLOC
     delete[] vec_buf_;
-    delete[] vec_candidate_buf_;
+    while (!vec_top_n_results_.empty()) {
+      Candidate* ptr = vec_top_n_results_.top();
+      vec_top_n_results_.pop();
+      delete ptr;
+    }
   }
 
   bool Init();
@@ -148,6 +153,8 @@ class AggInterpreter {
   }
   void CopyVecCandidateFromSignal(Signal* signal, Uint32 ToutBufIndex);
   Uint32 CopyVecCandidateToSignal(Signal* signal);
+  void PrepareVecCandidates();
+  Uint32 CopyOneVecCandidateToSignal(Signal* signal);
   void PrepareVecSearchResultInfo(Uint32* batch_size_rows, Uint32* batch_size_bytes);
 
  private:
@@ -205,9 +212,36 @@ class AggInterpreter {
   Uint32* vec_buf_;
   Uint32 vec_buf_pos_;
   Uint32 vec_start_pos_;
-  double vec_closest_;
-  Uint32* vec_candidate_buf_;
-  Uint32 vec_candidate_buf_len_;
   static Uint32 g_vec_buf_len_;
+
+  class Candidate {
+   public:
+    Candidate(double distance, Uint32* curr_tuple, Uint32 curr_tuple_len) :
+      distance_(distance),
+      buf_(nullptr), buf_len_(curr_tuple_len) {
+      buf_ = new Uint32[buf_len_];
+      memcpy(buf_, curr_tuple, buf_len_ * sizeof(Uint32));
+    }
+    ~Candidate() {
+      delete[] buf_;
+    }
+    double distance_;
+    Uint32* buf_;
+    Uint32 buf_len_;
+  };
+  struct ByDistance {
+    bool operator()(const Candidate* lhs, const Candidate* rhs) {
+      return lhs->distance_ < rhs->distance_ ? true : false;
+    }
+  };
+
+  double curr_distance_;
+  Uint32 vec_n_candidates_sent_;
+  Uint32 vec_size_candidates_sent_;
+  std::priority_queue<Candidate*,
+    std::vector<Candidate*>,
+    ByDistance> vec_top_n_results_;
+  Int32 next_send_idx_;
+  std::vector<Candidate*> vec_top_n_results_final_;
 };
 #endif  // AGGINTERPRETER_H_

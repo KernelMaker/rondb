@@ -66,7 +66,7 @@ Uint32 AggInterpreter::g_vec_buf_len_ = 2048; /* float */
  * to trace AggInterpreter on partition DEBUG_VS_INTERP_PART_ID
  */
 #undef DEBUG_VS_INTERP
-// #define DEBUG_VS_INTERP 1
+#define DEBUG_VS_INTERP 1
 #define DEBUG_VS_INTERP_PART_ID 0
 #ifdef DEBUG_VS_INTERP
 #define VS_INTERP_TRACE(part_id, format, ...) \
@@ -729,10 +729,9 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     // fprintf(stdout, "current: %f, %f, %f, %f, %f\n", current[0], current[1], current[2], current[3], current[4]);
     simsimd_l2sq_f32(current, target, vec_dims_, &distance);
     // simsimd_l2sq_f32_serial(current, target, vec_dims_, &distance);
-    VS_INTERP_TRACE(frag_id_, "distance: %lf, vec_closest: %lf\n", distance, vec_closest_);
-    if (distance < vec_closest_) {
-      VS_INTERP_TRACE(frag_id_, "update distance to %lf\n", distance);
-      vec_closest_ = distance;
+    curr_distance_ = distance;
+    if (vec_top_n_results_.size() < vec_top_n_ ||
+        distance < vec_top_n_results_.top()->distance_) {
       *vec_update_candidate = true;
     }
 
@@ -1826,61 +1825,85 @@ void AggInterpreter::Destruct(AggInterpreter* ptr) {
 #endif // PA_MALLOC
 void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                                                 Uint32 ToutBufIndex) {
-  memcpy(vec_candidate_buf_, (void*)(&signal->theData[25]),
-                             ToutBufIndex * sizeof(Uint32));
-  vec_candidate_buf_len_ = ToutBufIndex;
-  VS_INTERP_TRACE(frag_id_, "CopyFromSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
-                  (vec_candidate_buf_[0]), (vec_candidate_buf_[1]));
+  Candidate* selected = new Candidate(curr_distance_, &(signal->theData[25]),
+                                      ToutBufIndex);
+  VS_INTERP_TRACE(frag_id_, "Push one candidate with distance %lf, [%lu/%u]",
+                  curr_distance_, vec_top_n_results_.size(), vec_top_n_);
+  if (vec_top_n_results_.size() == vec_top_n_) {
+    Candidate* knockout = vec_top_n_results_.top();
+    VS_INTERP_TRACE(frag_id_, "Kick out a candidate with distance %lf", knockout->distance_);
+    vec_top_n_results_.pop();
+    delete knockout;
+  }
+  vec_top_n_results_.push(selected);
 }
 
-Uint32 AggInterpreter::CopyVecCandidateToSignal(Signal* signal) {
+void AggInterpreter::PrepareVecCandidates() {
+  vec_top_n_results_final_.clear();
+  while (!vec_top_n_results_.empty()) {
+    vec_top_n_results_final_.push_back(vec_top_n_results_.top());
+    vec_top_n_results_.pop();
+  }
+  next_send_idx_ = vec_top_n_results_final_.size() - 1;
+}
 
-  if (vec_candidate_buf_len_ > 3) {
-    // Fast path
-    AttributeHeader header = *(AttributeHeader*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 3);
-    if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE &&
-        *(double*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 2) == 721.721) {
-      /* Fill in the vec_closes_ to the reserved area which contains the magic word 721.721*/
-      *(double*)(vec_candidate_buf_ + vec_candidate_buf_len_ - 2) = vec_closest_;
-    }
-  } else {
-    Uint32 pos = 0;
-    while (pos < vec_candidate_buf_len_) {
-      AttributeHeader header = *(AttributeHeader*)(vec_candidate_buf_ + pos);
-      if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
-#ifdef DEBUG_VS_INTERP
-        double value = *(double*)(vec_candidate_buf_ + pos + 1);
-        VS_INTERP_TRACE(frag_id_, "CopyToSignal, attributeId: %d, value: %lf",
-                        header.getAttributeId(), value);
-#endif  // DEBUG_VS_INTERP
-        *(double*)(vec_candidate_buf_ + pos + 1) = vec_closest_;
+Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
+  if (next_send_idx_ >= 0) {
+    Candidate* next_send = vec_top_n_results_final_[next_send_idx_];
+    if (next_send->buf_len_ > 3) {
+      // Fast path
+      AttributeHeader header = *(AttributeHeader*)(next_send->buf_ + next_send->buf_len_ - 3);
+      if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE &&
+          *(double*)(next_send->buf_ + next_send->buf_len_ - 2) == 721.721) {
+        /* Fill in the vec_closes_ to the reserved area which contains the magic word 721.721*/
+        *(double*)(next_send->buf_ + next_send->buf_len_ - 2) = next_send->distance_;
       }
-      pos += header.getDataSize() + 1;
+    } else {
+      // TODO (Zhao)
+      // It doesn’t seem to work with index scans, since in an index scan
+      // there is an NdbRecord (READ_PACKED) packet at the beginning of the result.
+      Uint32 pos = 0;
+      while (pos < next_send->buf_len_) {
+        AttributeHeader header = *(AttributeHeader*)(next_send->buf_ + pos);
+        if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
+#ifdef DEBUG_VS_INTERP
+          double value = *(double*)(next_send->buf_ + pos + 1);
+          VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending, attributeId: %d, value: %lf",
+                          header.getAttributeId(), value);
+#endif  // DEBUG_VS_INTERP
+          *(double*)(next_send->buf_ + pos + 1) = next_send->distance_;
+        }
+        pos += header.getDataSize() + 1;
+      }
     }
-  }
-	/*
-	 * VS related
-	 * vec_candidate_buf_len_ could be 0 when performing a vector search
-	 * with a filter and all rows are filtered out by the conditions.
-	 * In this case, the function simply returns 0, and the caller
-	 * will handle it appropriately.
-	 */
-  if (vec_candidate_buf_len_ != 0) {
-    memcpy((void*)(&signal->theData[25]), vec_candidate_buf_,
-        vec_candidate_buf_len_ * sizeof(Uint32));
-    VS_INTERP_TRACE(frag_id_, "CopyToSignal: %u, pk: %d %d\n", vec_candidate_buf_len_,
+    Uint32 copy_len = next_send->buf_len_;
+    if (next_send != nullptr && next_send->buf_len_ != 0) {
+      memcpy((void*)(&signal->theData[25]), next_send->buf_,
+          next_send->buf_len_ * sizeof(Uint32));
+      VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending: %u, pk: %d %d", next_send->buf_len_,
         signal->theData[25], signal->theData[26]);
+      vec_n_candidates_sent_++;
+      vec_size_candidates_sent_ += next_send->buf_len_;
+    }
+
+    vec_top_n_results_final_[next_send_idx_] = nullptr;
+    next_send_idx_--;
+    delete next_send;
+    return copy_len;
+  } else {
+    return 0;
   }
-  return vec_candidate_buf_len_;
 }
+
 void AggInterpreter::PrepareVecSearchResultInfo(Uint32* batch_size_rows,
                                                 Uint32* batch_size_bytes) {
-  if (vec_candidate_buf_len_ != 0) {
-  *batch_size_rows = 1;
-  *batch_size_bytes = vec_candidate_buf_len_ * sizeof(Uint32);
-  // *batch_size_bytes += sizeof(vec_closest_);
+  if (vec_n_candidates_sent_ != 0) {
+    *batch_size_rows = vec_n_candidates_sent_;
+    *batch_size_bytes = vec_size_candidates_sent_ * sizeof(Uint32);
   } else {
     *batch_size_rows = 0;
     *batch_size_bytes = 0;
   }
+  VS_INTERP_TRACE(frag_id_, "batch_size_row: %u, batch_size_bytes: %u\n",
+                  *batch_size_rows, *batch_size_bytes);
 }
