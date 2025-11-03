@@ -223,7 +223,7 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
     APIERROR(myIndexScanOp->getNdbError());
   }
 
-  /* Filter: pk < 200 */
+  /* Filter: pk < 500 */
   Uint32 val = 500;
   NdbScanFilter filter(myIndexScanOp);
   if (filter.begin(NdbScanFilter::AND) < 0  ||
@@ -369,7 +369,7 @@ int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
     int count = 0;
     while ((check = myScanOp->nextResult(true)) == 0) {
       count++;
-      Uint16 len = *(Uint16*)(myRecAttr[2]->aRef());
+      // Uint16 len = *(Uint16*)(myRecAttr[2]->aRef());
       float* current = (float*)((char*)(myRecAttr[2]->aRef()) + 2);
       simsimd_l2sq_f32(current, vec, DIMS, &distance);
       if (vec_results.size() < VEC_TOP_N ||
@@ -433,36 +433,41 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     exit(-1);
   }
 
-  fprintf(stderr, "1. Pushdown Vector Search via TABLE Scan\n");
-  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
-  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
-  if(scan_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Query 1: success!" << std::endl  << std::endl;
-  }
+  int i = 0;
+  while (i < 10) {
+    fprintf(stderr, "1. Pushdown Vector Search via TABLE Scan\n");
+    fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+    fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+    fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
+    if(scan_vector_search(&myNdb, mysql, validation) > 0) {
+      std::cout << "Query 1: success!" << std::endl  << std::endl;
+    }
 
-  fprintf(stderr, "2. Non-pushdown Vector Search via TABLE Scan\n");
-  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
-  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
-  if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Query 2: success!" << std::endl  << std::endl;
-  }
+    fprintf(stderr, "2. Non-pushdown Vector Search via TABLE Scan\n");
+    fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+    fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+    fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
+    if(scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
+      std::cout << "Query 2: success!" << std::endl  << std::endl;
+    }
 
-  fprintf(stderr, "3. Pushdown Vector Search via Index Scan with Lower–Upper Bounds and Filter\n");
-  fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
-  fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
-  fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
-  fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
-  if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
-    std::cout << "Query 3: success!" << std::endl  << std::endl;
+    fprintf(stderr, "3. Pushdown Vector Search via Index Scan with Lower–Upper Bounds and Filter\n");
+    fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+    fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
+    fprintf(stderr, "                 ORDER BY embedding <-> '[0.5, 0.5, ...]'::vector\n");
+    fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
+    if(scan_index_vector_search(&myNdb, mysql, validation) > 0) {
+      std::cout << "Query 3: success!" << std::endl  << std::endl;
+    }
+    i++;
+    sleep(1);
   }
 
 }
 
 int main(int argc, char** argv)
 {
-  char * mysqld_sock  = argv[1];
+  // char * mysqld_sock  = argv[1];
   const char *connectstring = argv[2];
   MYSQL mysql;
 

@@ -62,6 +62,8 @@ class AggInterpreter {
     vec_metric_(0), vec_col_idx_(0), vec_top_n_(0),
     vec_size_in_bytes_(0), vec_buf_(nullptr),
     vec_buf_pos_(0), vec_start_pos_(0),
+    vec_max_rec_size_(0),
+    candidate_allocator_(nullptr),
     curr_distance_(std::numeric_limits<double>::max()),
     vec_n_candidates_sent_(0),
     vec_size_candidates_sent_(0),
@@ -115,11 +117,7 @@ class AggInterpreter {
     }
 #endif // PA_MALLOC
     delete[] vec_buf_;
-    while (!vec_top_n_results_.empty()) {
-      Candidate* ptr = vec_top_n_results_.top();
-      vec_top_n_results_.pop();
-      delete ptr;
-    }
+    delete candidate_allocator_;
   }
 
   bool Init();
@@ -151,11 +149,22 @@ class AggInterpreter {
   bool vec_search() {
     return vec_search_;
   }
+  bool HasAnyVecResult() {
+    return vec_search_ && !vec_top_n_results_.empty();
+  }
+  Uint32 NoofVecResults() {
+    return vec_top_n_results_.size();
+  }
+  bool IsCandidateBufAllocated() {
+    return candidate_allocator_ != nullptr;
+  }
   void CopyVecCandidateFromSignal(Signal* signal, Uint32 ToutBufIndex);
   Uint32 CopyVecCandidateToSignal(Signal* signal);
   void PrepareVecCandidates();
   Uint32 CopyOneVecCandidateToSignal(Signal* signal);
-  void PrepareVecSearchResultInfo(Uint32* batch_size_rows, Uint32* batch_size_bytes);
+  void PrepareVecSearchResultInfo(Uint32* batch_size_rows,
+                                  Uint32* batch_size_bytes);
+  void set_vec_max_rec_size(Uint32 size);
 
  private:
   Uint32* prog_;
@@ -216,18 +225,23 @@ class AggInterpreter {
 
   class Candidate {
    public:
-    Candidate(double distance, Uint32* curr_tuple, Uint32 curr_tuple_len) :
+    Candidate(double distance, Uint32 tuple_len, Int32 idx) :
       distance_(distance),
-      buf_(nullptr), buf_len_(curr_tuple_len) {
-      buf_ = new Uint32[buf_len_];
-      memcpy(buf_, curr_tuple, buf_len_ * sizeof(Uint32));
+      actual_buf_len_(tuple_len),
+      idx_in_allocator_(idx),
+      buf_(nullptr) {
+      buf_ = reinterpret_cast<Uint32*>(this + 1);
+    }
+    void Init(const Uint32* tuple) {
+      memcpy(buf_, tuple, actual_buf_len_ * sizeof(Uint32));
     }
     ~Candidate() {
       delete[] buf_;
     }
     double distance_;
+    Uint32 actual_buf_len_;
+    Int32 idx_in_allocator_;
     Uint32* buf_;
-    Uint32 buf_len_;
   };
   struct ByDistance {
     bool operator()(const Candidate* lhs, const Candidate* rhs) {
@@ -235,6 +249,38 @@ class AggInterpreter {
     }
   };
 
+  class CandidateAllocator {
+   public:
+     CandidateAllocator(size_t max_candidates, size_t max_buf_len, Uint32 frag_id)
+       : max_candidates_(max_candidates),
+       max_buf_len_(max_buf_len),
+       next_index_(0), reuse_started_(false), frag_id_(frag_id) {
+         total_size_ = max_candidates_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
+         pool_ = static_cast<char*>(::operator new(total_size_));
+       }
+
+     ~CandidateAllocator() {
+       ::operator delete(pool_);
+     }
+
+     Candidate* Allocate(double distance, const Uint32* tuple, Uint32 actual_buf_len);
+     void set_next_index(size_t next_index) {
+       assert(reuse_started_);
+       next_index_ = next_index;
+     }
+
+   private:
+     size_t max_candidates_;
+     size_t max_buf_len_;
+     size_t next_index_;
+     size_t total_size_;
+     bool reuse_started_;
+     Uint32 frag_id_;
+     char* pool_;
+  };
+
+  Uint32 vec_max_rec_size_; // in words
+  CandidateAllocator* candidate_allocator_;
   double curr_distance_;
   Uint32 vec_n_candidates_sent_;
   Uint32 vec_size_candidates_sent_;

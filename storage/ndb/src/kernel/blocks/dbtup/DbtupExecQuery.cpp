@@ -5238,6 +5238,24 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
         return TUPKEY_abort(req_struct, ZTRY_TO_UPDATE_ERROR);
       }
     }
+
+    // VS related
+    Uint32 vec_max_rec_size = 0;
+    Uint32* vec_max_rec_size_ptr = nullptr;
+    bool get_vec_max_rec_size = false;
+    {
+    if (req_struct->scan_rec != nullptr) {
+      Dblqh::ScanRecord* scan_rec_ptr =
+                    reinterpret_cast<Dblqh::ScanRecord*>(req_struct->scan_rec);
+        if (scan_rec_ptr->m_aggregation == true &&
+            scan_rec_ptr->m_agg_interpreter->vec_search() &&
+            !scan_rec_ptr->m_agg_interpreter->IsCandidateBufAllocated()) {
+
+          vec_max_rec_size_ptr = &vec_max_rec_size;
+          get_vec_max_rec_size = true;
+      }
+    }
+    }
     if (likely(RinitReadLen > 0)) {
       jamDebug();
 #ifdef TRACE_INTERPRETER
@@ -5252,7 +5270,8 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
                                  &cinBuffer[5 + inputParamLen],
                                  RinitReadLen,
                                  &dst[0],
-                                 dstLen);
+                                 dstLen,
+                                 vec_max_rec_size_ptr);
       // if (debug_print) {
       //   g_eventLogger->info("TnoDataRw %u, dst: %u %u\n", TnoDataRW, dst[0], dst[1]);
       // }
@@ -5300,6 +5319,15 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
       // Moz
       if (scan_rec_ptr->m_aggregation == true) {
         ndbrequire(scan_rec_ptr->m_agg_interpreter != nullptr);
+        if (get_vec_max_rec_size) {
+          /*
+           * VS related
+           * We’ve already calculated the theoretical maximum result record size.
+           * Now it’s time to pass it to m_agg_interpreter to guide it in preallocating
+           * the buffer for maintaining the top-k vector search results.
+           */
+          scan_rec_ptr->m_agg_interpreter->set_vec_max_rec_size(vec_max_rec_size);
+        }
         /*
          * update req_struct->read_length here, which will update the
          * Dblqh::ScanRecord::m_curr_batch_size_bytes later in the

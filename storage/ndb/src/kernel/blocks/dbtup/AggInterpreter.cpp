@@ -1825,17 +1825,32 @@ void AggInterpreter::Destruct(AggInterpreter* ptr) {
 #endif // PA_MALLOC
 void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                                                 Uint32 ToutBufIndex) {
-  Candidate* selected = new Candidate(curr_distance_, &(signal->theData[25]),
-                                      ToutBufIndex);
+  if (candidate_allocator_ == nullptr) {
+    VS_INTERP_TRACE(frag_id_, "CandidateAllocator pre-allocating memory, "
+                              "top_n: %u, vec_max_rec_size: %u, actual_rec_size: %u",
+                              vec_top_n_, vec_max_rec_size_, ToutBufIndex);
+    candidate_allocator_ = new CandidateAllocator(vec_top_n_, vec_max_rec_size_, frag_id_);
+  }
+  // The actual record size can't be larger than the vec_max_rec_size_
+  // TODO (Zhao)
+  // handle this error
+  assert(ToutBufIndex <= vec_max_rec_size_);
+
+  Candidate* selected = candidate_allocator_->
+      Allocate(curr_distance_, &(signal->theData[25]), ToutBufIndex);
+  vec_top_n_results_.push(selected);
   VS_INTERP_TRACE(frag_id_, "Push one candidate with distance %lf, [%lu/%u]",
                   curr_distance_, vec_top_n_results_.size(), vec_top_n_);
   if (vec_top_n_results_.size() == vec_top_n_) {
     Candidate* knockout = vec_top_n_results_.top();
-    VS_INTERP_TRACE(frag_id_, "Kick out a candidate with distance %lf", knockout->distance_);
+    VS_INTERP_TRACE(frag_id_, "Picked the candidate with distance %lf, idx: %d as the next knockout",
+        knockout->distance_,
+        knockout->idx_in_allocator_);
     vec_top_n_results_.pop();
-    delete knockout;
+    candidate_allocator_->set_next_index(knockout->idx_in_allocator_);
+    // No need to delete the knockout, it will be reused by the next picked candidate
+    // delete knockout;
   }
-  vec_top_n_results_.push(selected);
 }
 
 void AggInterpreter::PrepareVecCandidates() {
@@ -1850,20 +1865,20 @@ void AggInterpreter::PrepareVecCandidates() {
 Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
   if (next_send_idx_ >= 0) {
     Candidate* next_send = vec_top_n_results_final_[next_send_idx_];
-    if (next_send->buf_len_ > 3) {
+    if (next_send->actual_buf_len_ > 3) {
       // Fast path
-      AttributeHeader header = *(AttributeHeader*)(next_send->buf_ + next_send->buf_len_ - 3);
+      AttributeHeader header = *(AttributeHeader*)(next_send->buf_ + next_send->actual_buf_len_ - 3);
       if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE &&
-          *(double*)(next_send->buf_ + next_send->buf_len_ - 2) == 721.721) {
+          *(double*)(next_send->buf_ + next_send->actual_buf_len_ - 2) == 721.721) {
         /* Fill in the vec_closes_ to the reserved area which contains the magic word 721.721*/
-        *(double*)(next_send->buf_ + next_send->buf_len_ - 2) = next_send->distance_;
+        *(double*)(next_send->buf_ + next_send->actual_buf_len_ - 2) = next_send->distance_;
       }
     } else {
       // TODO (Zhao)
       // It doesn’t seem to work with index scans, since in an index scan
       // there is an NdbRecord (READ_PACKED) packet at the beginning of the result.
       Uint32 pos = 0;
-      while (pos < next_send->buf_len_) {
+      while (pos < next_send->actual_buf_len_) {
         AttributeHeader header = *(AttributeHeader*)(next_send->buf_ + pos);
         if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
 #ifdef DEBUG_VS_INTERP
@@ -1876,19 +1891,22 @@ Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
         pos += header.getDataSize() + 1;
       }
     }
-    Uint32 copy_len = next_send->buf_len_;
-    if (next_send != nullptr && next_send->buf_len_ != 0) {
+    Uint32 copy_len = next_send->actual_buf_len_;
+    if (next_send != nullptr && next_send->actual_buf_len_ != 0) {
       memcpy((void*)(&signal->theData[25]), next_send->buf_,
-          next_send->buf_len_ * sizeof(Uint32));
-      VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending: %u, pk: %d %d", next_send->buf_len_,
-        signal->theData[25], signal->theData[26]);
+          next_send->actual_buf_len_ * sizeof(Uint32));
+      VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending, len: %u",
+                      next_send->actual_buf_len_);
       vec_n_candidates_sent_++;
-      vec_size_candidates_sent_ += next_send->buf_len_;
+      vec_size_candidates_sent_ += next_send->actual_buf_len_;
     }
 
     vec_top_n_results_final_[next_send_idx_] = nullptr;
     next_send_idx_--;
-    delete next_send;
+    /*
+     * Don't release the memory here, the CandidateAllocator will take care of it...
+     */
+    // delete next_send;
     return copy_len;
   } else {
     return 0;
@@ -1904,6 +1922,47 @@ void AggInterpreter::PrepareVecSearchResultInfo(Uint32* batch_size_rows,
     *batch_size_rows = 0;
     *batch_size_bytes = 0;
   }
-  VS_INTERP_TRACE(frag_id_, "batch_size_row: %u, batch_size_bytes: %u\n",
-                  *batch_size_rows, *batch_size_bytes);
+  VS_INTERP_TRACE(frag_id_, "Adjust batch size for vector search, "
+                            "batch_size_row: %u, batch_size_bytes: %u\n",
+                            *batch_size_rows, *batch_size_bytes);
+}
+
+void AggInterpreter::set_vec_max_rec_size(Uint32 size) {
+	/*
+	 * vec_max_rec_size_ is only used to calculate the preallocated memory size
+	 * for candidate_allocator_, so it doesn’t make sense to set it
+	 * after candidate_allocator_ has already been initialized.
+	 */
+  if (!candidate_allocator_) {
+    // 10% bigger
+    vec_max_rec_size_ = static_cast<int>(std::ceil(size * 1.1));
+    VS_INTERP_TRACE(frag_id_, "Adjust vec_max_rec_size: %u -> %u",
+        size, vec_max_rec_size_);
+  }
+}
+
+AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(
+    double distance, const Uint32* tuple, Uint32 actual_buf_len) {
+  if (next_index_ >= max_candidates_) {
+    return nullptr;
+  }
+
+  VS_INTERP_TRACE(frag_id_, "CandidateAllocator allocate from index %lu", next_index_);
+	char* ptr = pool_ + next_index_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
+	Candidate* c = new (ptr) Candidate(distance, actual_buf_len, next_index_);
+	c->Init(tuple);
+
+  if (!reuse_started_) {
+    // next_index_ will be set via set_next_index() externally after kicking-out
+    // on max-heap starts
+    ++next_index_;
+  }
+  // All pre-allocated memory have been allocated to candidates, the kicking-out
+  // on max-heap of candidates should happen from now on.
+  if (!reuse_started_ && next_index_ == max_candidates_) {
+    VS_INTERP_TRACE(frag_id_, "CandidateAllocator reuse started");
+    next_index_ = 0;
+    reuse_started_ = true;
+  }
+	return c;
 }

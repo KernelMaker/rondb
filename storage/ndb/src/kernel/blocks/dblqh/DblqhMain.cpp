@@ -19113,9 +19113,14 @@ void Dblqh::scanTupkeyRefLab(Signal* signal,
 
   // 'time_passed' is in slices of 10ms
   const Uint32 time_passed = cLqhTimeOutCount - tcConnectptr.p->tcTimer;
+  bool can_skip_for_pushdown = scanPtr->m_aggregation &&
+           ((!scanPtr->m_agg_interpreter->vec_search() && /* Normal agg */
+             scanPtr->m_agg_n_res_recs != 0) ||
+            (scanPtr->m_agg_interpreter->vec_search() && /* vector search */
+             scanPtr->m_agg_interpreter->HasAnyVecResult()));
   if (unlikely(rows && time_passed > 1) &&
       (refToMain(scanPtr->scanApiBlockref) != DBSPJ || time_passed > 10 ) &&
-      (!scanPtr->m_aggregation || scanPtr->m_agg_n_res_recs == 0)) {
+      !can_skip_for_pushdown) {
     /* PA related
      * explains up if
      * [PA-COMMENT]
@@ -19135,6 +19140,9 @@ void Dblqh::scanTupkeyRefLab(Signal* signal,
      * scan skip this if. But I would like to introduce an extra one
      * scanPtr->m_agg_n_res_recs to achieve this,
      * which can help us trace and show more details of aggregation scan process.
+     *
+     * VS related
+     * SAME for the vector search case
      */
 
     /* -----------------------------------------------------------------------
@@ -19156,6 +19164,14 @@ void Dblqh::scanTupkeyRefLab(Signal* signal,
                      "Dblqh::scanTupkeyRefLab(), "
                      "SKIP send scanfragconf, scanPtr->m_agg_n_res_recs: %u",
                      scanPtr->m_agg_n_res_recs);
+    }
+    if (scanPtr->m_agg_interpreter &&
+        scanPtr->m_agg_interpreter->HasAnyVecResult()) {
+      PA_RONDB_TRACE(scanPtr->m_aggregation,
+                     regTcPtr->tableref, scanPtr->m_agg_interpreter->frag_id(),
+                     "Dblqh::scanTupkeyRefLab(), "
+                     "SKIP send scanfragconf, scanPtr->m_agg_interpreter has "
+                     "local vector search results");
     }
 #endif // DEBUG_PA
   }
