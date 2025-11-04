@@ -938,10 +938,11 @@ bool NdbAggregator::VectorSearch(const char* name,
   // }
 
   Int32 col_id = col->getAttrId();
-  assert((col_id & 0xFFFFFF00) == 0);
+  assert((col_id & 0xFFFF0000) == 0);
   Uint32 vec_size_in_bytes = dims * sizeof(float);
-  buffer_[5] = ((col_id & 0xFF) << 16) | (top_n & 0xFF) << 24 | (vec_size_in_bytes & 0xFFFF);
-  curr_prog_pos_ = 6;
+  buffer_[5] = ((col_id & 0xFFFF) << 16) | (top_n & 0xFFFF);
+  buffer_[6] = vec_size_in_bytes;
+  curr_prog_pos_ = 7;
   memcpy(&buffer_[curr_prog_pos_], vec, dims * sizeof(float));
   curr_prog_pos_ += dims;
   fprintf(stderr, "curr_prog_pos: %u, col_id: %d, top_n: %u, size: %u\n", curr_prog_pos_,

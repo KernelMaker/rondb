@@ -39,7 +39,17 @@ Uint32 AggInterpreter::g_buf_len_ = READ_BUF_WORD_SIZE;
 Uint32 AggInterpreter::g_result_header_size_ = 3 * sizeof(Uint32);
 Uint32 AggInterpreter::g_result_header_size_per_group_ = sizeof(Uint32);
 
-Uint32 AggInterpreter::g_vec_buf_len_ = 2048; /* float */
+/*
+ * VS related
+ * Since we allocate one page (32 KB) to accommodate the vector search
+ * program — with a maximum size of MAX_VEC_SEARCH_PROGRAM_WORD_SIZE (8192 words) —
+ * this effectively limits the maximum supported vector dimension.
+ *
+ * We also allocate a 1-page (32 KB) buffer for reading vector column values.
+ * This buffer has a capacity of 8192 words, which is slightly larger than
+ * the size of a vector with the current maximum dimension (MAX_VEC_DIMS = 8100).
+ */
+Uint32 AggInterpreter::g_vec_buf_len_ = MAX_VEC_SEARCH_PROGRAM_WORD_SIZE; /* float */
 
 /*
  * PA related
@@ -79,13 +89,44 @@ Uint32 AggInterpreter::g_vec_buf_len_ = 2048; /* float */
 #define VS_INTERP_TRACE(part_id, format, ...) {}
 #endif // DEBUG_VS_INTERP
 
-bool AggInterpreter::Init() {
+bool AggInterpreter::Init(const Uint32* prog) {
   if (inited_) {
     return true;
   }
 
-  Uint32 value = 0;
+  /* 0. Prepare the buffer and copy the program */
+#ifdef PA_MALLOC
+  // TODO (Zhao)
+  // VS related
+	assert(prog_len_ <= MAX_VEC_SEARCH_PROGRAM_WORD_SIZE);
+  if (prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE) {
+		assert(prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE);
+    /*
+		 * Use inline prog_buf_ for aggregation or
+     * small-dimension vector search queries.
+     */
+    prog_ = prog_buf_;
+  } else {
+    /* Use external buf for large-dimension vector search queries. */
+    void* page_ptr = lc_ndbd_pool_malloc(32 * 1024, RG_QUERY_MEMORY,
+        thread_id_, false);
+    if (page_ptr == nullptr) {
+      g_eventLogger->error("Alloc mem for pushdown vector search interpreter failed");
+      return false;
+    }
+    ext_prog_buf_ = static_cast<Uint32*>(page_ptr);
+    prog_ = ext_prog_buf_;
+  }
+  alloc_len_ = 0;
+#else
+  prog_ = new Uint32[prog_len];
+#endif // PA_MALLOC
+  memcpy(prog_, prog, prog_len_ * sizeof(Uint32));
+  memset(buf_, 0, READ_BUF_WORD_SIZE * sizeof(Uint32));
+  memset(decimal_buf_, 0, sizeof(Int32) * DECIMAL_BUFF_LENGTH);
 
+
+  Uint32 value = 0;
   /*
    * 1. Double check the magic num and  total length of program.
    */
@@ -131,13 +172,26 @@ bool AggInterpreter::Init() {
     vec_dims_ = value & 0xFFFF;
 
     value = prog_[cur_pos_++];
-    vec_top_n_ = (value >> 24) & 0xFF;
-    vec_col_idx_ = (value >> 16) & 0x00FF;
-    vec_size_in_bytes_ = (value & 0xFFFF);
+    vec_top_n_ = (value) & 0xFFFF;
+    vec_col_idx_ = (value >> 16) & 0xFFFF;
+    value = prog_[cur_pos_++];
+    vec_size_in_bytes_ = (value & 0xFFFFFFFF);
     // g_eventLogger->info("frag_id: %lld, type: %u, metric: %u, dims: %u, vec_col_idx: %u, vec_top_n: %u, size: %u\n",
     //     frag_id_, vec_type_, vec_metric_, vec_dims_, vec_col_idx_, vec_top_n_, vec_size_in_bytes_);
 
     vec_start_pos_ = cur_pos_;
+
+#ifdef PA_MALLOC
+    void* page_ptr = lc_ndbd_pool_malloc(32 * 1024, RG_QUERY_MEMORY,
+        thread_id_, false);
+    if (page_ptr == nullptr) {
+      g_eventLogger->error("Alloc mem for pushdown vector search interpreter failed");
+      return false;
+    }
+    vec_buf_ = static_cast<Uint32*>(page_ptr);
+#else
+    vec_buf_ = new Uint32[g_vec_buf_len_];
+#endif // PA_MALLOC
 
     inited_ = true;
     return true;
@@ -1830,6 +1884,10 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                               "top_n: %u, vec_max_rec_size: %u, actual_rec_size: %u",
                               vec_top_n_, vec_max_rec_size_, ToutBufIndex);
     candidate_allocator_ = new CandidateAllocator(vec_top_n_, vec_max_rec_size_, frag_id_);
+    bool ret = candidate_allocator_ -> Init(thread_id_);
+    // TODO (Zhao)
+    // handle ret
+    assert(ret);
   }
   // The actual record size can't be larger than the vec_max_rec_size_
   // TODO (Zhao)
@@ -1848,7 +1906,7 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
         knockout->idx_in_allocator_);
     vec_top_n_results_.pop();
     candidate_allocator_->set_next_index(knockout->idx_in_allocator_);
-    // No need to delete the knockout, it will be reused by the next picked candidate
+    // No need to delete 'knockout' — it will be reused by the next selected candidate.
     // delete knockout;
   }
 }
@@ -1904,7 +1962,7 @@ Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
     vec_top_n_results_final_[next_send_idx_] = nullptr;
     next_send_idx_--;
     /*
-     * Don't release the memory here, the CandidateAllocator will take care of it...
+     * Don’t release the memory here — CandidateAllocator will handle it.
      */
     // delete next_send;
     return copy_len;
@@ -1939,6 +1997,32 @@ void AggInterpreter::set_vec_max_rec_size(Uint32 size) {
     VS_INTERP_TRACE(frag_id_, "Adjust vec_max_rec_size: %u -> %u",
         size, vec_max_rec_size_);
   }
+}
+
+Uint32 AggInterpreter::CandidateAllocator::g_max_pool_size = 512 * 1024; /*KB*/
+
+bool AggInterpreter::CandidateAllocator::Init(Uint32 thread_id) {
+  if (init_) {
+    return true;
+  }
+  if (total_size_ > g_max_pool_size) {
+    g_eventLogger->warning("The expected vector search result size %lu is bigger than "
+                           "the maximum size %u", total_size_, g_max_pool_size);
+    return false;
+  }
+#ifdef PA_MALLOC
+  void* page_ptr = lc_ndbd_pool_malloc(total_size_, RG_QUERY_MEMORY,
+                                       thread_id, false);
+  if (page_ptr == nullptr) {
+    g_eventLogger->error("Alloc mem for pushdown vector search interpreter failed");
+    return false;
+  }
+  pool_ = static_cast<char*>(page_ptr);
+#else
+  pool_ = static_cast<char*>(::operator new(total_size_));
+#endif // PA_MALLOC
+  init_ = true;
+  return true;
 }
 
 AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(

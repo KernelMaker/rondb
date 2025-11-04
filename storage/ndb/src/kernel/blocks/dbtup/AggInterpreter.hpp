@@ -47,9 +47,11 @@ class AggInterpreter {
  public:
 #ifdef PA_MALLOC
   AggInterpreter(const Uint32* prog, Uint32 prog_len, Int64 frag_id/*,
-                 Ndbd_mem_manager* mm, void* page_addr, Uint32 page_ref*/):
+                 Ndbd_mem_manager* mm, void* page_addr, Uint32 page_ref*/,
+                 Uint32 thread_id):
 #else
-  AggInterpreter(const Uint32* prog, Uint32 prog_len, Int64 frag_id):
+  AggInterpreter(const Uint32* prog, Uint32 prog_len, Int64 frag_id,
+                 Uint32 thread_id):
 #endif // PA_MALLOC
     prog_len_(prog_len), cur_pos_(0),
     inited_(false), n_gb_cols_(0), gb_cols_(nullptr),
@@ -58,6 +60,7 @@ class AggInterpreter {
     gb_map_(nullptr), n_groups_(0),
     buf_pos_(0), processed_rows_(0),
     result_size_(0), frag_id_(frag_id)/*, pcount_(0)*/,
+    thread_id_(thread_id), alloc_len_(0),
     vec_search_(false), vec_dims_(0), vec_type_(0),
     vec_metric_(0), vec_col_idx_(0), vec_top_n_(0),
     vec_size_in_bytes_(0), vec_buf_(nullptr),
@@ -67,29 +70,7 @@ class AggInterpreter {
     curr_distance_(std::numeric_limits<double>::max()),
     vec_n_candidates_sent_(0),
     vec_size_candidates_sent_(0),
-    next_send_idx_(-1) {
-#ifdef PA_MALLOC
-      // TODO (Zhao)
-      // VS related
-      // assert(prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE);
-      assert(prog_len_ <= MAX_VEC_SEARCH_PROGRAM_WORD_SIZE);
-      prog_ = prog_buf_;
-#else
-      prog_ = new Uint32[prog_len];
-#endif // PA_MALLOC
-      memcpy(prog_, prog, prog_len * sizeof(Uint32));
-      memset(buf_, 0, READ_BUF_WORD_SIZE * sizeof(Uint32));
-      memset(decimal_buf_, 0, sizeof(Int32) * DECIMAL_BUFF_LENGTH);
-#ifdef PA_MALLOC
-      /* For using Ndbd_mem_manager*/
-      /*
-      mm_ = mm;
-      page_addr_ = page_addr;
-      page_ref_ = page_ref;
-      */
-      alloc_len_ = 0;
-#endif // PA_MALLOC
-      vec_buf_ = new Uint32[g_vec_buf_len_];
+    next_send_idx_(-1), ext_prog_buf_(nullptr) {
   }
   ~AggInterpreter() {
 #ifdef PA_MALLOC
@@ -116,11 +97,20 @@ class AggInterpreter {
       delete gb_map_;
     }
 #endif // PA_MALLOC
+
+// Vector search
+#ifdef PA_MALLOC
+    if (ext_prog_buf_) {
+      lc_ndbd_pool_free(ext_prog_buf_);
+    }
+    lc_ndbd_pool_free(vec_buf_);
+#else
     delete[] vec_buf_;
+#endif // PA_MALLOC
     delete candidate_allocator_;
   }
 
-  bool Init();
+  bool Init(const Uint32* prog);
 
   Int32 ProcessRec(Dbtup* block_tup, Dbtup::KeyReqStruct* req_struct,
                    bool* vec_update_candidate);
@@ -190,6 +180,7 @@ class AggInterpreter {
   static Uint32 g_result_header_size_per_group_;
 
   Int64 frag_id_;
+  Uint32 thread_id_;
   Int32 decimal_buf_[DECIMAL_BUFF_LENGTH];
 
 #ifdef PA_MALLOC
@@ -236,7 +227,10 @@ class AggInterpreter {
       memcpy(buf_, tuple, actual_buf_len_ * sizeof(Uint32));
     }
     ~Candidate() {
-      delete[] buf_;
+      /*
+       * No need to release buf_ — it comes from the pool_ of CandidateAllocator,
+       * which will be released automatically at the end.
+       */
     }
     double distance_;
     Uint32 actual_buf_len_;
@@ -252,16 +246,25 @@ class AggInterpreter {
   class CandidateAllocator {
    public:
      CandidateAllocator(size_t max_candidates, size_t max_buf_len, Uint32 frag_id)
-       : max_candidates_(max_candidates),
+       : init_(false), max_candidates_(max_candidates),
        max_buf_len_(max_buf_len),
        next_index_(0), reuse_started_(false), frag_id_(frag_id) {
          total_size_ = max_candidates_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
-         pool_ = static_cast<char*>(::operator new(total_size_));
        }
 
      ~CandidateAllocator() {
+#ifdef PA_MALLOC
+       if (pool_ != nullptr) {
+         lc_ndbd_pool_free(pool_);
+       }
+#else
+#endif // PA_MALLOC
        ::operator delete(pool_);
      }
+
+     bool Init(Uint32 thread_id);
+
+     static Uint32 g_max_pool_size;
 
      Candidate* Allocate(double distance, const Uint32* tuple, Uint32 actual_buf_len);
      void set_next_index(size_t next_index) {
@@ -270,6 +273,7 @@ class AggInterpreter {
      }
 
    private:
+     bool init_;
      size_t max_candidates_;
      size_t max_buf_len_;
      size_t next_index_;
@@ -289,5 +293,6 @@ class AggInterpreter {
     ByDistance> vec_top_n_results_;
   Int32 next_send_idx_;
   std::vector<Candidate*> vec_top_n_results_final_;
+  Uint32* ext_prog_buf_;
 };
 #endif  // AGGINTERPRETER_H_
