@@ -456,50 +456,33 @@ void Dbtup::SendAggResToAPI(Signal* signal, const void* lqhTcConnectrec,
   Dblqh::ScanRecord* lqhScanPtrP = (Dblqh::ScanRecord*)lqhScanRecord;
   ndbrequire(lqhScanPtrP->m_aggregation == true &&
              lqhScanPtrP->m_agg_interpreter != nullptr);
-  if (!lqhScanPtrP->m_agg_interpreter->vec_search()) {
-    Uint32 res_len = lqhScanPtrP->m_agg_interpreter->PrepareAggResIfNeeded(signal, true);
-    lqhScanPtrP->m_agg_n_res_recs = lqhScanPtrP->m_agg_interpreter->NumOfResRecords(true);
-    if (res_len != 0) {
-      ndbrequire(lqhScanPtrP->m_agg_n_res_recs == 0);
-      TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
-      transIdAI->connectPtr = lqhScanPtrP->scanApiOpPtr;
-      transIdAI->transId[0] = lqhOpPtrP->transid[0];
-      transIdAI->transId[1] = lqhOpPtrP->transid[1];
-      ndbrequire(lqhScanPtrP->m_agg_curr_batch_size_bytes == 0);
-      ndbrequire(lqhScanPtrP->m_agg_curr_batch_size_rows == 0);
-      lqhScanPtrP->m_agg_curr_batch_size_bytes = res_len * sizeof(Uint32);
-      lqhScanPtrP->m_agg_curr_batch_size_rows = 1;
-      SendAggregationResult(signal, res_len, lqhScanPtrP->scanApiBlockref);
-    }
-    PA_RONDB_TRACE(lqhScanPtrP->m_aggregation,
-        lqhOpPtrP->tableref, lqhScanPtrP->m_agg_interpreter->frag_id(),
-        "Dbtup::SendAggResToAPI(), "
-        "End-scan, send at last, res_len: %u,"
-        " trans[0]: %u, trans[2]: %u, connectPtr: %u, blockref: %u"
-        ", size_rows[%u, %u], size_bytes: [%u, %u], n_res_recs: %u\n",
-        res_len,
-        lqhOpPtrP->transid[0], lqhOpPtrP->transid[1],
-        lqhScanPtrP->scanApiOpPtr, lqhScanPtrP->scanApiBlockref,
-        lqhScanPtrP->m_agg_curr_batch_size_rows,
-        lqhScanPtrP->m_curr_batch_size_rows,
-        lqhScanPtrP->m_agg_curr_batch_size_bytes,
-        lqhScanPtrP->m_curr_batch_size_bytes,
-        lqhScanPtrP->m_agg_n_res_recs);
-  } else {
-    Uint32 res_len = 0;
-    lqhScanPtrP->m_agg_interpreter->PrepareVecCandidates();
-    while (true) {
-      res_len = lqhScanPtrP->m_agg_interpreter->CopyOneVecCandidateToSignal(signal);
-      if (res_len != 0) {
-        TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
-        transIdAI->connectPtr = lqhScanPtrP->scanApiOpPtr;
-        transIdAI->transId[0] = lqhOpPtrP->transid[0];
-        transIdAI->transId[1] = lqhOpPtrP->transid[1];
-        SendAggregationResult(signal, res_len, lqhScanPtrP->scanApiBlockref);
-      } else {
-        // All results have been copied and sent
-        break;
-      }
-    }
+  ndbrequire(!lqhScanPtrP->m_agg_interpreter->vec_search());
+  Uint32 res_len = lqhScanPtrP->m_agg_interpreter->PrepareAggResIfNeeded(signal, true);
+  lqhScanPtrP->m_agg_n_res_recs = lqhScanPtrP->m_agg_interpreter->NumOfResRecords(true);
+  if (res_len != 0) {
+    ndbrequire(lqhScanPtrP->m_agg_n_res_recs == 0);
+    TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
+    transIdAI->connectPtr = lqhScanPtrP->scanApiOpPtr;
+    transIdAI->transId[0] = lqhOpPtrP->transid[0];
+    transIdAI->transId[1] = lqhOpPtrP->transid[1];
+    ndbrequire(lqhScanPtrP->m_agg_curr_batch_size_bytes == 0);
+    ndbrequire(lqhScanPtrP->m_agg_curr_batch_size_rows == 0);
+    lqhScanPtrP->m_agg_curr_batch_size_bytes = res_len * sizeof(Uint32);
+    lqhScanPtrP->m_agg_curr_batch_size_rows = 1;
+    SendAggregationResult(signal, res_len, lqhScanPtrP->scanApiBlockref);
   }
+  PA_RONDB_TRACE(lqhScanPtrP->m_aggregation,
+      lqhOpPtrP->tableref, lqhScanPtrP->m_agg_interpreter->frag_id(),
+      "Dbtup::SendAggResToAPI(), "
+      "End-scan, send at last, res_len: %u,"
+      " trans[0]: %u, trans[2]: %u, connectPtr: %u, blockref: %u"
+      ", size_rows[%u, %u], size_bytes: [%u, %u], n_res_recs: %u\n",
+      res_len,
+      lqhOpPtrP->transid[0], lqhOpPtrP->transid[1],
+      lqhScanPtrP->scanApiOpPtr, lqhScanPtrP->scanApiBlockref,
+      lqhScanPtrP->m_agg_curr_batch_size_rows,
+      lqhScanPtrP->m_curr_batch_size_rows,
+      lqhScanPtrP->m_agg_curr_batch_size_bytes,
+      lqhScanPtrP->m_curr_batch_size_bytes,
+      lqhScanPtrP->m_agg_n_res_recs);
 }

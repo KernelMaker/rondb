@@ -60,7 +60,8 @@ NdbAggregator::NdbAggregator(const NdbDictionary::Table* table) :
   disk_columns_(false),
   vec_top_n_(0), vec_result_(nullptr),
   userAttrs_(nullptr), n_userAttrs_(0),
-  results_prepared_(false), results_left_(0) {
+  results_prepared_(false), results_left_(0),
+  type_(kAggregation) {
     if (table != nullptr) {
       table_impl_ = & NdbTableImpl::getImpl(*table);
     }
@@ -945,8 +946,8 @@ bool NdbAggregator::VectorSearch(const char* name,
   curr_prog_pos_ = 7;
   memcpy(&buffer_[curr_prog_pos_], vec, dims * sizeof(float));
   curr_prog_pos_ += dims;
-  fprintf(stderr, "curr_prog_pos: %u, col_id: %d, top_n: %u, size: %u\n", curr_prog_pos_,
-      col_id, top_n, vec_size_in_bytes);
+  // fprintf(stderr, "curr_prog_pos: %u, col_id: %d, top_n: %u, size: %u\n", curr_prog_pos_,
+  //     col_id, top_n, vec_size_in_bytes);
 
   buffer_[0] = (0x0721) << 16 | curr_prog_pos_;
 
@@ -968,16 +969,17 @@ bool NdbAggregator::VectorSearch(const char* name,
   vec_result_ = new std::priority_queue<VectorSearchResult*,
     std::vector<VectorSearchResult*>,
     ByDistance>;
+  type_ = kVectorSearch;
   finalized_ = true;
   return true;
 }
 
 bool NdbAggregator::VecProcessRes(NdbRecAttr** userAttrs, Uint32 n_userAttrs,
                                   NdbRecAttr* vecDistanceAttr) {
-  fprintf(stderr, "  Receive a result from 1 fragment, "
-          "pk: %d, distance: %lf, n_userAttrs: %u\n",
-      (userAttrs[0])->int32_value(), vecDistanceAttr->double_value(),
-      n_userAttrs);
+  // fprintf(stderr, "  Receive a result from 1 fragment, "
+  //         "pk: %d, distance: %lf, n_userAttrs: %u\n",
+  //     (userAttrs[0])->int32_value(), vecDistanceAttr->double_value(),
+  //     n_userAttrs);
 
   VectorSearchResult* result = new VectorSearchResult(
                                    vecDistanceAttr->double_value(),

@@ -76,17 +76,19 @@ Uint32 AggInterpreter::g_vec_buf_len_ = MAX_VEC_SEARCH_PROGRAM_WORD_SIZE; /* flo
  * to trace AggInterpreter on partition DEBUG_VS_INTERP_PART_ID
  */
 #undef DEBUG_VS_INTERP
-#define DEBUG_VS_INTERP 1
+// #define DEBUG_VS_INTERP 1
+#define DEBUG_VS_INTERP_TABLE_ID 17
 #define DEBUG_VS_INTERP_PART_ID 0
 #ifdef DEBUG_VS_INTERP
-#define VS_INTERP_TRACE(part_id, format, ...) \
+#define VS_INTERP_TRACE(table_id, part_id, format, ...) \
   do {\
-    if ((part_id == DEBUG_VS_INTERP_PART_ID)) {\
+    if ((table_id == DEBUG_VS_INTERP_TABLE_ID) && \
+        (part_id == DEBUG_VS_INTERP_PART_ID)) {\
       g_eventLogger->info("[VS_INTERP_TRACE] " format, ##__VA_ARGS__); \
     }\
   } while (0)
 #else
-#define VS_INTERP_TRACE(part_id, format, ...) {}
+#define VS_INTERP_TRACE(table_id, part_id, format, ...) {}
 #endif // DEBUG_VS_INTERP
 
 bool AggInterpreter::Init(const Uint32* prog) {
@@ -710,7 +712,7 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     const Uint32 primary_key = AttributeDescriptor::getPrimaryKey(TattrDesc1);
     const Uint32 dynamic = AttributeDescriptor::getDynamic(TattrDesc1);
     const Uint32 disk_based = AttributeDescriptor::getDiskBased(TattrDesc1);
-    VS_INTERP_TRACE(frag_id_,
+    VS_INTERP_TRACE(table_id_, frag_id_,
          "AttributeDescriptor, attributeId: %u, type_id: %u, size: %u, "
          "size_in_bytes: %u, size_in_words: %u, array_type: %u, "
          "array_size: %u, nullable: %u, distri_key: %u, primary_key: %u "
@@ -1880,10 +1882,12 @@ void AggInterpreter::Destruct(AggInterpreter* ptr) {
 void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                                                 Uint32 ToutBufIndex) {
   if (candidate_allocator_ == nullptr) {
-    VS_INTERP_TRACE(frag_id_, "CandidateAllocator pre-allocating memory, "
-                              "top_n: %u, vec_max_rec_size: %u, actual_rec_size: %u",
-                              vec_top_n_, vec_max_rec_size_, ToutBufIndex);
-    candidate_allocator_ = new CandidateAllocator(vec_top_n_, vec_max_rec_size_, frag_id_);
+    VS_INTERP_TRACE(table_id_, frag_id_,
+                    "CandidateAllocator pre-allocating memory, "
+                    "top_n: %u, vec_max_rec_size: %u, actual_rec_size: %u",
+                    vec_top_n_, vec_max_rec_size_, ToutBufIndex);
+    candidate_allocator_ = new CandidateAllocator(vec_top_n_, vec_max_rec_size_,
+        table_id_, frag_id_);
     bool ret = candidate_allocator_ -> Init(thread_id_);
     // TODO (Zhao)
     // handle ret
@@ -1894,14 +1898,10 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
   // handle this error
   assert(ToutBufIndex <= vec_max_rec_size_);
 
-  Candidate* selected = candidate_allocator_->
-      Allocate(curr_distance_, &(signal->theData[25]), ToutBufIndex);
-  vec_top_n_results_.push(selected);
-  VS_INTERP_TRACE(frag_id_, "Push one candidate with distance %lf, [%lu/%u]",
-                  curr_distance_, vec_top_n_results_.size(), vec_top_n_);
-  if (vec_top_n_results_.size() == vec_top_n_) {
+  if (vec_top_n_results_.size() >= vec_top_n_) {
     Candidate* knockout = vec_top_n_results_.top();
-    VS_INTERP_TRACE(frag_id_, "Picked the candidate with distance %lf, idx: %d as the next knockout",
+    VS_INTERP_TRACE(table_id_, frag_id_,
+                    "Picked the candidate with distance %lf, idx: %d as the next knockout",
         knockout->distance_,
         knockout->idx_in_allocator_);
     vec_top_n_results_.pop();
@@ -1909,6 +1909,14 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
     // No need to delete 'knockout' — it will be reused by the next selected candidate.
     // delete knockout;
   }
+
+  Candidate* selected = candidate_allocator_->
+      Allocate(curr_distance_, &(signal->theData[25]), ToutBufIndex);
+  vec_top_n_results_.push(selected);
+  VS_INTERP_TRACE(table_id_, frag_id_,
+                  "Push one candidate with distance %lf, [%lu/%u], idx_in_allocator: %u",
+                  curr_distance_, vec_top_n_results_.size(), vec_top_n_,
+                  selected->idx_in_allocator_);
 }
 
 void AggInterpreter::PrepareVecCandidates() {
@@ -1918,6 +1926,9 @@ void AggInterpreter::PrepareVecCandidates() {
     vec_top_n_results_.pop();
   }
   next_send_idx_ = vec_top_n_results_final_.size() - 1;
+  VS_INTERP_TRACE(table_id_, frag_id_,
+                  "PrepareVecCandidates %lu",
+                  vec_top_n_results_final_.size());
 }
 
 Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
@@ -1941,7 +1952,8 @@ Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
         if (header.getAttributeId() == AttributeHeader::VEC_DISTANCE) {
 #ifdef DEBUG_VS_INTERP
           double value = *(double*)(next_send->buf_ + pos + 1);
-          VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending, attributeId: %d, value: %lf",
+          VS_INTERP_TRACE(table_id_, frag_id_,
+                          "CopyOneToSignalForSending, attributeId: %d, value: %lf",
                           header.getAttributeId(), value);
 #endif  // DEBUG_VS_INTERP
           *(double*)(next_send->buf_ + pos + 1) = next_send->distance_;
@@ -1953,8 +1965,9 @@ Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
     if (next_send != nullptr && next_send->actual_buf_len_ != 0) {
       memcpy((void*)(&signal->theData[25]), next_send->buf_,
           next_send->actual_buf_len_ * sizeof(Uint32));
-      VS_INTERP_TRACE(frag_id_, "CopyOneToSignalForSending, len: %u",
-                      next_send->actual_buf_len_);
+      VS_INTERP_TRACE(table_id_, frag_id_,
+                      "CopyOneToSignalForSending, len: %u, idx: %d",
+                      next_send->actual_buf_len_, next_send_idx_);
       vec_n_candidates_sent_++;
       vec_size_candidates_sent_ += next_send->actual_buf_len_;
     }
@@ -1971,20 +1984,6 @@ Uint32 AggInterpreter::CopyOneVecCandidateToSignal(Signal* signal) {
   }
 }
 
-void AggInterpreter::PrepareVecSearchResultInfo(Uint32* batch_size_rows,
-                                                Uint32* batch_size_bytes) {
-  if (vec_n_candidates_sent_ != 0) {
-    *batch_size_rows = vec_n_candidates_sent_;
-    *batch_size_bytes = vec_size_candidates_sent_ * sizeof(Uint32);
-  } else {
-    *batch_size_rows = 0;
-    *batch_size_bytes = 0;
-  }
-  VS_INTERP_TRACE(frag_id_, "Adjust batch size for vector search, "
-                            "batch_size_row: %u, batch_size_bytes: %u\n",
-                            *batch_size_rows, *batch_size_bytes);
-}
-
 void AggInterpreter::set_vec_max_rec_size(Uint32 size) {
 	/*
 	 * vec_max_rec_size_ is only used to calculate the preallocated memory size
@@ -1994,8 +1993,8 @@ void AggInterpreter::set_vec_max_rec_size(Uint32 size) {
   if (!candidate_allocator_) {
     // 10% bigger
     vec_max_rec_size_ = static_cast<int>(std::ceil(size * 1.1));
-    VS_INTERP_TRACE(frag_id_, "Adjust vec_max_rec_size: %u -> %u",
-        size, vec_max_rec_size_);
+    VS_INTERP_TRACE(table_id_, frag_id_, "Adjust vec_max_rec_size: %u -> %u",
+                    size, vec_max_rec_size_);
   }
 }
 
@@ -2031,7 +2030,8 @@ AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(
     return nullptr;
   }
 
-  VS_INTERP_TRACE(frag_id_, "CandidateAllocator allocate from index %lu", next_index_);
+  VS_INTERP_TRACE(table_id_, frag_id_,
+                  "CandidateAllocator allocate from index %lu", next_index_);
 	char* ptr = pool_ + next_index_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
 	Candidate* c = new (ptr) Candidate(distance, actual_buf_len, next_index_);
 	c->Init(tuple);
@@ -2044,7 +2044,7 @@ AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(
   // All pre-allocated memory have been allocated to candidates, the kicking-out
   // on max-heap of candidates should happen from now on.
   if (!reuse_started_ && next_index_ == max_candidates_) {
-    VS_INTERP_TRACE(frag_id_, "CandidateAllocator reuse started");
+    VS_INTERP_TRACE(table_id_, frag_id_, "CandidateAllocator reuse started");
     next_index_ = 0;
     reuse_started_ = true;
   }

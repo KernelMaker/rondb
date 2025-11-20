@@ -315,18 +315,13 @@ class NdbAggregator {
                      NdbRecAttr* vecDistanceAttr);
   bool VecPrepareResults(NdbRecAttr** userAttrs, Uint32 n_userAttrs);
   bool VecFetchNextResult();
-  Uint32 ProperBatchSize() {
-    /*
-     * VS Related
-     * TODO (Zhao)
-     */
-    if (vec_result_ != nullptr) {
-      return vec_top_n_;
-    } else {
-      // Normal pushdown aggregation,
-      // Not in the vector search mode
-      return 1;
-    }
+
+  enum Type {
+    kAggregation = 0,
+    kVectorSearch
+  };
+  Type type() {
+    return type_;
   }
 
  private:
@@ -370,5 +365,6 @@ class NdbAggregator {
   Uint32 n_userAttrs_;
   bool results_prepared_;
   Uint32 results_left_;
+  Type type_;
 };
 #endif  // NDBAGGREGATOR_H_

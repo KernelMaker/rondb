@@ -16086,6 +16086,14 @@ Uint32 Dblqh::get_scan_api_op_ptr(Uint32 scan_api_ptr_i) {
   return apiOpPtr;
 }
 
+Dblqh::ScanRecord* Dblqh::get_scan_ptr(Uint32 scan_api_ptr_i) {
+  ScanRecordPtr scanPtr;
+  scanPtr.i = scan_api_ptr_i;
+  ndbrequire(c_scanRecordPool.getUncheckedPtrRW(scanPtr));
+  ndbrequire(Magic::check_ptr(scanPtr.p));
+  return scanPtr.p;
+}
+
 /**
  * Query threads can operate on a fragment in any of the LDM threads.
  * To enable a smooth transition of the code we will still use block
@@ -16587,6 +16595,7 @@ void Dblqh::exec_next_scan_conf(Signal *signal, bool ttl_ignore_for_ral) {
   ScanRecord *const scanPtr = scanptr.p;
   const Uint32 pageNo = nextScanConf->localKey[0];
   const Uint32 pageIdx = nextScanConf->localKey[1];
+  bool vectorScanDone = nextScanConf->vectorScanDone;
   /**
    * The local key is a row id when scanning ACC and TUP. In TUX we store
    * the physical row id and we don't need the row id for anything in an
@@ -16596,19 +16605,74 @@ void Dblqh::exec_next_scan_conf(Signal *signal, bool ttl_ignore_for_ral) {
   scanPtr->m_row_id.m_page_idx = pageIdx;
   scanPtr->m_row_id.m_page_no = pageNo;
   scanPtr->m_ttl_ignore_for_ral = ttl_ignore_for_ral;
+  /*
+   * VS related
+   * [For sending vector search result]
+   *
+   * 2. vectorScanDone indicates the normal scan is done, so
+   * mark the vec_search_scan_done_ of the interpreter to true
+   */
+  if (vectorScanDone && scanPtr->m_aggregation &&
+      scanPtr->m_agg_interpreter->vec_search() &&
+      // Just set it to 'done' once
+      !scanPtr->m_agg_interpreter->vec_search_scan_done()) {
+    scanPtr->m_agg_interpreter->set_vec_search_scan_done(true);
+    scanPtr->m_curr_batch_size_rows = 0;
+    scanPtr->m_curr_batch_size_bytes = 0;
+    scanPtr->m_agg_interpreter->PrepareVecCandidates();
+    VS_RONDB_TRACE(scanPtr, "Prepared vector candidates");
+  }
   continue_next_scan_conf(signal, scanPtr->scanState, scanPtr);
 }
 
 void Dblqh::continue_next_scan_conf(Signal *signal,
                                     ScanRecord::ScanState scanState,
                                     ScanRecord *const scanPtr) {
+  if (scanPtr && scanPtr->m_aggregation &&
+      scanPtr->m_agg_interpreter->vec_search() &&
+      scanPtr->m_agg_interpreter->vec_search_scan_done()) {
+    NextScanConf* nextScanConf = (NextScanConf *)&signal->theData[0];
+    ndbrequire(
+        /*
+         * 1. Call from Dbtup::scanReply(), 1st round scan just completed
+         */
+        (nextScanConf->vectorScanDone && nextScanConf->accOperationPtr == RNIL)
+        /*
+         * 2.Call from Dblqh::send_next_NEXT_SCANREQ(),
+         * 2nd round scan for sending result:
+         */
+         || (!nextScanConf->vectorScanDone && nextScanConf->accOperationPtr == Uint32(-1))
+         /*
+         * 3. Call from Dbtup::ScanClose():
+         */
+         || (!nextScanConf->vectorScanDone && nextScanConf->accOperationPtr == RNIL)
+        );
+    /*
+     * VS related
+     * Set accOperationPtr to -1.
+     * Check more details in Dbtup::scanReply()
+     */
+    nextScanConf->accOperationPtr = Uint32(-1);
+  }
 #ifdef VM_TRACE
   NextScanConf *const nextScanConf = (NextScanConf *)&signal->theData[0];
   if (signal->getLength() > 2 && nextScanConf->accOperationPtr != RNIL) {
     Ptr<TcConnectionrec> regTcPtr;
     regTcPtr.i = scanPtr->scanTcrec;
     ndbrequire(tcConnect_pool.getValidPtr(regTcPtr));
-    ndbassert(regTcPtr.p->fragmentid == nextScanConf->fragId);
+    ndbassert(regTcPtr.p->fragmentid == nextScanConf->fragId ||
+        /*
+         * VS related
+         * In vector search, when the first scan round completes, we set
+         * NextScanConf::fragId to RNIL (following the normal scan logic) to
+         * indicate that the scan ("first round)" is done. However, unlike a
+         * normal scan, vector search requires a second round for sending results.
+         *
+         * Because of this, the original assertion would fail — so we add an
+         * exception here specifically for vector search.
+         */
+        (scanPtr->m_aggregation && scanPtr->m_agg_interpreter->vec_search() &&
+         scanPtr->m_agg_interpreter->vec_search_scan_done()));
   }
 #endif
   switch (scanState) {
@@ -16936,6 +17000,12 @@ void Dblqh::scanLockReleasedLab(Signal* signal,
        * Seems there's no need to do something for pushdown
        * aggregation
        */
+      if (VS_NEED_PRINT(scanPtr)) {
+        if (scanPtr->m_agg_interpreter->vec_search_scan_done() &&
+            scanPtr->m_agg_interpreter->next_send_idx() < 0) {
+          g_eventLogger->info("[VS_RONDB_TRACE] Vector search closeScanLab");
+        }
+      }
       closeScanLab(signal, regTcPtr);
     } else if (scanPtr->check_scan_batch_completed() &&
                scanPtr->scanLockHold != ZTRUE) {
@@ -18528,10 +18598,24 @@ void Dblqh::nextScanConfScanLab(Signal *signal, ScanRecord *const scanPtr,
                                 Uint32 fragId, Uint32 accOpPtr,
                                 const TcConnectionrecPtr tcConnectptr) {
   TcConnectionrec *const regTcPtr = tcConnectptr.p;
-  if (likely(fragId != RNIL && accOpPtr != RNIL)) {
+  bool vec_search_sending_phase = scanPtr->m_aggregation &&
+                         scanPtr->m_agg_interpreter->vec_search() &&
+                         scanPtr->m_agg_interpreter->vec_search_scan_done();
+   /*
+    * VS related
+    * In a normal scan, the condition 'fragId != RNIL && accOpPtr != RNIL'
+    * indicates that there are still tuples left to visit.
+    *
+    * For vector search, however, we need a second scan round (the sending phase),
+    * so we cannot enter the normal scan-ending path at this point. To support this,
+    * we introduce an additional condition variable, 'vec_search_sending_phase',
+    * which allows vector search to continue into the second scan round.
+    */
+  if (likely((fragId != RNIL && accOpPtr != RNIL) || vec_search_sending_phase)) {
     jamDebug();
     check_send_scan_hb_rep(signal, scanPtr, tcConnectptr.p);
     scanPtr->scan_check_lcp_stop = 0;
+
     if (scanPtr->readCommitted) {
       set_acc_ptr_in_scan_record(scanPtr,
                                  0,
@@ -18540,6 +18624,47 @@ void Dblqh::nextScanConfScanLab(Signal *signal, ScanRecord *const scanPtr,
       set_acc_ptr_in_scan_record(scanPtr,
                                  scanPtr->m_curr_batch_size_rows,
                                  accOpPtr);
+    }
+
+    if (vec_search_sending_phase) {
+      ndbrequire(accOpPtr == (Uint32)-1);
+      /*
+       * VS related
+       *
+       * NOTICE:
+       * In a normal scan, the situation where there are no more tuples to visit
+       * is also handled in this function (inside the else branch).
+       *
+       * For vector search, this case never appears here. We always expect that
+       * there are still tuples left to process — meaning next_send_idx() should
+       * always be >= 0 before entering this function. The “no more tuples” case
+       * is handled immediately after sending the final result tuple, because
+       * TupKeyConf::lastRow is set to true when the last tuple is sent in
+       * Dblqh::nextScanConfScanLab() -> next_scanconf_tupkeyreq().
+       * This causes the next call to Dblqh::execTUPKEYCONF() to close the scan.
+       *
+       * Therefore, unlike a normal scan, this function will never be responsible
+       * for closing the scan during vector search.
+       */
+      ndbrequire(scanPtr->m_agg_interpreter->next_send_idx() >= 0);
+      if (scanPtr->m_agg_interpreter->next_send_idx() >= 0 ) {
+        /*
+         * VS related
+         * [For sending vector search result]
+         *
+         * 3. The normal scan is done but vectorScanDone is true, it means
+         * that we are running a pushdown vector search query, it's time to
+         * send the results
+         */
+        VS_RONDB_TRACE(scanPtr, "Sending vector search result");
+        regTcPtr->transactionState = TcConnectionrec::SCAN_TUPKEY;
+        next_scanconf_tupkeyreq(signal, scanPtr, regTcPtr, nullptr, tcConnectptr.i);
+      } else {
+        // Should never come here
+        VS_RONDB_TRACE(scanPtr, "Vector search closeScanLab[X]");
+        closeScanLab(signal, tcConnectptr.p);
+      }
+      return;
     }
 
     if (unlikely(signal->getLength() == NextScanConf::SignalLengthNoKeyInfo)) {
@@ -18640,7 +18765,10 @@ void Dblqh::nextScanConfScanLab(Signal *signal, ScanRecord *const scanPtr,
 
     if (fragId == RNIL && !scanPtr->scanLockHold) {
       jamDebug();
-      if (scanPtr->m_aggregation) {
+      /*
+       * Filter out the pushdown vector search case
+       */
+      if (scanPtr->m_aggregation && !scanPtr->m_agg_interpreter->vec_search()) {
         c_tup->SendAggResToAPI(signal, tcConnectptr.p, scanPtr);
       }
       closeScanLab(signal, tcConnectptr.p);
@@ -18695,9 +18823,65 @@ void
 Dblqh::next_scanconf_tupkeyreq(Signal* signal, 
 			       ScanRecord * scanPtr,
 			       TcConnectionrec * regTcPtr,
-			       Fragrecord * fragPtrP)
+			       Fragrecord * fragPtrP,
+             Uint32 ptrI)
 {
   jamDebug();
+  /*
+   * VS related
+   * [For sending vector search result]
+   * 4. Send 1 vector search result
+   */
+  if (scanPtr->m_aggregation &&
+      scanPtr->m_agg_interpreter->vec_search() &&
+      scanPtr->m_agg_interpreter->vec_search_scan_done()) {
+    ndbrequire(scanPtr->m_agg_interpreter->next_send_idx() >= 0);
+
+    Uint32 res_len = scanPtr->m_agg_interpreter->CopyOneVecCandidateToSignal(signal);
+    ndbrequire(res_len != 0);
+    TransIdAI * transIdAI=  (TransIdAI *)signal->getDataPtrSend();
+    transIdAI->connectPtr = scanPtr->scanApiOpPtr;
+    transIdAI->transId[0] = regTcPtr->transid[0];
+    transIdAI->transId[1] = regTcPtr->transid[1];
+
+    ndbassert(refToMain(scanPtr->scanApiBlockref) != 32770);
+    const Uint32 nodeId = refToNode(scanPtr->scanApiBlockref);
+
+    bool connectedToNode = getNodeInfo(nodeId).m_connected;
+    const Uint32 type = getNodeInfo(nodeId).m_type;
+    const bool is_api = (type >= NodeInfo::API && type <= NodeInfo::MGM);
+    ndbrequire(is_api);
+    ndbrequire(nodeId != getOwnNodeId());
+    ndbrequire(connectedToNode);
+
+    LinearSectionPtr ptr[3];
+    ptr[0].p = const_cast<Uint32*>(&signal->theData[25]);
+    ptr[0].sz = res_len;
+    sendSignal(scanPtr->scanApiBlockref, GSN_TRANSID_AI, signal,
+               TransIdAI::HeaderLength, JBB, ptr, 1);
+
+    TupKeyConf *tupKeyConf = (TupKeyConf *)signal->getDataPtrSend();
+
+    Uint32 RuserPointer = ptrI;
+    tupKeyConf->userPtr = RuserPointer;
+    tupKeyConf->readLength = res_len;
+    tupKeyConf->writeLength = 0;
+    tupKeyConf->numFiredTriggers = 0;
+		/*
+     * VS related
+     * next_send_idx_ can be -1 here after the last result is sent
+     * in above code, so here the lastRow could be true, then the
+     * scan process will start ending phase
+		 */
+    tupKeyConf->lastRow = scanPtr->m_agg_interpreter->next_send_idx() < 0;
+    tupKeyConf->rowid = 0;
+    tupKeyConf->noExecInstructions = 0;
+    tupKeyConf->agg_batch_size_rows = 0;
+    tupKeyConf->agg_batch_size_bytes = 0;
+    tupKeyConf->agg_n_res_recs = 0;
+    execTUPKEYCONF(signal);
+    return;
+  }
   /* No AttrInfo sent to TUP, it uses a stored procedure */
   TupKeyReq *const tupKeyReq = (TupKeyReq *)signal->getDataPtrSend();
   {
@@ -18999,6 +19183,19 @@ void Dblqh::scanTupkeyConfLab(Signal* signal,
       sendScanFragConf(signal, ZFALSE, regTcPtr);
       return;
     } else {
+      /*
+       * VS related
+       * NOTICE:
+       * This is the expected place where the fragment closes
+       * the scan during vector search.
+       *
+       * Check the comment in Dblqh::nextScanConfScanLab() for
+       * more details.
+       *
+       * BTW, this is where a normal scan closes the scan if the last
+       * row of the batch happens to be the last row of the fragment.
+       * In most cases, the scan is closed in Dblqh::nextScanConfScanLab()
+       */
       jam();
       scanPtr->scanReleaseCounter = rows + 1;
       scanReleaseLocksLab(signal, regTcPtr);
@@ -20318,7 +20515,108 @@ void Dblqh::send_next_NEXT_SCANREQ(Signal* signal,
     scanPtr->scan_lastSeen = __LINE__;
     signal->m_extra_signals++;
     jamDebug();
-    block->EXECUTE_DIRECT_FN(f, signal);
+    if (scanPtr->m_aggregation &&
+        scanPtr->m_agg_interpreter->vec_search() &&
+        scanPtr->m_agg_interpreter->vec_search_scan_done()) {
+
+      NextScanConf *const conf = (NextScanConf *)signal->getDataPtrSend();
+      ndbrequire(scanptr.p = scanPtr);
+      conf->scanPtr = scanptr.i;
+      conf->vectorScanDone = false;
+      /*
+       * VS related
+       * In a normal read-committed scan, NextScanConf::accOperationPtr is
+       * always -1. Therefore, in the vector-search sending phase (the second
+       * scan round), we must also set it to -1; otherwise,
+       * get_acc_ptr_in_scan_record() will fail.
+       */
+      conf->accOperationPtr = Uint32(-1);
+      /*
+       * VS related
+       * Follow the normal scan implementation.
+       * We must set conf->fragId to RNIL to indicate that the first
+       * scan round has completed.
+       */
+      conf->fragId = RNIL; // Vector search scan is done
+      conf->localKey[0] = RNIL;
+      conf->localKey[1] = RNIL;
+      /**
+       * Running the lock code takes some extra execution time, one could
+       * have this effect the number of tuples to read in one time slot.
+       * We decided to ignore this here.
+       */
+      signal->setLength(NextScanConf::SignalLengthNoGCI);
+
+      /*
+       * VS related
+       * There are at least two places where a scan can be actively closed on the
+       * data node via Dblqh::closeScanLab():
+       *
+       * 1. Normal case:
+       *    Dbtup::ScanNext() detects that there are no more entries and sets
+       *    scanOp::Last. Then in Dblqh::nextScanConfScanLab(), Dblqh::closeScanLab()
+       *    is called and a scanfragConf is sent with fragmentCompleted set to
+       *    ZSCAN_FRAG_CLOSED. In this case, m_in_send_next_scan stays as 1 to allow
+       *    the while-loop to finish.
+       *
+       * 2. Rare case:
+       *    The last entry of a batch also happens to be the last entry of the
+       *    fragment. In this case, Dblqh::closeScanLab() is called inside
+       *    Dblqh::scanTupkeyConfLab(), which also sends a scanfragConf with
+       *    fragmentCompleted set to ZSCAN_FRAG_CLOSED. Here as well,
+       *    m_in_send_next_scan remains 1 to finish the while-loop.
+       *
+       * For vector search, the second scan round (for sending results) follows the
+       * second closing paths. The difference is that this time the completion is
+       * determined by scanRecord::m_agg_interpreter instead of Dbtup. If the current
+       * entry is the last one to send, the scanRecord will be destroyed after
+       * continue_next_scan_conf() returns.
+       *
+       * Therefore, we must detect whether we are in the last round *before* calling
+       * continue_next_scan_conf(). This check retrieves the next value of
+       * m_in_send_next_scan before entering continue_next_scan_conf().
+       */
+      Uint32 next_value = RNIL;
+      if (scanPtr->m_agg_interpreter->next_send_idx() > 0) {
+        // The next one is not the last, keep looping after sending the next one
+        next_value = 2;
+      } else if (scanPtr->m_agg_interpreter->next_send_idx() == 0) {
+        // The next one is the last one, will finish looping after sending it
+        next_value = 1;
+      } else {
+        /*
+         * No results were generated in the first scan, so keep it as 1 to finish the loop.
+         * However, it seems this path is never reached in that case, it will go to
+         * the else if statement below.
+         * So adding a temporary assertion for further verification.
+         */
+        next_value = 1;
+        ndbrequire(0);
+      }
+      continue_next_scan_conf(signal, scanPtr->scanState, scanPtr);
+      if (next_value == 2) {
+        ndbrequire(m_in_send_next_scan == 2 ||
+            /*
+             * Case:
+             * Restore from realtime break, via
+             * Dblqh::execACC_CHECK_SCAN ->
+             * Dbtup::execNEXT_SCANREQ ->
+             * Dblqh::scanNextLoopLab
+             * path, m_in_send_next_scan was 0 there and set to 1 above
+             */
+            m_in_send_next_scan == 1);
+      } else {
+        ndbrequire(next_value == 1);
+        m_in_send_next_scan = 1;
+      }
+    } else if (scanPtr->m_aggregation &&
+          scanPtr->m_agg_interpreter->vec_search() &&
+          scanPtr->m_agg_interpreter->vec_search_scan_done() &&
+          scanPtr->m_agg_interpreter->next_send_idx() < 0) {
+      VS_RONDB_TRACE(scanPtr, "Send vector search result completed");
+    } else {
+      block->EXECUTE_DIRECT_FN(f, signal);
+    }
     if (m_in_send_next_scan == 1) {
       /**
        * No more calls to perform
@@ -20355,25 +20653,17 @@ void Dblqh::sendScanFragConf(Signal *signal, Uint32 scanCompleted,
       ndbrequire(regFragptr.p->fragId == scanPtr->m_agg_interpreter->frag_id());
       PA_RONDB_TRACE_2(debug_pa_print,
                        "Dblqh::sendScanFragConf(), "
-                       "sendScanFragConf, rows:[%u, %u], bytes: [%u, %u], n_res_recs: %u",
+                       "sendScanFragConf, rows:[%u, %u], bytes: [%u, %u], n_res_recs: %u, "
+                       "scanCompleted: %u",
                        scanPtr->m_agg_curr_batch_size_rows,
                        scanPtr->m_curr_batch_size_rows,
                        scanPtr->m_agg_curr_batch_size_bytes,
                        scanPtr->m_curr_batch_size_bytes,
-                       scanPtr->m_agg_n_res_recs);
+                       scanPtr->m_agg_n_res_recs,
+                       scanCompleted);
     }
   }
 #endif // DEBUG_PA
-  // In VS mode, we need to adjust m_curr_batch_size_rows, m_curr_batch_size_bytes here
-  if (scanPtr->m_agg_interpreter && scanPtr->m_agg_interpreter->vec_search()) {
-    Uint32 batch_size_rows = 0;
-    Uint32 batch_size_bytes = 0;
-    scanPtr->m_agg_interpreter->PrepareVecSearchResultInfo(&batch_size_rows,
-                                                           &batch_size_bytes);
-    scanPtr->m_curr_batch_size_rows = batch_size_rows;
-    scanPtr->m_curr_batch_size_bytes = batch_size_bytes;
-    scanPtr->m_agg_n_res_recs = 0;
-  }
   /*
    * PA related
    * In pushdown aggregation mode, before we send
@@ -20431,7 +20721,21 @@ void Dblqh::sendScanFragConf(Signal *signal, Uint32 scanCompleted,
      */
     ndbassert(scanPtr->m_agg_curr_batch_size_bytes ||
            scanPtr->scanState == ScanRecord::WAIT_CLOSE_SCAN ||
-           scanPtr->scanState == ScanRecord::WAIT_ACC_SCAN);
+           scanPtr->scanState == ScanRecord::WAIT_ACC_SCAN ||
+           /* For vector search, check [Explaination] below */
+           (scanPtr->scanState == ScanRecord::WAIT_NEXT_SCAN &&
+            scanPtr->m_agg_interpreter->vec_search()));
+           /*
+            * [Explanation]:
+            * In vector search, we may reach this point after the first normal scan completes
+            * and `scanPtr->m_agg_interpreter->vec_search_scan_done_` is set to true. This
+            * causes `ScanRecord::check_scan_batch_completed` to start checking whether a
+            * batch has completed (which was skipped during the first scan round). If it
+            * detects that a batch is done, we end up here.
+            *
+            * However, at this moment we are still in the `ScanRecord::WAIT_NEXT_SCAN`
+            * phase, waiting to send the results back to the API.
+            */
   }
   const Uint32 completed_ops= tmp_completed_ops;
   const Uint32 total_len= tmp_total_len / sizeof(Uint32);
@@ -37405,6 +37709,49 @@ Dblqh::ScanRecord::~ScanRecord() {
   }
   m_agg_interpreter = nullptr;
 }
+
+bool
+Dblqh::ScanRecord::check_scan_batch_completed(bool debug_pa_print) const {
+  /*
+   * 'Batch' rule doesn't apply to
+   *  1. Normal pushdown aggregation
+   *  2. First round of scan in vector search
+   */
+  if (m_aggregation == true &&
+      !(m_agg_interpreter->vec_search() &&
+        m_agg_interpreter->vec_search_scan_done())) {
+    /*
+     * if m_agg_curr_batch_size_bytes != 0, means some aggregation
+     * results have been sent to API as a batch because of group hash
+     * is going to be full. so we return true here to make sure that we
+     * call sendScanFragConf to send GSN_SCAN_FRAGCONF to TC
+     */
+    if (m_agg_curr_batch_size_bytes) {
+      PA_RONDB_TRACE_2(debug_pa_print,
+          "Dblqh::ScanRecord::check_scan_batch_completed() "
+          "CHECK batch complete:true, rows[%u, %u], bytes[%u, %u], n_res_recs: %u",
+          m_agg_curr_batch_size_rows, m_curr_batch_size_rows,
+          m_agg_curr_batch_size_bytes, m_curr_batch_size_bytes,
+          m_agg_n_res_recs);
+      return true;
+    } else {
+      PA_RONDB_TRACE_2(debug_pa_print,
+          "Dblqh::ScanRecord::check_scan_batch_completed() "
+          "CHECK batch complete:false, rows[%u, %u], bytes[%u, %u], n_res_recs: %u",
+          m_agg_curr_batch_size_rows, m_curr_batch_size_rows,
+          m_agg_curr_batch_size_bytes, m_curr_batch_size_bytes,
+          m_agg_n_res_recs);
+      return false;
+    }
+  }
+  Uint32 max_rows = m_max_batch_size_rows;
+  Uint32 max_bytes = m_max_batch_size_bytes;
+
+  return m_stop_batch ||
+         (max_rows > 0 && (m_curr_batch_size_rows >= max_rows)) ||
+         (max_bytes > 0 && (m_curr_batch_size_bytes >= max_bytes));
+}
+
 
 void Dblqh::writeDbgInfoPageHeader(LogPageRecordPtr logP,
                                    LogFileRecord *logFilePtrP,

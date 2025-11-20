@@ -1011,12 +1011,14 @@ Uint32 Dbtup::copyAttrinfo(Uint32 storedProcId,
         ndbrequire(page_ptr != nullptr);
         scan_rec_ptr->m_agg_interpreter =
           new(page_ptr) AggInterpreter(&cinBuffer[proc_start], proc_len,
+                              prepare_fragptr.p->fragTableId,
                               prepare_fragptr.p->fragmentId/*,
                               &m_ctx.m_mm, page_ptr, allocPageRef*/,
                               getThreadId());
 #else
         scan_rec_ptr->m_agg_interpreter =
           new AggInterpreter(&cinBuffer[proc_start], proc_len,
+                              prepare_fragptr.p->fragTableId,
                               prepare_fragptr.p->fragmentId,
                               getThreadId());
 #endif // PA_MALLOC

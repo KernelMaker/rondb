@@ -2381,7 +2381,6 @@ int NdbScanOperation::prepareSendScan(Uint32 /*aTC_ConnectPtr*/,
                                    batch_size,
                                    batch_byte_size,
                                    def_max_batch_size);
-
   /**
    * Calculate memory req. for the NdbReceiverBuffer and its row buffer:
    *
@@ -2404,9 +2403,10 @@ int NdbScanOperation::prepareSendScan(Uint32 /*aTC_ConnectPtr*/,
   Uint32 full_rowsize =
       NdbReceiver::ndbrecord_rowsize(m_attribute_record, m_read_range_no);
 
-  if (m_aggregation_code != nullptr) {
+  if (m_aggregation_code != nullptr &&
+      m_aggregation_code->type() == NdbAggregator::kAggregation) {
     // In aggregation mode, we redefine the batch
-    batch_size = m_aggregation_code->ProperBatchSize();
+    batch_size = 1;
     batch_byte_size = DEF_AGG_RESULT_BATCH_BYTES;
     bufsize = MAX_AGG_RESULT_BATCH_BYTES;
   }

@@ -37,6 +37,8 @@ FOREACH(warning
   ENDIF()
 ENDFOREACH()
 
+add_compile_definitions(SIMSIMD_DYNAMIC_DISPATCH=1)
+
 # NdbApi examples
 ADD_EXECUTABLE(ndb_ndbapi_array_simple
   ndbapi_array_simple/ndbapi_array_simple.cpp)
@@ -97,4 +99,5 @@ FOREACH(EXAMPLE ${EXAMPLES})
   SET_TARGET_PROPERTIES(${EXAMPLE} PROPERTIES ENABLE_EXPORTS TRUE)
   TARGET_LINK_LIBRARIES(${EXAMPLE} libmysql)
   TARGET_LINK_LIBRARIES(${EXAMPLE} ndbclient_so)
+  TARGET_LINK_LIBRARIES(${EXAMPLE} simsimd::simsimd)
 ENDFOREACH()
