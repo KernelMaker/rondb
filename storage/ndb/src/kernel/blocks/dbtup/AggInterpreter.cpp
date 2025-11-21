@@ -786,8 +786,9 @@ Int32 AggInterpreter::ProcessRec(Dbtup* block_tup,
     simsimd_l2sq_f32(current, target, vec_dims_, &distance);
     // simsimd_l2sq_f32_serial(current, target, vec_dims_, &distance);
     curr_distance_ = distance;
-    if (vec_top_n_results_.size() < vec_top_n_ ||
-        distance < vec_top_n_results_.top()->distance_) {
+    if (vec_top_n_ != 0 &&
+        (vec_top_n_results_.size() < vec_top_n_ ||
+        distance < vec_top_n_results_.top()->distance_)) {
       *vec_update_candidate = true;
     }
 

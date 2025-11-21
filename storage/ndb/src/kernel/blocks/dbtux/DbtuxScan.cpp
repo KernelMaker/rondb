@@ -1041,7 +1041,14 @@ void Dbtux::continue_scan(Signal *signal, ScanOpPtr scanPtr, Frag &frag,
      * to true to help the following Dblqh::exec_next_scan_conf() to
      * distinguish it and do the actions properly
      *
+     * NOTICE:
+     * We cannot directly set accOperationPtr to -1 here because normal
+     * pushdown aggregation also goes through this path, and in that case
+     * it must remain RNIL. Instead, we handle this in the following calls:
+     *
+     *   Dblqh::exec_next_scan_conf() -> Dblqh::continue_next_scan_conf()
      */
+     // conf->accOperationPtr = Uint32(-1);
     if (scan.m_aggregation) {
       conf->vectorScanDone = true;
     }

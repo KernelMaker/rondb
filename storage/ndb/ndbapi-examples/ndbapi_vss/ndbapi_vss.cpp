@@ -97,7 +97,7 @@ struct Config {
   int iters = 1;
   bool has_seed = false;
   uint64_t seed = 0;
-  uint32_t top_n = 10;
+  int32_t top_n = 10;
 	std::string mysql_host = "127.0.0.1";
   std::string mysql_user = "root";
   std::string mysql_pwd = "";
@@ -127,7 +127,7 @@ static void parse_args(int argc, char **argv, Config &cfg) {
     } else if (starts_with(arg, "--top_n=")) {
       std::string v = arg.substr(strlen("--top_n="));
       cfg.top_n = std::stoi(v);
-      if (cfg.top_n < 1) cfg.top_n = 1;
+      if (cfg.top_n < 0) cfg.top_n = 0;
 
 		} else if (starts_with(arg, "--mysql_host=")) {
 			cfg.mysql_host = arg.substr(strlen("--mysql_host="));
@@ -293,7 +293,7 @@ static void insert_rows(MYSQL &mysql, int n = 10000, int batch_size = 1000)
     fprintf(stderr, "[loader] done\n");
 }
 
-int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
+int scan_vector_search(Ndb * myNdb, MYSQL& mysql)
 {
   const int retryMax = 10;
   NdbError  err;
@@ -379,7 +379,7 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
   return -1;
 }
 
-int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
+int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql) {
   NdbError err;
   NdbDictionary::Dictionary* myDict = myNdb->getDictionary();
   const NdbDictionary::Index *myPIndex =
@@ -472,6 +472,7 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
     fprintf(stderr, "pk: %d, val: %d\n",
             myRecAttr[0]->int32_value(),
             myRecAttr[1]->int32_value());
+    res_vs.push_back(myRecAttr[0]->int32_value());
   }
   std::chrono::duration<double, std::milli> elapsed = end - start;
   std::cout << "Time cost (index pushdown): " << elapsed.count() << " ms"
@@ -481,7 +482,7 @@ int scan_index_vector_search(Ndb *myNdb, MYSQL& mysql, bool validation) {
   return 1;
 }
 
-int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
+int table_scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql)
 {
   const int retryMax = 10;
   NdbError  err;
@@ -543,8 +544,9 @@ int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
         (float*)((char*)(myRecAttr[2]->aRef()) + 2);
 
       simsimd_l2sq_f32(current, g_target_vec, DIMS, &distance);
-      if (vec_results.size() < g_top_n ||
-          distance < vec_results.top()->distance_) {
+      if (g_top_n != 0 &&
+          (vec_results.size() < g_top_n ||
+          distance < vec_results.top()->distance_)) {
         if (vec_results.size() == g_top_n) {
           NdbAggregator::VectorSearchResult* kickout = vec_results.top();
           // fprintf(stderr, "Kickout: [%d, %lf] -> [%d, %lf]\n",
@@ -587,10 +589,152 @@ int scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql, bool validation)
     return 1;
   }
 
-  std::cout << "ERROR: scan_regular_vector_search retried " << retryMax
+  std::cout << "ERROR: table_scan_regular_vector_search retried " << retryMax
             << " times, failing." << std::endl;
   return -1;
 }
+
+int index_scan_regular_vector_search(Ndb * myNdb, MYSQL& mysql)
+{
+  const int retryMax = 10;
+  NdbError  err;
+
+  NdbDictionary::Dictionary* myDict = myNdb->getDictionary();
+  const NdbDictionary::Index *myPIndex =
+      myDict->getIndex("index_val", "vec_tbl");
+  if (myPIndex == NULL) {
+    APIERROR(myDict->getNdbError());
+  }
+
+  for (int attempt = 0; attempt < retryMax; ++attempt) {
+    NdbTransaction *myTrans = myNdb->startTransaction();
+    if (myTrans == NULL) {
+      const NdbError e = myNdb->getNdbError();
+      if (e.status == NdbError::TemporaryError) {
+        NdbSleep_MilliSleep(50);
+        continue;
+      }
+      std::cout << e.message << std::endl;
+      return -1;
+    }
+
+    NdbIndexScanOperation *myIndexScanOp =
+        myTrans->getNdbIndexScanOperation(myPIndex);
+
+    Uint32 scanFlags = NdbScanOperation::SF_OrderBy |
+                       NdbScanOperation::SF_MultiRange;
+
+    if (myIndexScanOp->readTuples(NdbOperation::LM_CommittedRead,
+                                  scanFlags) != 0) {
+      APIERROR (myTrans->getNdbError());
+    }
+
+    Uint32 low  = 10000;
+    Uint32 high = 100000;
+
+    if (myIndexScanOp->setBound("val",
+                                NdbIndexScanOperation::BoundLE,
+                                (char*)&low)) {
+      APIERROR(myTrans->getNdbError());
+    }
+    if (myIndexScanOp->setBound("val",
+                                NdbIndexScanOperation::BoundGT,
+                                (char*)&high)) {
+      APIERROR(myTrans->getNdbError());
+    }
+    if (myIndexScanOp->end_of_bound(0)) {
+      APIERROR(myIndexScanOp->getNdbError());
+    }
+
+    Uint32 val = 500;
+    NdbScanFilter filter(myIndexScanOp);
+    if (filter.begin(NdbScanFilter::AND) < 0  ||
+        filter.cmp(NdbScanFilter::COND_LT, 0, &val, sizeof(val)) < 0 ||
+        filter.end() < 0) {
+      std::cout <<  myTrans->getNdbError().message << std::endl;
+      myNdb->closeTransaction(myTrans);
+      return -1;
+    }
+
+    NdbRecAttr* myRecAttr[3];
+    myRecAttr[0] = myIndexScanOp->getValue("pk");
+    myRecAttr[1] = myIndexScanOp->getValue("val");
+    myRecAttr[2] = myIndexScanOp->getValue("vec");
+    if (myRecAttr[0] == nullptr ||
+        myRecAttr[1] == nullptr ||
+        myRecAttr[2] == nullptr) {
+      std::cout << myTrans->getNdbError().message << std::endl;
+      myNdb->closeTransaction(myTrans);
+      return -1;
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+    if (myTrans->execute(NdbTransaction::NoCommit) != 0) {
+      myNdb->closeTransaction(myTrans);
+      return -1;
+    }
+
+    std::priority_queue<NdbAggregator::VectorSearchResult*,
+                        std::vector<NdbAggregator::VectorSearchResult*>,
+                        NdbAggregator::ByDistance> vec_results;
+    int    check    = -1;
+    double distance = 0;
+
+    while ((check = myIndexScanOp->nextResult(true)) == 0) {
+      float* current =
+        (float*)((char*)(myRecAttr[2]->aRef()) + 2);
+
+      simsimd_l2sq_f32(current, g_target_vec, DIMS, &distance);
+      if (g_top_n != 0 &&
+          (vec_results.size() < g_top_n ||
+          distance < vec_results.top()->distance_)) {
+        if (vec_results.size() == g_top_n) {
+          NdbAggregator::VectorSearchResult* kickout = vec_results.top();
+          // fprintf(stderr, "Kickout: [%d, %lf] -> [%d, %lf]\n",
+          //         kickout->attrs_[0]->int32_value(), kickout->distance_,
+          //         myRecAttr[0]->int32_value(), distance);
+          vec_results.pop();
+          delete kickout;
+        }
+        NdbAggregator::VectorSearchResult* candidate =
+          new NdbAggregator::VectorSearchResult(distance, 2, myRecAttr);
+        vec_results.push(candidate);
+      }
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+
+    fprintf(stderr, "------FINAL RESULT (non-pushdown)------\n");
+    std::vector<NdbAggregator::VectorSearchResult*> vec_results_final;
+    while (!vec_results.empty()) {
+      vec_results_final.push_back(vec_results.top());
+      vec_results.pop();
+    }
+
+    res_scan.clear();
+    std::for_each(vec_results_final.rbegin(),
+                  vec_results_final.rend(),
+                  [](NdbAggregator::VectorSearchResult* candidate) {
+                    res_scan.push_back(candidate->attrs_[0]->int32_value());
+                    std::cout << "pk: " << candidate->attrs_[0]->int32_value();
+                    std::cout << ", val: "
+                              << candidate->attrs_[1]->int32_value()
+                              << std::endl;
+                    delete candidate;
+                  });
+
+    std::cout << "Time cost (Index non-pushdown): " << elapsed.count() << " ms"
+              << std::endl;
+
+    myNdb->closeTransaction(myTrans);
+    return 1;
+  }
+
+  std::cout << "ERROR: index_scan_regular_vector_search retried " << retryMax
+            << " times, failing." << std::endl;
+  return -1;
+}
+
 
 bool DoubleCheck(Ndb* myNdb, Int32 pk_1, Int32 pk_2) {
   double distance_1 = 0;
@@ -640,13 +784,8 @@ bool DoubleCheck(Ndb* myNdb, Int32 pk_1, Int32 pk_2) {
 }
 
 void ndb_run_scan(const char * connectstring, MYSQL& mysql,
-                  bool load, bool populate_data, bool validation,
                   int iters)
 {
-  (void)load;
-  (void)populate_data;
-  (void)validation;
-
   Ndb_cluster_connection cluster_connection(connectstring);
   if (cluster_connection.connect(4, 5, 1))
   {
@@ -677,7 +816,7 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     fprintf(stderr, "                 ORDER BY embedding <-> "
                     "'[target_vec]'::vector\n");
     fprintf(stderr, "                 LIMIT %u;\n", g_top_n);
-    if (scan_vector_search(&myNdb, mysql, validation) > 0) {
+    if (scan_vector_search(&myNdb, mysql) > 0) {
       std::cout << "Query 1: success!" << std::endl  << std::endl;
     }
 
@@ -686,9 +825,9 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
     fprintf(stderr, "                 ORDER BY embedding <-> "
                     "'[target_vec]'::vector\n");
     fprintf(stderr, "                 LIMIT %u;\n", g_top_n);
-    if (scan_regular_vector_search(&myNdb, mysql, validation) > 0) {
+    if (table_scan_regular_vector_search(&myNdb, mysql) > 0) {
       std::cout << "Query 2: success!" << std::endl  << std::endl;
-      std::cout << "Validating: " << std::endl;
+      std::cout << "Validating [TABLE]: " << std::endl;
       if (res_vs.size() == res_scan.size()) {
         std::cout << "Result sizes matche, both are "
                   << res_vs.size() << std::endl;
@@ -709,11 +848,48 @@ void ndb_run_scan(const char * connectstring, MYSQL& mysql,
       std::cout << "All results are identical between pushdown "
                 << "and non-pushdown vector search."
                 << std::endl;
-      std::cout << "Validation passed" << std::endl;
+      std::cout << "Validation [TABLE] passed" << std::endl;
     }
 
-    // fprintf(stderr, "3. Pushdown Vector Search via Index Scan ...\n");
-    // if (scan_index_vector_search(&myNdb, mysql, validation) > 0) { ... }
+    fprintf(stderr, "3. Pushdown Vector Search via Index Scan with Lower–Upper Bounds and Filter\n");
+    fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+    fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
+    fprintf(stderr, "                 ORDER BY embedding <-> '[target_vec]'::vector\n");
+    fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
+    if (scan_index_vector_search(&myNdb, mysql) > 0) {
+      std::cout << "Query 3 success!" << std::endl;
+    }
+
+    fprintf(stderr, "4. Non-pushdown Vector Search via Index Scan with Lower–Upper Bounds and Filter\n");
+    fprintf(stderr, "  SELECT pk, val FROM vec_tbl\n");
+    fprintf(stderr, "                 WHERE val >= 10000 AND val < 100000 AND pk < 500\n");
+    fprintf(stderr, "                 ORDER BY embedding <-> '[target]'::vector\n");
+    fprintf(stderr, "                 LIMIT %u;\n", VEC_TOP_N);
+    if (index_scan_regular_vector_search(&myNdb, mysql) > 0) {
+      std::cout << "Query 4: success!" << std::endl  << std::endl;
+      std::cout << "Validating [INDEX]: " << std::endl;
+      if (res_vs.size() == res_scan.size()) {
+        std::cout << "Result sizes matche, both are "
+                  << res_vs.size() << std::endl;
+      } else {
+        std::cout << "Results size mismatches, vs: " << res_vs.size()
+                  << ", scan: " << res_scan.size() << std::endl;
+        exit(0);
+      }
+      for (size_t j = 0; j < res_vs.size(); j++) {
+        if (res_vs[j] != res_scan[j]) {
+          if (!DoubleCheck(&myNdb, res_vs[j], res_scan[j])) {
+            std::cout << "Result mismatches: pushdown pk " << res_vs[j]
+                      << ", non-pushdown pk: " << res_scan[j] << std::endl;
+            exit(0);
+          }
+        }
+      }
+      std::cout << "All results are identical between pushdown "
+                << "and non-pushdown vector search."
+                << std::endl;
+      std::cout << "Validation [INDEX] passed" << std::endl;
+    }
 
 #ifdef _WIN32
     Sleep(1000);
@@ -779,10 +955,7 @@ int main(int argc, char** argv)
   }
 
   ndb_init();
-  bool load = cfg.do_load;
-  bool populate = false;
-  bool validation = true;
-  ndb_run_scan(connectstring, mysql, load, populate, validation, cfg.iters);
+  ndb_run_scan(connectstring, mysql, cfg.iters);
   ndb_end(0);
 
   mysql_close(&mysql);

@@ -18645,8 +18645,11 @@ void Dblqh::nextScanConfScanLab(Signal *signal, ScanRecord *const scanPtr,
        *
        * Therefore, unlike a normal scan, this function will never be responsible
        * for closing the scan during vector search.
+       *
+       * !!! Exception !!!
+       * If the original result set is empty due to filtering or an empty table,
+       * we *do* need to enter the else branch to close the scan.
        */
-      ndbrequire(scanPtr->m_agg_interpreter->next_send_idx() >= 0);
       if (scanPtr->m_agg_interpreter->next_send_idx() >= 0 ) {
         /*
          * VS related
@@ -18660,7 +18663,10 @@ void Dblqh::nextScanConfScanLab(Signal *signal, ScanRecord *const scanPtr,
         regTcPtr->transactionState = TcConnectionrec::SCAN_TUPKEY;
         next_scanconf_tupkeyreq(signal, scanPtr, regTcPtr, nullptr, tcConnectptr.i);
       } else {
-        // Should never come here
+       /*
+        * If the original result set is empty due to filtering or an empty table,
+        * we *do* need to enter the this branch to close the scan.
+        */
         VS_RONDB_TRACE(scanPtr, "Vector search closeScanLab[X]");
         closeScanLab(signal, tcConnectptr.p);
       }
@@ -20700,10 +20706,19 @@ void Dblqh::sendScanFragConf(Signal *signal, Uint32 scanCompleted,
   // Make sure that we send correct m_curr_batch_size_XXX, otherwise
   // the API cannot start to parse the TRANSID_AI message
   // In VS mode, here we should use m_curr_batch_size_rows and m_curr_batch_size_bytes
-  Uint32 tmp_completed_ops = (scanPtr->m_aggregation && !scanPtr->m_agg_interpreter->vec_search()) ?
+  /*
+   * VS related
+   * NOTICE
+	 * When performing a pushdown vector search on an empty fragment/table,
+	 * scanPtr->m_agg_interpreter may never get constructed.
+	 * Therefore, we need to check the value of m_agg_interpreter here.
+   */
+  bool is_vector_search = (scanPtr->m_aggregation && scanPtr->m_agg_interpreter != nullptr &&
+                           scanPtr->m_agg_interpreter->vec_search());
+  Uint32 tmp_completed_ops = (scanPtr->m_aggregation && !is_vector_search) ?
                                     scanPtr->m_agg_curr_batch_size_rows :
                                     scanPtr->m_curr_batch_size_rows;
-  Uint32 tmp_total_len = (scanPtr->m_aggregation && !scanPtr->m_agg_interpreter->vec_search()) ?
+  Uint32 tmp_total_len = (scanPtr->m_aggregation && !is_vector_search) ?
                                 scanPtr->m_agg_curr_batch_size_bytes :
                                 scanPtr->m_curr_batch_size_bytes;
   ndbassert((scanPtr->m_agg_curr_batch_size_bytes % sizeof(Uint32)) == 0);
