@@ -18853,12 +18853,19 @@ Dblqh::next_scanconf_tupkeyreq(Signal* signal,
     ndbassert(refToMain(scanPtr->scanApiBlockref) != 32770);
     const Uint32 nodeId = refToNode(scanPtr->scanApiBlockref);
 
-    bool connectedToNode = getNodeInfo(nodeId).m_connected;
     const Uint32 type = getNodeInfo(nodeId).m_type;
     const bool is_api = (type >= NodeInfo::API && type <= NodeInfo::MGM);
     ndbrequire(is_api);
     ndbrequire(nodeId != getOwnNodeId());
-    ndbrequire(connectedToNode);
+    /*
+     * VS related
+     * NOTICE:
+     * The connection may already be disconnected at this point,
+     * so we cannot keep this assert. It's fine to continue, though—the
+     * scan process will be closed later in Dblqh::scanTupkeyConfLab().
+     */
+    // bool connectedToNode = getNodeInfo(nodeId).m_connected;
+    // ndbrequire(connectedToNode);
 
     LinearSectionPtr ptr[3];
     ptr[0].p = const_cast<Uint32*>(&signal->theData[25]);
