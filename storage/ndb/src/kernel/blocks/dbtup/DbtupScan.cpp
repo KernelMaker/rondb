@@ -195,7 +195,7 @@
 #endif
 
 #undef DEBUG_VS_TUP_SCAN
-// #define DEBUG_VS_TUP_SCAN
+// #define DEBUG_VS_TUP_SCAN 1
 #define DEBUG_VS_TUP_SCAN_TABLE_ID 17
 #define DEBUG_VS_TUP_SCAN_PART_ID 0
 

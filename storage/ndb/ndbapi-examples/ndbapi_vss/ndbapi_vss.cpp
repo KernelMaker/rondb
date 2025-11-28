@@ -327,10 +327,13 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql)
       APIERROR (myTrans->getNdbError());
     }
 
-    NdbRecAttr* myRecAttr[2];
+    NdbRecAttr* myRecAttr[3];
     myRecAttr[0] = myScanOp->getValue("pk");
     myRecAttr[1] = myScanOp->getValue("val");
-    if (myRecAttr[0] == nullptr || myRecAttr[1] == nullptr) {
+    myRecAttr[2] = myScanOp->getValue("vec");
+    if (myRecAttr[0] == nullptr ||
+        myRecAttr[1] == nullptr ||
+        myRecAttr[2] == nullptr) {
       std::cout << myTrans->getNdbError().message << std::endl;
       myNdb->closeTransaction(myTrans);
       return -1;
@@ -349,7 +352,7 @@ int scan_vector_search(Ndb * myNdb, MYSQL& mysql)
     }
 
     auto start = std::chrono::high_resolution_clock::now();
-    if (myScanOp->DoVectorSearch(myRecAttr, 2) == -1) {
+    if (myScanOp->DoVectorSearch(myRecAttr, 3) == -1) {
       err = myTrans->getNdbError();
       std::cout << "DoVectorSearch failed: " << err.message << std::endl;
       myNdb->closeTransaction(myTrans);

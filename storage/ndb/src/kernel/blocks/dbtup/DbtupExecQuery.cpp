@@ -5380,8 +5380,12 @@ int Dbtup::interpreterStartLab(Signal *signal, KeyReqStruct *req_struct) {
         } else if (vec_update_candidate) {
           // Uint32* ptr = &signal->theData[25];
           // g_eventLogger->info("Prepare Copy: %u %u", ptr[0], ptr[1]);
-          scan_rec_ptr->m_agg_interpreter->CopyVecCandidateFromSignal(signal,
+          int ret = scan_rec_ptr->m_agg_interpreter->
+                             CopyVecCandidateFromSignal(signal,
                                               RattroutCounter);
+          if (ret != 0) {
+            return TUPKEY_abort(req_struct, ret);
+          }
         } else {
         }
         return 0;

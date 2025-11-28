@@ -1880,7 +1880,7 @@ void AggInterpreter::Destruct(AggInterpreter* ptr) {
   lc_ndbd_pool_free(ptr);
 }
 #endif // PA_MALLOC
-void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
+Int32 AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                                                 Uint32 ToutBufIndex) {
   if (candidate_allocator_ == nullptr) {
     VS_INTERP_TRACE(table_id_, frag_id_,
@@ -1889,10 +1889,10 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                     vec_top_n_, vec_max_rec_size_, ToutBufIndex);
     candidate_allocator_ = new CandidateAllocator(vec_top_n_, vec_max_rec_size_,
         table_id_, frag_id_);
-    bool ret = candidate_allocator_ -> Init(thread_id_);
-    // TODO (Zhao)
-    // handle ret
-    assert(ret);
+    int ret = candidate_allocator_ -> Init(thread_id_);
+    if (ret != 0) {
+      return ret;
+    }
   }
   // The actual record size can't be larger than the vec_max_rec_size_
   // TODO (Zhao)
@@ -1918,6 +1918,7 @@ void AggInterpreter::CopyVecCandidateFromSignal(Signal* signal,
                   "Push one candidate with distance %lf, [%lu/%u], idx_in_allocator: %u",
                   curr_distance_, vec_top_n_results_.size(), vec_top_n_,
                   selected->idx_in_allocator_);
+  return 0;
 }
 
 void AggInterpreter::PrepareVecCandidates() {
@@ -1999,30 +2000,85 @@ void AggInterpreter::set_vec_max_rec_size(Uint32 size) {
   }
 }
 
-Uint32 AggInterpreter::CandidateAllocator::g_max_pool_size = 512 * 1024; /*KB*/
+Uint32 AggInterpreter::CandidateAllocator::g_max_results_size = 100 * 1024 * 1024; /*100 MB*/
+Uint32 AggInterpreter::CandidateAllocator::g_segment_size = 1 * 1024 * 1024; /*1 MB*/
 
-bool AggInterpreter::CandidateAllocator::Init(Uint32 thread_id) {
+static inline size_t highest_power_of_two_leq(size_t x) {
+  // x > 0
+  return size_t(1) << (8 * sizeof(size_t) - 1 - __builtin_clzl(x));
+}
+
+Int32 AggInterpreter::CandidateAllocator::Init(Uint32 thread_id) {
   if (init_) {
-    return true;
+    return 0;
   }
-  if (total_size_ > g_max_pool_size) {
-    g_eventLogger->warning("The expected vector search result size %lu is bigger than "
-                           "the maximum size %u", total_size_, g_max_pool_size);
-    return false;
+
+  if (total_size_ > g_max_results_size) {
+    g_eventLogger->warning(
+        "Vector search result size %lu exceeds max pool %u",
+        total_size_, g_max_results_size);
+    return ZAGG_VS_TOO_BIG_RESULT;
   }
+
+  if (slot_size_ > g_segment_size) {
+    g_eventLogger->error(
+        "slot_size %lu > segment_size %u, cannot allocate candidates safely",
+        slot_size_, g_segment_size);
+    return ZAGG_VS_TOO_BIG_RESULT;
+  }
+
+  size_t raw = g_segment_size / slot_size_;
+  assert(raw > 0);
+  slots_per_full_segment_ = highest_power_of_two_leq(raw);
+  shift_k_ = __builtin_ctzl(slots_per_full_segment_);
+  // slots_per_full_segment_ = g_segment_size / slot_size_;
+  // assert(slots_per_full_segment_ > 0);
+
+  size_t full_segments = max_candidates_ / slots_per_full_segment_;
+  size_t last_slots = max_candidates_ % slots_per_full_segment_;
+  size_t last_size = last_slots * slot_size_;
+
+  size_t num_segments = full_segments + (last_slots > 0 ? 1 : 0);
+
+  VS_INTERP_TRACE(table_id_, frag_id_,
+      "Init CandidateAllocator: slot_size=%lu, slots_per_full_seg=%lu, "
+      "full_segments=%lu, last_slots=%lu",
+      slot_size_, slots_per_full_segment_, full_segments, last_slots);
+
+  segments_.reserve(num_segments);
+
+  for (size_t i = 0; i < full_segments; i++) {
 #ifdef PA_MALLOC
-  void* page_ptr = lc_ndbd_pool_malloc(total_size_, RG_QUERY_MEMORY,
-                                       thread_id, false);
-  if (page_ptr == nullptr) {
-    g_eventLogger->error("Alloc mem for pushdown vector search interpreter failed");
-    return false;
-  }
-  pool_ = static_cast<char*>(page_ptr);
+    void* page_ptr = lc_ndbd_pool_malloc(g_segment_size, RG_QUERY_MEMORY,
+        thread_id, false);
+    if (!page_ptr) {
+      g_eventLogger->error("Failed allocating segment %lu", i);
+      return ZAGG_ALLOC_MEM_FAILED;
+    }
+    segments_.push_back({(char*)page_ptr, g_segment_size});
 #else
-  pool_ = static_cast<char*>(::operator new(total_size_));
+    char* buf = (char*)::operator new(g_segment_size);
+    segments_.push_back({buf, g_segment_size});
 #endif // PA_MALLOC
+  }
+
+  if (last_size > 0) {
+#ifdef PA_MALLOC
+    void* page_ptr = lc_ndbd_pool_malloc(last_size, RG_QUERY_MEMORY,
+        thread_id, false);
+    if (!page_ptr) {
+      g_eventLogger->error("Failed allocating last segment");
+      return ZAGG_ALLOC_MEM_FAILED;
+    }
+    segments_.push_back({(char*)page_ptr, last_size});
+#else
+    char* buf = (char*)::operator new(last_size);
+    segments_.push_back({buf, last_size});
+#endif // PA_MALLOC
+  }
+
   init_ = true;
-  return true;
+  return 0;
 }
 
 AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(
@@ -2031,23 +2087,33 @@ AggInterpreter::Candidate* AggInterpreter::CandidateAllocator::Allocate(
     return nullptr;
   }
 
+  // size_t seg_id = next_index_ / slots_per_full_segment_;
+  // size_t slot_off = next_index_ % slots_per_full_segment_;
+	size_t seg_id   = next_index_ >> shift_k_;
+	size_t slot_off = next_index_ & (slots_per_full_segment_ - 1);
+
+  assert(seg_id < segments_.size());
+
+  char* base = segments_[seg_id].ptr;
+  char* ptr = base + slot_off * slot_size_;
+
+  assert(ptr + slot_size_ <= base + segments_[seg_id].size);
+
   VS_INTERP_TRACE(table_id_, frag_id_,
-                  "CandidateAllocator allocate from index %lu", next_index_);
-	char* ptr = pool_ + next_index_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
-	Candidate* c = new (ptr) Candidate(distance, actual_buf_len, next_index_);
-	c->Init(tuple);
+      "Alloc idx=%lu -> seg=%lu slot_off=%lu",
+      next_index_, seg_id, slot_off);
+
+  Candidate* c = new (ptr) Candidate(distance, actual_buf_len, next_index_);
+  c->Init(tuple);
 
   if (!reuse_started_) {
-    // next_index_ will be set via set_next_index() externally after kicking-out
-    // on max-heap starts
     ++next_index_;
   }
-  // All pre-allocated memory have been allocated to candidates, the kicking-out
-  // on max-heap of candidates should happen from now on.
   if (!reuse_started_ && next_index_ == max_candidates_) {
     VS_INTERP_TRACE(table_id_, frag_id_, "CandidateAllocator reuse started");
     next_index_ = 0;
     reuse_started_ = true;
   }
-	return c;
+
+  return c;
 }

@@ -100,17 +100,19 @@ class AggInterpreter {
       delete gb_map_;
     }
 #endif // PA_MALLOC
+  }
 
-// Vector search
+  void FreeMemForVectorSearch() {
 #ifdef PA_MALLOC
     if (ext_prog_buf_) {
       lc_ndbd_pool_free(ext_prog_buf_);
     }
     lc_ndbd_pool_free(vec_buf_);
 #else
-    delete[] vec_buf_;
 #endif // PA_MALLOC
-    delete candidate_allocator_;
+    if (candidate_allocator_) {
+      delete candidate_allocator_;
+    }
   }
 
   bool Init(const Uint32* prog);
@@ -154,7 +156,7 @@ class AggInterpreter {
   bool IsCandidateBufAllocated() {
     return candidate_allocator_ != nullptr;
   }
-  void CopyVecCandidateFromSignal(Signal* signal, Uint32 ToutBufIndex);
+  Int32 CopyVecCandidateFromSignal(Signal* signal, Uint32 ToutBufIndex);
   Uint32 CopyVecCandidateToSignal(Signal* signal);
   void PrepareVecCandidates();
   Uint32 CopyOneVecCandidateToSignal(Signal* signal);
@@ -264,23 +266,32 @@ class AggInterpreter {
        : init_(false), max_candidates_(max_candidates),
        max_buf_len_(max_buf_len),
        next_index_(0), reuse_started_(false),
-       table_id_(table_id), frag_id_(frag_id) {
+       table_id_(table_id), frag_id_(frag_id),
+       slots_per_full_segment_(0),
+       shift_k_(0) {
          total_size_ = max_candidates_ * (sizeof(Candidate) + max_buf_len_ * sizeof(Uint32));
+         slot_size_ = sizeof(Candidate) + max_buf_len_ * sizeof(Uint32);
        }
 
      ~CandidateAllocator() {
 #ifdef PA_MALLOC
-       if (pool_ != nullptr) {
-         lc_ndbd_pool_free(pool_);
+       for (auto& seg : segments_) {
+         g_eventLogger->info("[Zhao debug] Free %p", seg.ptr);
+         if (seg.ptr) {
+           lc_ndbd_pool_free(seg.ptr);
+         }
        }
 #else
+       for (auto& seg : segments_) {
+         ::operator delete(seg.ptr);
+       }
 #endif // PA_MALLOC
-       ::operator delete(pool_);
      }
 
-     bool Init(Uint32 thread_id);
+     Int32 Init(Uint32 thread_id);
 
-     static Uint32 g_max_pool_size;
+     static Uint32 g_max_results_size;
+     static Uint32 g_segment_size;
 
      Candidate* Allocate(double distance, const Uint32* tuple, Uint32 actual_buf_len);
      void set_next_index(size_t next_index) {
@@ -289,6 +300,10 @@ class AggInterpreter {
      }
 
    private:
+     struct Segment {
+       char* ptr;
+       size_t size;
+     };
      bool init_;
      size_t max_candidates_;
      size_t max_buf_len_;
@@ -297,7 +312,10 @@ class AggInterpreter {
      bool reuse_started_;
      Int64 table_id_;
      Int64 frag_id_;
-     char* pool_;
+     size_t slot_size_;
+     size_t slots_per_full_segment_;
+     size_t shift_k_;
+     std::vector<Segment> segments_;
   };
 
   Uint32 vec_max_rec_size_; // in words

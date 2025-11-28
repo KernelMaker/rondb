@@ -20156,6 +20156,11 @@ void Dblqh::init_release_scanrec(ScanRecord *scanPtr) {
      * (CHECKED).
      */
     ndbrequire(ptr->gb_map()->empty());
+    /*
+     * We need to free the memory allocated specifically for vector search
+     * before destroying the AggInterpreter object.
+     */
+    ptr->FreeMemForVectorSearch();
 #ifdef PA_MALLOC
     AggInterpreter::Destruct(ptr);
 #else
@@ -37723,6 +37728,11 @@ Dblqh::ScanRecord::~ScanRecord() {
 
   AggInterpreter* ptr = m_agg_interpreter;
   if (ptr != nullptr) {
+    /*
+     * We need to free the memory allocated specifically for vector search
+     * before destroying the AggInterpreter object.
+     */
+    ptr->FreeMemForVectorSearch();
 #ifdef PA_MALLOC
     AggInterpreter::Destruct(ptr);
 #else
