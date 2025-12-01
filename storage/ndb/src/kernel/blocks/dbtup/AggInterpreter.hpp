@@ -107,9 +107,15 @@ class AggInterpreter {
     if (ext_prog_buf_) {
       lc_ndbd_pool_free(ext_prog_buf_);
     }
-    lc_ndbd_pool_free(vec_buf_);
+    if (vec_buf_) {
+      lc_ndbd_pool_free(vec_buf_);
+    }
 #else
 #endif // PA_MALLOC
+    if (vec_buf_) {
+      delete[] vec_buf_;
+    }
+
     if (candidate_allocator_) {
       delete candidate_allocator_;
     }

@@ -102,7 +102,6 @@ bool AggInterpreter::Init(const Uint32* prog) {
   // VS related
 	assert(prog_len_ <= MAX_VEC_SEARCH_PROGRAM_WORD_SIZE);
   if (prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE) {
-		assert(prog_len_ <= MAX_AGG_PROGRAM_WORD_SIZE);
     /*
 		 * Use inline prog_buf_ for aggregation or
      * small-dimension vector search queries.
