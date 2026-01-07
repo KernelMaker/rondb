@@ -1878,24 +1878,25 @@ RS_Status parseScanIndex(simdjson::ondemand::document& doc,
     } else if (ordVal.error() != simdjson::SUCCESS) {
       return handle_simdjson_error(ordVal.error(), doc,
                                    currentLocation);
-    }
-    std::string_view order;
-    if (ordVal.get(order) != simdjson::SUCCESS) {
-      return CRS_Status(static_cast<HTTP_CODE>(
-            drogon::HttpStatusCode::k400BadRequest),
-          ERROR_SCAN_INDEX_ORDER_INVALID,
-          std::string(rdrsErrorMessage(ERROR_SCAN_INDEX_ORDER_INVALID))).status;
-    }
-    std::string order_string = std::string(order);
-    if (order_string == "asc") {
-      index.order = IndexScanParams::Order::ASC;
-    } else if (order_string == "desc") {
-      index.order = IndexScanParams::Order::DESC;
     } else {
-      return CRS_Status(static_cast<HTTP_CODE>(
-            drogon::HttpStatusCode::k400BadRequest),
-          ERROR_SCAN_INDEX_ORDER_INVALID,
-          std::string(rdrsErrorMessage(ERROR_SCAN_INDEX_ORDER_INVALID))).status;
+      std::string_view order;
+      if (ordVal.get(order) != simdjson::SUCCESS) {
+        return CRS_Status(static_cast<HTTP_CODE>(
+              drogon::HttpStatusCode::k400BadRequest),
+            ERROR_SCAN_INDEX_ORDER_INVALID,
+            std::string(rdrsErrorMessage(ERROR_SCAN_INDEX_ORDER_INVALID))).status;
+      }
+      std::string order_string = std::string(order);
+      if (order_string == "asc") {
+        index.order = IndexScanParams::Order::ASC;
+      } else if (order_string == "desc") {
+        index.order = IndexScanParams::Order::DESC;
+      } else {
+        return CRS_Status(static_cast<HTTP_CODE>(
+              drogon::HttpStatusCode::k400BadRequest),
+            ERROR_SCAN_INDEX_ORDER_INVALID,
+            std::string(rdrsErrorMessage(ERROR_SCAN_INDEX_ORDER_INVALID))).status;
+      }
     }
   }
 
