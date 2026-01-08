@@ -2158,6 +2158,7 @@ RS_Status JSONParser::scan_parse(simdjson::padded_string_view reqBody,
       }
     }
   }
+/*
   std::cout << std::endl;
   std::cout << ">>>>>> Parsing LOGICAL Scan Filter: " << std::endl;
   reqStruct.DumpFilters(reqStruct.filterRoot);
@@ -2170,6 +2171,7 @@ RS_Status JSONParser::scan_parse(simdjson::padded_string_view reqBody,
   std::cout << "<<<<<<" << std::endl;
 
   std::cout << std::endl;
+*/
 
   return CRS_Status::SUCCESS.status;
 }
