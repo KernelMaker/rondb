@@ -813,6 +813,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
   NdbScanOperation::ScanOptions scan_options;
   scan_options.optionsPresent = 0;
+	if (scan_params.limit < 384 /* NDBAPI DEF_BATCH_SIZE */) {
+    scan_options.batch = scan_params.limit;
+  }
   Uint32 scan_flags = 0;
   CRS_Status crs_status = CRS_Status(HTTP_CODE::SUCCESS);
 
