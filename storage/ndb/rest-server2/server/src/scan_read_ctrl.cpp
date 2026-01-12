@@ -34,6 +34,7 @@
 #include <EventLogger.hpp>
 #include <ArenaMalloc.hpp>
 #include <util/require.h>
+#include "include/my_systime.h"
 
 extern EventLogger *g_eventLogger;
 
@@ -57,7 +58,6 @@ typedef rapidjson::GenericDocument<RJ_Encoding, RJ_Allocator,
                                    rapidjson::CrtAllocator> RJ_Document;
 typedef rapidjson::GenericStringBuffer<RJ_Encoding,
                                        rapidjson::CrtAllocator> RJ_StringBuffer;
-
 void ScanReadCtrl::ScanRead(
        const drogon::HttpRequestPtr& req,
        std::function<void(const drogon::HttpResponsePtr &)>&& callback,
@@ -96,11 +96,15 @@ void ScanReadCtrl::ScanRead(
 
   ScanReadParams reqStruct(db, table);
 
+  TraceLatency tl;
+
+  uint64_t start_time = my_micro_time();
   RS_Status status = jsonParser.scan_parse(
       simdjson::padded_string_view(jsonParser.get_buffer().get(), length,
                                    globalConfigs.internal.maxReqSize +
                                    simdjson::SIMDJSON_PADDING),
                                    reqStruct);
+  tl.parsing = my_micro_time() - start_time;
 
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
       drogon::HttpStatusCode::k200OK)) {
@@ -110,6 +114,7 @@ void ScanReadCtrl::ScanRead(
     return;
   }
 
+  start_time = my_micro_time();
   // Validation
   status = validate_db(reqStruct.path.db);
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
@@ -177,12 +182,27 @@ void ScanReadCtrl::ScanRead(
       return;
     }
   }
+  tl.validating = my_micro_time() - start_time;
 
   RJ_Document doc;
   RJ_StringBuffer buf;
   // TODO (Zhao)
   buf.Reserve(256 * 1024);
-  status = scan_read(reqStruct, currentThreadIndex, (void*)&buf);
+  start_time = my_micro_time();
+  status = scan_read(reqStruct, currentThreadIndex, (void*)&buf, tl);
+
+  uint64_t end_time = my_micro_time();
+  if (end_time - start_time > 1000) {
+    std::cout << "Caught a high latency query: " << end_time - start_time
+              << ", parsing: " << tl.parsing
+              << ", validating: " << tl.validating
+              << ", perform_scan: " << tl.performing_scan
+              << ", compiling_range: " << tl.compiling_range
+              << ", executing: " << tl.executing
+              << ", getting_results: " << tl.getting_results
+              << ", making_json: " << tl.making_json
+              << std::endl;
+  }
 
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
       drogon::HttpStatusCode::k200OK)) {

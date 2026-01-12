@@ -44,6 +44,8 @@
 #include <rapidjson/writer.h>  // rapidjson::Writer
 #include "my_byteorder.h"
 
+#include "include/my_systime.h"
+
 extern EventLogger *g_eventLogger;
 
 #include "storage/ndb/src/ronsql/RonSQLCommon.hpp"
@@ -711,7 +713,7 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
   return crs_status.status;
 }
 
-RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf) {
+RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf, TraceLatency& tl) {
   std::string db = std::string(scan_params.path.db);
   if (ndb_object->setDatabaseName(db.c_str())) {
     RS_Status err = RS_CLIENT_404_WITH_MSG_ERROR(
@@ -819,6 +821,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
   Uint32 scan_flags = 0;
   CRS_Status crs_status = CRS_Status(HTTP_CODE::SUCCESS);
 
+  uint64_t start_time = my_micro_time();
   if (scan_params.index != std::nullopt) {
     // Index scan
     IndexScanParams& index_params = scan_params.index.value();
@@ -886,7 +889,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       // std::cout << "<<<<<<" << std::endl;
       // std::cout << std::endl;
     }
+    tl.compiling_range = my_micro_time() - start_time;
 
+    start_time = my_micro_time();
     if (transaction->execute(NdbTransaction::NoCommit) != 0) {
       RS_Status err = RS_SERVER_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
@@ -897,6 +902,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           std::string(" Table: ") + scan_params.path.table);
       return err;
     }
+    tl.executing = my_micro_time() - start_time;
 
     Uint32 table_rec_len = NdbDictionary::getRecordRowLength(table_rec);
     assert(scan_params.table_rec_buffer == nullptr);
@@ -913,9 +919,12 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.Key("data");
     writer.StartArray();
     int rows = 0;
+    start_time = my_micro_time();
     while ((rc = operation->nextResult(reinterpret_cast<const char **>(&row_ptr),
             true, false)) == 0) {
+      tl.getting_results += (my_micro_time() - start_time);
       rows++;
+      start_time = my_micro_time();
       writer.StartObject();
       for (auto& column : read_columns) {
         writer.Key(column->getName());
@@ -933,15 +942,19 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
         }
       }
       writer.EndObject();
+      tl.making_json += (my_micro_time() - start_time);
       // std::cout << std::endl;
       if (rows >= scan_params.limit) {
         break;
       }
+      start_time = my_micro_time();
     }
+    start_time = my_micro_time();
     writer.EndArray();
     writer.Key("rows");
     writer.Int(rows);
     writer.EndObject();
+    tl.making_json += (my_micro_time() - start_time);
 
     if (rc == -1) {
       crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
@@ -1053,16 +1066,18 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
   return crs_status.status;
 }
 
-RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc) {
+RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc, TraceLatency& tl) {
   Ndb *ndb_object  = nullptr;
   RS_Status status = rdrsRonDBConnectionPool->GetNdbObject(&ndb_object,
                                                            threadIndex);
   if (unlikely(status.http_code != SUCCESS)) {
     return status;
   }
+  uint64_t start_time = my_micro_time();
   DATA_OP_RETRY_HANDLER(
-    status = perform_scan(scan_params, ndb_object, doc);
+    status = perform_scan(scan_params, ndb_object, doc, tl);
   )
+  tl.performing_scan = my_micro_time() - start_time;
   rdrsRonDBConnectionPool->ReturnNdbObject(ndb_object,
                                            &status,
                                            threadIndex);

@@ -25,6 +25,7 @@ extern "C" {
 #define STORAGE_NDB_REST_SERVER2_SERVER_SRC_RDRS_DAL_H_
 
 #include <stdbool.h>
+#include <cstdint>
 
 typedef enum HTTP_CODE {
   SUCCESS      = 200,
@@ -208,9 +209,19 @@ RS_Status get_rondb_stats(RonDB_Stats *stats);
 void* get_rdrs_ndb_object(int thread_index);
 void return_rdrs_ndb_object(void *ndb_object, int thread_index);
 
+struct TraceLatency {
+  uint64_t parsing = 0;
+  uint64_t validating = 0;
+  uint64_t performing_scan = 0;
+  uint64_t compiling_range = 0;
+  uint64_t executing = 0;
+  uint64_t getting_results = 0;
+  uint64_t making_json = 0;
+};
 class ScanReadParams;
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex,
-                    void* json_string_buf);
+                    void* json_string_buf,
+                    TraceLatency& tl);
 
 #endif
 
