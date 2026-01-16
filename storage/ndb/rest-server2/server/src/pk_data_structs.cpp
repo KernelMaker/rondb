@@ -642,6 +642,7 @@ std::string Condition2String(FilterNode::Condition cond) {
   return cond_string;
 }
 
+#ifdef DEBUG_SCAN
 void ScanReadParams::DumpFilters(std::shared_ptr<FilterNode>& node,
                                  int spaces) {
   if (node == nullptr) {
@@ -726,3 +727,7 @@ void ScanReadParams::DumpIndex() {
     }
   }
 }
+#else
+void ScanReadParams::DumpFilters(std::shared_ptr<FilterNode>&, int) {}
+void ScanReadParams::DumpIndex() {}
+#endif
