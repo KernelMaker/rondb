@@ -37,17 +37,6 @@
 
 extern EventLogger *g_eventLogger;
 
-#if (defined(VM_TRACE) || defined(ERROR_INSERT))
-//#define DEBUG_SCAN_CTRL 1
-#endif
-
-#ifdef DEBUG_SCAN_CTRL
-#define DEB_SCAN_CTRL(...) do { g_eventLogger->info(__VA_ARGS__); } while (0)
-#else
-#define DEB_SCAN_CTRL(...) do { } while (0)
-#endif
-
-
 #include <rapidjson/document.h>      // rapidjson::Document
 #include <rapidjson/stringbuffer.h>
 

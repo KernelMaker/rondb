@@ -33,6 +33,19 @@
 #include <libbase64.h>
 #include <simdjson.h>
 #include <optional>
+#include <iostream>
+
+// Debug macro for scan operations
+// Uncomment the line below to enable debug output
+#define DEBUG_SCAN 1
+
+#ifdef DEBUG_SCAN
+#define DEB_SCAN(x) do { std::cout << x; } while(0)
+#define DEB_SCAN_BLOCK(code) do { code } while(0)
+#else
+#define DEB_SCAN(x) ((void)0)
+#define DEB_SCAN_BLOCK(code) ((void)0)
+#endif
 
 std::string to_string(DataReturnType);
 Uint32 decode_utf8_to_unicode(const std::string_view &, size_t &);

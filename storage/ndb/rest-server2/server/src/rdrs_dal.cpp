@@ -354,6 +354,32 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       int8store(bin.data(), node.value.u64);
       break;
     }
+    case NdbDictionary::Column::Varchar: {
+      if (node.value.s.size() > node.col->getLength()) {
+        status = RS_CLIENT_ERROR("The provided string is too long. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      assert(node.value.s.size() <= (uint16_t)(0xFF));
+      uint8_t len = node.value.s.size();
+      bin.resize(len + 1);
+      bin[0] = len;
+      memcpy(&bin[1], node.value.s.data(), len);
+      break;
+    }
+    case NdbDictionary::Column::Longvarchar: {
+      if (node.value.s.size() > node.col->getLength()) {
+        status = RS_CLIENT_ERROR("The provided string is too long. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      assert(node.value.s.size() <= (uint16_t)(0xFFFF));
+      uint16_t len = node.value.s.size();
+      bin.resize(len + 2);
+      int2store(bin.data(), len);
+      memcpy(&bin[2], node.value.s.data(), len);
+      break;
+    }
     case NdbDictionary::Column::Timestamp2: {
       if (node.value.kind == Node::ParsedValue::Kind::STRING) {
         uint32_t precision = node.col->getPrecision();
@@ -444,7 +470,7 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
     return status;
   }
   if (node->type == FilterNode::Type::LOGIC) {
-    std::cout << "  filter->begin(" << node->group << ")" << std::endl;
+    DEB_SCAN("  filter->begin(" << node->group << ")" << std::endl);
     filter->begin(node->group);
   } else {
     assert(node->col != nullptr);
@@ -454,18 +480,24 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
         if (status.http_code != HTTP_CODE::SUCCESS) {
           return status;
         }
-        std::cout << "  filter->cmp(" << node->cond << ", "
-                  << node->col->getAttrId() << ", "
-                  << *(int32_t*)(node->binary.data()) << ")"
-                  << std::endl;
+        DEB_SCAN_BLOCK(
+          std::cout << "  filter->cmp(" << node->cond << ", "
+                    << node->col->getAttrId() << ", ";
+          std::cout << "[" << node->binary.size() << "]";
+          for (auto byte : node->binary) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(byte) << ' ';
+          }
+          std::cout << std::dec << ")" << std::endl;
+        );
         filter->cmp(node->cond, node->col->getAttrId(), node->binary.data(), node->binary.size());
         break;
       case FilterNode::Type::IS_NULL:
-        std::cout << "  filter->isnull(" << node->col->getAttrId() << ")" << std::endl;
+        DEB_SCAN("  filter->isnull(" << node->col->getAttrId() << ")" << std::endl);
         filter->isnull(node->col->getAttrId());
         break;
       case FilterNode::Type::IS_NOT_NULL:
-        std::cout << "  filter->isnotnull(" << node->col->getAttrId() << ")" << std::endl;
+        DEB_SCAN("  filter->isnotnull(" << node->col->getAttrId() << ")" << std::endl);
         filter->isnotnull(node->col->getAttrId());
         break;
       default:
@@ -482,7 +514,7 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
     }
   }
   if (node->type == FilterNode::Type::LOGIC) {
-    std::cout << "  filter->end()" << std::endl;
+    DEB_SCAN("  filter->end()" << std::endl);
     filter->end();
   }
   return status;
@@ -553,74 +585,74 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionar
     case NdbDictionary::Column::Tinyint:
       value_int64 = *reinterpret_cast<const int8_t*>(field);
       writer.Int64(value_int64);
-      std::cout << value_int64;
+      DEB_SCAN(value_int64);
       break;
     case NdbDictionary::Column::Tinyunsigned:
       value_uint64 = *reinterpret_cast<const uint8_t*>(field);
       writer.Uint64(value_uint64);
-      std::cout << value_uint64;
+      DEB_SCAN(value_uint64);
       break;
     case NdbDictionary::Column::Smallint:
       value_int64 = sint2korr(field);
       writer.Int64(value_int64);
-      std::cout << value_int64;
+      DEB_SCAN(value_int64);
       break;
     case NdbDictionary::Column::Smallunsigned:
       value_uint64 = uint2korr(field);
       writer.Uint64(value_uint64);
-      std::cout << value_uint64;
+      DEB_SCAN(value_uint64);
       break;
     case NdbDictionary::Column::Mediumint:
       value_int64 = sint3korr(field);
       writer.Int64(value_int64);
-      std::cout << value_int64;
+      DEB_SCAN(value_int64);
       break;
     case NdbDictionary::Column::Mediumunsigned:
       value_uint64 = uint3korr(field);
       writer.Uint64(value_uint64);
-      std::cout << value_uint64;
+      DEB_SCAN(value_uint64);
       break;
     case NdbDictionary::Column::Int:
       value_int64 = *reinterpret_cast<const int32_t*>(field);
       writer.Int64(value_int64);
-      std::cout << value_int64;
+      DEB_SCAN(value_int64);
       break;
     case NdbDictionary::Column::Unsigned:
       value_uint64 = *reinterpret_cast<const uint32_t*>(field);
       writer.Uint64(value_uint64);
-      std::cout << value_uint64;
+      DEB_SCAN(value_uint64);
       break;
     case NdbDictionary::Column::Bigint:
       value_int64 = *reinterpret_cast<const int64_t*>(field);
       writer.Int64(value_int64);
-      std::cout << value_int64;
+      DEB_SCAN(value_int64);
       break;
     case NdbDictionary::Column::Bigunsigned:
       value_uint64 = *reinterpret_cast<const uint64_t*>(field);
       writer.Uint64(value_uint64);
-      std::cout << value_uint64;
+      DEB_SCAN(value_uint64);
       break;
     case NdbDictionary::Column::Float:
       value_float = *reinterpret_cast<const float*>(field);
       writer.Double(value_float);
-      std::cout << value_float;
+      DEB_SCAN(value_float);
       break;
     case NdbDictionary::Column::Double:
       value_double = *reinterpret_cast<const double*>(field);
       writer.Double(value_double);
-      std::cout << value_double;
+      DEB_SCAN(value_double);
       break;
     case NdbDictionary::Column::Varchar:
       varchar_len = *reinterpret_cast<const uint8_t*>(field);
       writer.String(field + 1, varchar_len);
-      std::cout << "[" << varchar_len << "] "
-        << std::string(field + 1, varchar_len);
+      DEB_SCAN("[" << varchar_len << "] "
+        << std::string(field + 1, varchar_len));
       break;
     case NdbDictionary::Column::Longvarchar:
       varchar_len = *reinterpret_cast<const uint16_t*>(field);
       writer.String(field + 2, varchar_len);
-      std::cout << "[" << varchar_len << "] "
-        << std::string(field + 2, varchar_len);
+      DEB_SCAN("[" << varchar_len << "] "
+        << std::string(field + 2, varchar_len));
       break;
     case NdbDictionary::Column::Timestamp2: {
       ///< 4 bytes + 0-3 fraction
@@ -644,11 +676,11 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionar
       my_TIME_to_str(lTime, to, precision);
       std::string time_str(to);
       writer.String(time_str.data(), time_str.length());
-      std::cout << time_str;
+      DEB_SCAN(time_str);
       break;
     }
     default:
-      std::cout << "Unexpected column type";
+      DEB_SCAN("Unexpected column type");
       writer.String("Unexpected column type");
       break;
   }
@@ -673,7 +705,7 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
   for (auto& range : index_params.ranges) {
     NdbIndexScanOperation::IndexBound bound;
     char* row_ptr = &buffer[buf_idx];
-    std::cout << ">>>LOWER bound: " << std::endl;
+    DEB_SCAN(">>>LOWER bound: " << std::endl);
     if (range.lower != std::nullopt) {
       IndexBound& lower = range.lower.value();
       bound.low_inclusive = lower.inclusive;
@@ -689,12 +721,12 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
           return status;
         }
         char* field = NdbDictionary::getValuePtr(index_rec, row_ptr, curr_attrId);
-        std::cout << "curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
+        DEB_SCAN("curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
           << ", col: " << node.col->getName()
           << ", node: " << node.value.ToString()
           << ", offset: " << field - row_ptr
           << ", binary_size: " << node.binary.size()
-          << std::endl;
+          << std::endl);
         if (node.value.kind == Node::ParsedValue::Kind::NULLVAL) {
           Uint32 nullbit_byte_offset = 0;
           Uint32 nullbit_bit_in_byte = 0;
@@ -710,26 +742,28 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
         curr_pos++;
       }
       bound.low_key = row_ptr;
-      std::cout << "low_inclusive: " << bound.low_inclusive << std::endl;
-      std::cout << "low_key_count: " << bound.low_key_count << std::endl;
-      std::cout << "Lower bound binary: " << std::endl;
-      for (size_t i = 0; i < index_rec_len; i++) {
-        unsigned char c = static_cast<unsigned char>(bound.low_key[i]);
-        std::cout << std::hex << std::setw(2) << std::setfill('0')
-          << static_cast<int>(c) << ' ';
-      }
-      std::cout << std::dec << std::endl;
-      std::cout << "<<<" << std::endl;
+      DEB_SCAN("low_inclusive: " << bound.low_inclusive << std::endl);
+      DEB_SCAN("low_key_count: " << bound.low_key_count << std::endl);
+      DEB_SCAN_BLOCK(
+        std::cout << "Lower bound binary: " << std::endl;
+        for (size_t i = 0; i < index_rec_len; i++) {
+          unsigned char c = static_cast<unsigned char>(bound.low_key[i]);
+          std::cout << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(c) << ' ';
+        }
+        std::cout << std::dec << std::endl;
+      );
+      DEB_SCAN("<<<" << std::endl);
     } else {
       bound.low_key_count = 0;
       bound.low_key = nullptr;
       bound.low_inclusive = true;
-      std::cout << "Empty Lower bound" << std::endl;
+      DEB_SCAN("Empty Lower bound" << std::endl);
     }
     buf_idx += (index_rec_len);
     row_ptr = &buffer[buf_idx];
 
-    std::cout << ">>>UPPER bound: " << std::endl;
+    DEB_SCAN(">>>UPPER bound: " << std::endl);
     if (range.upper != std::nullopt) {
       IndexBound& upper = range.upper.value();
       bound.high_inclusive = upper.inclusive;
@@ -745,12 +779,12 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
           return status;
         }
         char* field = NdbDictionary::getValuePtr(index_rec, row_ptr, curr_attrId);
-        std::cout << "curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
+        DEB_SCAN("curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
           << ", col: " << node.col->getName()
           << ", node: " << node.value.ToString()
           << ", offset: " << field - row_ptr
           << ", binary_size: " << node.binary.size()
-          << std::endl;
+          << std::endl);
         if (node.value.kind == Node::ParsedValue::Kind::NULLVAL) {
           Uint32 nullbit_byte_offset = 0;
           Uint32 nullbit_bit_in_byte = 0;
@@ -766,21 +800,23 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
         curr_pos++;
       }
       bound.high_key = row_ptr;
-      std::cout << "high_inclusive: " << bound.high_inclusive << std::endl;
-      std::cout << "high_key_count: " << bound.high_key_count << std::endl;
-      std::cout << "Upper bound binary: " << std::endl;
-      for (size_t i = 0; i < index_rec_len; i++) {
-        unsigned char c = static_cast<unsigned char>(bound.high_key[i]);
-        std::cout << std::hex << std::setw(2) << std::setfill('0')
-          << static_cast<int>(c) << ' ';
-      }
-      std::cout << std::dec << std::endl;
-      std::cout << "<<<" << std::endl;
+      DEB_SCAN("high_inclusive: " << bound.high_inclusive << std::endl);
+      DEB_SCAN("high_key_count: " << bound.high_key_count << std::endl);
+      DEB_SCAN_BLOCK(
+        std::cout << "Upper bound binary: " << std::endl;
+        for (size_t i = 0; i < index_rec_len; i++) {
+          unsigned char c = static_cast<unsigned char>(bound.high_key[i]);
+          std::cout << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(c) << ' ';
+        }
+        std::cout << std::dec << std::endl;
+      );
+      DEB_SCAN("<<<" << std::endl);
     } else {
       bound.high_key_count = 0;
       bound.high_key = nullptr;
       bound.high_inclusive = true;
-      std::cout << "Empty Upper bound" << std::endl;
+      DEB_SCAN("Empty Upper bound" << std::endl);
     }
     buf_idx += (index_rec_len);
 
@@ -882,11 +918,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       return err;
     }
 
-    std::cout << std::endl;
-    std::cout << ">>>>>> Compiling PHYSICAL Scan Filter" << std::endl;
+    DEB_SCAN(std::endl);
+    DEB_SCAN(">>>>>> Compiling PHYSICAL Scan Filter" << std::endl);
     if (scan_params.filterRoot->type != FilterNode::Type::LOGIC) {
       filter.begin(FilterNode::Group::AND);
-      std::cout << "  filter->begin(" << FilterNode::Group::AND << ")" << std::endl;
+      DEB_SCAN("  filter->begin(" << FilterNode::Group::AND << ")" << std::endl);
     }
     err = CompileFilter(scan_params.filterRoot, &filter);
     if (err.http_code != HTTP_CODE::SUCCESS) {
@@ -894,9 +930,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
     if (scan_params.filterRoot->type != FilterNode::Type::LOGIC) {
       filter.end();
-      std::cout << "  filter->end()" << std::endl;
+      DEB_SCAN("  filter->end()" << std::endl);
     }
-    std::cout << "<<<<<<" << std::endl;
+    DEB_SCAN("<<<<<<" << std::endl);
   }
 
   NdbScanOperation::ScanOptions scan_options;
@@ -905,7 +941,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     scan_options.batch = scan_params.limit;
   }
   Uint32 scan_flags = 0;
-  CRS_Status crs_status = CRS_Status(HTTP_CODE::SUCCESS);
+  RS_Status status = RS_OK;
 
   if (scan_params.index != std::nullopt) {
     // Index scan
@@ -964,15 +1000,15 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
 
     if (!index_params.ranges.empty()) {
-      std::cout << std::endl;
-      std::cout << ">>>>>> Compiling PHYSICAL index ranges" << std::endl;
+      DEB_SCAN(std::endl);
+      DEB_SCAN(">>>>>> Compiling PHYSICAL index ranges" << std::endl);
       RS_Status err = CompileIndexRanges(transaction, operation,
                                          index_rec, index_params);
       if (err.http_code != HTTP_CODE::SUCCESS) {
         return err;
       }
-      std::cout << "<<<<<<" << std::endl;
-      std::cout << std::endl;
+      DEB_SCAN("<<<<<<" << std::endl);
+      DEB_SCAN(std::endl);
     }
 
     if (transaction->execute(NdbTransaction::NoCommit) != 0) {
@@ -993,7 +1029,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
     const char* row_ptr = scan_params.table_rec_buffer;
     int rc = 0;
-    std::cout << "Rows: " << std::endl;
+    DEB_SCAN("Rows: " << std::endl);
 
     RJ_StringBuffer* buffer = (RJ_StringBuffer*)json_str_buf;
     RJ_Writer writer(*buffer);
@@ -1010,10 +1046,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
         Uint32 attrId = column->getAttrId();
         Uint32 attrType = column->getType();
-        std::cout << "  [" << attrId << "]: ";
+        DEB_SCAN("  [" << attrId << "]: ");
         bool is_null = NdbDictionary::isNull(table_rec, row_ptr, attrId);
         if (is_null) {
-          std::cout << "NULL";
+          DEB_SCAN("NULL");
           writer.Null();
         } else {
           const char* field = NdbDictionary::getValuePtr(table_rec, row_ptr, attrId);
@@ -1021,7 +1057,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
         }
       }
       writer.EndObject();
-      std::cout << std::endl;
+      DEB_SCAN(std::endl);
       if (rows >= scan_params.limit) {
         break;
       }
@@ -1032,7 +1068,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.EndObject();
 
     if (rc == -1) {
-      crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_CLIENT_404_WITH_MSG_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
           std::string("Failed to read tuple. Error: ") +
           std::to_string(transaction->getNdbError().code) + ", " +
@@ -1086,7 +1122,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
     const char* row_ptr = scan_params.table_rec_buffer;
     int rc = 0;
-    std::cout << "Rows: " << std::endl;
+    DEB_SCAN("Rows: " << std::endl);
 
     RJ_StringBuffer* buffer = (RJ_StringBuffer*)json_str_buf;
     RJ_Writer writer(*buffer);
@@ -1103,10 +1139,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
         Uint32 attrId = column->getAttrId();
         Uint32 attrType = column->getType();
-        std::cout << "  [" << attrId << "]: ";
+        DEB_SCAN("  [" << attrId << "]: ");
         bool is_null = NdbDictionary::isNull(table_rec, row_ptr, attrId);
         if (is_null) {
-          std::cout << "NULL";
+          DEB_SCAN("NULL");
           writer.Null();
         } else {
           const char* field = NdbDictionary::getValuePtr(table_rec, row_ptr, attrId);
@@ -1114,7 +1150,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
         }
       }
       writer.EndObject();
-      std::cout << std::endl;
+      DEB_SCAN(std::endl);
       if (rows >= scan_params.limit) {
         break;
       }
@@ -1124,9 +1160,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.Int(rows);
     writer.EndObject();
 
-    CRS_Status crs_status = CRS_Status(HTTP_CODE::SUCCESS);
+    RS_Status status = RS_OK;
     if (rc == -1) {
-      crs_status.status = RS_SERVER_ERROR(
+      status = RS_SERVER_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
           std::string("Failed to read tuple. Error: ") +
           std::to_string(transaction->getNdbError().code) + ", " +
@@ -1138,7 +1174,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
   }
   ndb_object->closeTransaction(transaction);
 
-  return crs_status.status;
+  return status;
 }
 
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc) {
