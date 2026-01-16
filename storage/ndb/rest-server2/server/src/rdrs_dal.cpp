@@ -44,6 +44,8 @@
 #include <rapidjson/writer.h>  // rapidjson::Writer
 #include "my_byteorder.h"
 
+#include <my_time.h>
+
 extern EventLogger *g_eventLogger;
 
 #include "storage/ndb/src/ronsql/RonSQLCommon.hpp"
@@ -291,7 +293,8 @@ class Bitmap {
    unsigned char* bitmap_;
 };
 
-void GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
+RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
+  RS_Status status = RS_OK;
   assert(node.col != nullptr);
   bin.clear();
   switch(node.col->getType()) {
@@ -351,44 +354,94 @@ void GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       int8store(bin.data(), node.value.u64);
       break;
     }
+    case NdbDictionary::Column::Timestamp2: {
+      if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        uint32_t precision = node.col->getPrecision();
+        MYSQL_TIME lTime;
+        MYSQL_TIME_STATUS time_status;
+        bool ret = str_to_datetime(node.value.s.data(), node.value.s.length(), &lTime, 0, &time_status);
+        if (unlikely(ret != 0)) {
+          status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+          break;
+        }
+        time_t epoch = 0;
+        struct tm time_info;
+        time_info.tm_year = lTime.year - 1900;  // tm_year is years since 1900
+        time_info.tm_mon = lTime.month - 1;     // tm_mon is 0-based
+        time_info.tm_mday = lTime.day;
+        time_info.tm_hour = lTime.hour;
+        time_info.tm_min = lTime.minute;
+        time_info.tm_sec = lTime.second;
+        time_info.tm_isdst = -1; // Daylight saving t
+        epoch = timegm(&time_info);
+        // 1970-01-01 00:00:01' UTC to '2038-01-19 03:14:07' UTC.
+        if (unlikely(epoch <= 0 || epoch > 2147483647)) {
+          status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) + std::string(" Column: ") +
+            std::string(node.col->getName()));
+          break;
+        }
+        int warnings = 0;
+        my_datetime_adjust_frac(&lTime, precision, &warnings, true);
+        if (unlikely(warnings != 0)) {
+          status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+          break;
+        }
+        // On Mac timeval.tv_usec is Int32 and on linux it is Int64.
+        // Inorder to be compatible we cast l_time.second_part to Int32
+        // This will not create problems as only six digit nanoseconds
+        // are stored in Timestamp2
+        my_timeval myTV{epoch, (Int32)lTime.second_part};
+        bin.resize(7);
+        my_timestamp_to_binary(&myTV, (uchar *)bin.data(), precision);
+        break;
+      } else {
+      }
+      break;
+    }
     default: {
       assert(0);
       break;
     }
   }
+  return status;
 }
 
 RS_Status BindFilterColumns(std::shared_ptr<FilterNode>& node,
                             const NdbDictionary::Table* table) {
-  CRS_Status crs_status;
+  RS_Status status = RS_OK;
   if (node == nullptr) {
-    return crs_status.status;
+    return status;
   }
   if (node->type != FilterNode::Type::LOGIC) {
     const NdbDictionary::Column *column = table->getColumn(node->column.c_str());
     if (column == nullptr) {
-      crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_CLIENT_404_WITH_MSG_ERROR(
         "The column used in filter doesn't exist in table");
-      return crs_status.status;
+      return status;
     }
     assert(node->col == nullptr);
     node->col = column;
   } else {
     for (auto& child : node->children) {
-      crs_status.status = BindFilterColumns(child, table);
-      if (crs_status.status.http_code != HTTP_CODE::SUCCESS) {
+      status = BindFilterColumns(child, table);
+      if (status.http_code != HTTP_CODE::SUCCESS) {
         break;
       }
     }
   }
-  return crs_status.status;
+  return status;
 }
 
 RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
                         NdbScanFilter* filter) {
-  CRS_Status crs_status;
+  RS_Status status = RS_OK;
   if (node == nullptr) {
-    return crs_status.status;
+    return status;
   }
   if (node->type == FilterNode::Type::LOGIC) {
     std::cout << "  filter->begin(" << node->group << ")" << std::endl;
@@ -397,7 +450,10 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
     assert(node->col != nullptr);
     switch (node->type) {
       case FilterNode::Type::COMPARE:
-        GenerateBinary(*node, node->binary);
+        status = GenerateBinary(*node, node->binary);
+        if (status.http_code != HTTP_CODE::SUCCESS) {
+          return status;
+        }
         std::cout << "  filter->cmp(" << node->cond << ", "
                   << node->col->getAttrId() << ", "
                   << *(int32_t*)(node->binary.data()) << ")"
@@ -413,15 +469,15 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
         filter->isnotnull(node->col->getAttrId());
         break;
       default:
-        crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+        status = RS_CLIENT_404_WITH_MSG_ERROR(
             "Invalid filter node type");
-        return crs_status.status;
+        return status;
     }
   }
 
   for (auto& child : node->children) {
-    crs_status.status = CompileFilter(child, filter);
-    if (crs_status.status.http_code != HTTP_CODE::SUCCESS) {
+    status = CompileFilter(child, filter);
+    if (status.http_code != HTTP_CODE::SUCCESS) {
       break;
     }
   }
@@ -429,28 +485,28 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
     std::cout << "  filter->end()" << std::endl;
     filter->end();
   }
-  return crs_status.status;
+  return status;
 }
 
 RS_Status BindIndexColumns(IndexScanParams& index_params,
                             const NdbDictionary::Table* table,
                             const NdbDictionary::Index* index) {
-  CRS_Status crs_status;
+  RS_Status status = RS_OK;
   
   assert(table != nullptr);
   assert(index != nullptr);
   assert(!index_params.columns.empty());
   if (index_params.columns.size() != index->getNoOfColumns()) {
-      crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_CLIENT_404_WITH_MSG_ERROR(
         "key_columns don't match the index columns");
-      return crs_status.status;
+      return status;
   }
   for (int i = 0; i < index->getNoOfColumns(); i++) {
     const NdbDictionary::Column* column = index->getColumn(i);
     if (std::string(column->getName()) != index_params.columns[i]) {
-        crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+        status = RS_CLIENT_404_WITH_MSG_ERROR(
           "key_columns don't match the index columns");
-        return crs_status.status;
+        return status;
     }
   }
 
@@ -458,13 +514,13 @@ RS_Status BindIndexColumns(IndexScanParams& index_params,
   for (auto& column_name : index_params.columns) {
     const NdbDictionary::Column *column = table->getColumn(column_name.c_str());
     if (column == nullptr) {
-      crs_status.status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_CLIENT_404_WITH_MSG_ERROR(
         "The column used in filter doesn't exist in table");
-      return crs_status.status;
+      return status;
     }
     index_params.cols.push_back(column);
   }
-  return crs_status.status;
+  return status;
 }
 
 
@@ -482,7 +538,8 @@ typedef rapidjson::PrettyWriter<RJ_StringBuffer, RJ_Encoding, RJ_Encoding,
 
 using RJ_Writer = rapidjson::Writer<RJ_StringBuffer, RJ_Encoding, RJ_Encoding,
                                     RJ_Allocator, 0>;
-void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const char* binary) {
+void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionary::Column* col,
+                          const char* binary) {
   if (binary == nullptr) {
     return;
   }
@@ -565,6 +622,31 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const char* binary
       std::cout << "[" << varchar_len << "] "
         << std::string(field + 2, varchar_len);
       break;
+    case NdbDictionary::Column::Timestamp2: {
+      ///< 4 bytes + 0-3 fraction
+      uint32_t precision = col->getPrecision();
+      my_timeval myTV{};
+      my_timestamp_from_binary(&myTV, (const unsigned char *)field, precision);
+      Int64 epochIn = myTV.m_tv_sec;
+      time_t stdtime(epochIn);
+      struct tm *time_info = gmtime(&stdtime);
+      MYSQL_TIME lTime  = {};
+      lTime.year        = time_info->tm_year + 1900;
+      lTime.month       = time_info->tm_mon +1;
+      lTime.day         = time_info->tm_mday;
+      lTime.hour        = time_info->tm_hour;
+      lTime.minute      = time_info->tm_min;
+      lTime.second      = time_info->tm_sec;
+      lTime.second_part = myTV.m_tv_usec;
+      lTime.time_type   = MYSQL_TIMESTAMP_DATETIME;
+      char to[MAX_DATE_STRING_REP_LENGTH];
+      memset(to, 0, MAX_DATE_STRING_REP_LENGTH);
+      my_TIME_to_str(lTime, to, precision);
+      std::string time_str(to);
+      writer.String(time_str.data(), time_str.length());
+      std::cout << time_str;
+      break;
+    }
     default:
       std::cout << "Unexpected column type";
       writer.String("Unexpected column type");
@@ -577,7 +659,7 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
                              NdbIndexScanOperation* operation,
                              const NdbRecord* index_rec,
                              IndexScanParams& index_params) {
-  CRS_Status crs_status;
+  RS_Status status = RS_OK;
   assert(index_rec);
   int bound_num = index_params.ranges.size() * 2;
   Uint32 index_rec_len = NdbDictionary::getRecordRowLength(index_rec);
@@ -602,7 +684,10 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
       assert(ret);
       for (auto& node : lower.values) {
         node.col = index_params.cols[curr_pos];
-        GenerateBinary(node, node.binary);
+        RS_Status status = GenerateBinary(node, node.binary);
+        if (status.http_code != HTTP_CODE::SUCCESS) {
+          return status;
+        }
         char* field = NdbDictionary::getValuePtr(index_rec, row_ptr, curr_attrId);
         std::cout << "curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
           << ", col: " << node.col->getName()
@@ -655,7 +740,10 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
       assert(ret);
       for (auto& node : upper.values) {
         node.col = index_params.cols[curr_pos];
-        GenerateBinary(node, node.binary);
+        RS_Status status = GenerateBinary(node, node.binary);
+        if (status.http_code != HTTP_CODE::SUCCESS) {
+          return status;
+        }
         char* field = NdbDictionary::getValuePtr(index_rec, row_ptr, curr_attrId);
         std::cout << "curr_pos: " << curr_pos << ", curr_attrId: " << curr_attrId
           << ", col: " << node.col->getName()
@@ -708,7 +796,7 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
       return err;
     }
   }
-  return crs_status.status;
+  return status;
 }
 
 RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf) {
@@ -929,7 +1017,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           writer.Null();
         } else {
           const char* field = NdbDictionary::getValuePtr(table_rec, row_ptr, attrId);
-          WriteColumnData2Json(writer, attrType, field);
+          WriteColumnData2Json(writer, attrType, column, field);
         }
       }
       writer.EndObject();
@@ -1022,7 +1110,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           writer.Null();
         } else {
           const char* field = NdbDictionary::getValuePtr(table_rec, row_ptr, attrId);
-          WriteColumnData2Json(writer, attrType, field);
+          WriteColumnData2Json(writer, attrType, column, field);
         }
       }
       writer.EndObject();
