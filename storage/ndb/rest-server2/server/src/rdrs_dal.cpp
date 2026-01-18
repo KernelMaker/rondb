@@ -400,7 +400,7 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
         time_info.tm_hour = lTime.hour;
         time_info.tm_min = lTime.minute;
         time_info.tm_sec = lTime.second;
-        time_info.tm_isdst = -1; // Daylight saving t
+        time_info.tm_isdst = -1; // Daylight saving time
         epoch = timegm(&time_info);
         // 1970-01-01 00:00:01' UTC to '2038-01-19 03:14:07' UTC.
         if (unlikely(epoch <= 0 || epoch > 2147483647)) {
@@ -426,6 +426,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
         my_timestamp_to_binary(&myTV, (uchar *)bin.data(), precision);
         break;
       } else {
+        status = RS_CLIENT_ERROR("Timestamp2 column requires string value. Column: " +
+            std::string(node.col->getName()));
       }
       break;
     }
@@ -501,7 +503,7 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
         filter->isnotnull(node->col->getAttrId());
         break;
       default:
-        status = RS_CLIENT_404_WITH_MSG_ERROR(
+        status = RS_CLIENT_ERROR(
             "Invalid filter node type");
         return status;
     }
@@ -529,14 +531,14 @@ RS_Status BindIndexColumns(IndexScanParams& index_params,
   assert(index != nullptr);
   assert(!index_params.columns.empty());
   if (index_params.columns.size() != index->getNoOfColumns()) {
-      status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_CLIENT_ERROR(
         "key_columns don't match the index columns");
       return status;
   }
   for (int i = 0; i < index->getNoOfColumns(); i++) {
     const NdbDictionary::Column* column = index->getColumn(i);
     if (std::string(column->getName()) != index_params.columns[i]) {
-        status = RS_CLIENT_404_WITH_MSG_ERROR(
+        status = RS_CLIENT_ERROR(
           "key_columns don't match the index columns");
         return status;
     }
@@ -547,7 +549,7 @@ RS_Status BindIndexColumns(IndexScanParams& index_params,
     const NdbDictionary::Column *column = table->getColumn(column_name.c_str());
     if (column == nullptr) {
       status = RS_CLIENT_404_WITH_MSG_ERROR(
-        "The column used in filter doesn't exist in table");
+        "The column used in index doesn't exist in table");
       return status;
     }
     index_params.cols.push_back(column);
@@ -661,14 +663,15 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionar
       my_timestamp_from_binary(&myTV, (const unsigned char *)field, precision);
       Int64 epochIn = myTV.m_tv_sec;
       time_t stdtime(epochIn);
-      struct tm *time_info = gmtime(&stdtime);
+      struct tm time_info;
+      gmtime_r(&stdtime, &time_info);
       MYSQL_TIME lTime  = {};
-      lTime.year        = time_info->tm_year + 1900;
-      lTime.month       = time_info->tm_mon +1;
-      lTime.day         = time_info->tm_mday;
-      lTime.hour        = time_info->tm_hour;
-      lTime.minute      = time_info->tm_min;
-      lTime.second      = time_info->tm_sec;
+      lTime.year        = time_info.tm_year + 1900;
+      lTime.month       = time_info.tm_mon + 1;
+      lTime.day         = time_info.tm_mday;
+      lTime.hour        = time_info.tm_hour;
+      lTime.minute      = time_info.tm_min;
+      lTime.second      = time_info.tm_sec;
       lTime.second_part = myTV.m_tv_usec;
       lTime.time_type   = MYSQL_TIMESTAMP_DATETIME;
       char to[MAX_DATE_STRING_REP_LENGTH];
@@ -823,7 +826,7 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
     bound.range_no = range_no;
     range_no++;
     if (operation->setBound(index_rec, bound)) {
-      RS_Status err = RS_CLIENT_404_WITH_MSG_ERROR(
+      RS_Status err = RS_SERVER_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
           std::string("Failed to setBound. Error: ") +
           std::to_string(transaction->getNdbError().code) + ", " +
@@ -834,6 +837,27 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
   }
   return status;
 }
+
+// RAII guard for NdbTransaction - ensures transaction is closed on scope exit
+class TransactionGuard {
+ public:
+  TransactionGuard(Ndb* ndb, NdbTransaction* txn)
+      : ndb_(ndb), transaction_(txn) {}
+
+  ~TransactionGuard() {
+    if (transaction_ != nullptr) {
+      ndb_->closeTransaction(transaction_);
+    }
+  }
+
+  // Disable copy
+  TransactionGuard(const TransactionGuard&) = delete;
+  TransactionGuard& operator=(const TransactionGuard&) = delete;
+
+ private:
+  Ndb* ndb_;
+  NdbTransaction* transaction_;
+};
 
 RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf) {
   std::string db = std::string(scan_params.path.db);
@@ -902,12 +926,15 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     RS_Status err = RS_SERVER_ERROR(
         std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
         std::string("Failed to start transaction. Error: ") +
-        std::to_string(transaction->getNdbError().code) + ", " +
-        std::string(transaction->getNdbError().message) +
+        std::to_string(ndb_object->getNdbError().code) + ", " +
+        std::string(ndb_object->getNdbError().message) +
         std::string(" Database: ") + db +
         std::string(" Table: ") + scan_params.path.table);
     return err;
   }
+
+  // Guard will automatically close transaction when function exits
+  TransactionGuard txn_guard(ndb_object, transaction);
 
   NdbInterpretedCode filter_code(*table_rec);
   NdbScanFilter filter(&filter_code);
@@ -1036,7 +1063,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.StartObject();
     writer.Key("data");
     writer.StartArray();
-    int rows = 0;
+    uint64_t rows = 0;
     while ((rc = operation->nextResult(reinterpret_cast<const char **>(&row_ptr),
             true, false)) == 0) {
       rows++;
@@ -1064,11 +1091,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
     writer.EndArray();
     writer.Key("rows");
-    writer.Int(rows);
+    writer.Uint64(rows);
     writer.EndObject();
 
     if (rc == -1) {
-      status = RS_CLIENT_404_WITH_MSG_ERROR(
+      status = RS_SERVER_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
           std::string("Failed to read tuple. Error: ") +
           std::to_string(transaction->getNdbError().code) + ", " +
@@ -1076,6 +1103,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
     }
+    operation->close();
   } else {
     // Table scan
     NdbScanOperation* operation = nullptr;
@@ -1129,7 +1157,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.StartObject();
     writer.Key("data");
     writer.StartArray();
-    int rows = 0;
+    uint64_t rows = 0;
     while ((rc = operation->nextResult(reinterpret_cast<const char **>(&row_ptr),
             true, false)) == 0) {
       rows++;
@@ -1157,10 +1185,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
     writer.EndArray();
     writer.Key("rows");
-    writer.Int(rows);
+    writer.Uint64(rows);
     writer.EndObject();
 
-    RS_Status status = RS_OK;
     if (rc == -1) {
       status = RS_SERVER_ERROR(
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
@@ -1172,7 +1199,6 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
     operation->close();
   }
-  ndb_object->closeTransaction(transaction);
 
   return status;
 }
