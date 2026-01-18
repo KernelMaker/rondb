@@ -721,7 +721,7 @@ void ScanReadParams::DumpIndex() {
       case IndexScanParams::Order::DESC:
         std::cout << "desc" << std::endl;
         break;
-      defaut:
+      default:
         std::cout << "invalid order" << std::endl;
         break;
     }
