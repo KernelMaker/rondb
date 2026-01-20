@@ -45,6 +45,10 @@
 #include "my_byteorder.h"
 
 #include <my_time.h>
+#include <decimal_utils.hpp>
+#include <decimal.h>
+#include <libbase64.h>
+#include "rdrs_const.h"
 
 extern EventLogger *g_eventLogger;
 
@@ -293,6 +297,21 @@ class Bitmap {
    unsigned char* bitmap_;
 };
 
+// Helper function to unpack a 3-byte DATE value into MYSQL_TIME
+// Matches MySQL's Field_newdate::get_date_internal() in sql/field.cc
+static inline void my_unpack_date(MYSQL_TIME *l_time, const void *d) {
+  uchar b[4];
+  memcpy(b, d, 3);
+  b[3] = 0;
+  uint w = (uint)uint3korr(b);
+  l_time->day = (w & 31);
+  w >>= 5;
+  l_time->month = (w & 15);
+  w >>= 4;
+  l_time->year = w;
+  l_time->time_type = MYSQL_TIMESTAMP_DATE;
+}
+
 RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
   RS_Status status = RS_OK;
   assert(node.col != nullptr);
@@ -327,31 +346,78 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       break;
     }
     case NdbDictionary::Column::Tinyunsigned: {
-      uint8_t x = node.value.u64;
+      // JSON parser may store positive values as i64, so check both
+      uint8_t x;
+      if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        x = node.value.u64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
+        x = static_cast<uint64_t>(node.value.i64);
+      } else {
+        status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.push_back(*reinterpret_cast<uint8_t*>(&x));
       break;
     }
     case NdbDictionary::Column::Smallunsigned: {
-      uint16_t x = node.value.u64;
+      uint16_t x;
+      if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        x = node.value.u64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
+        x = static_cast<uint64_t>(node.value.i64);
+      } else {
+        status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.resize(sizeof(uint16_t));
       int2store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Mediumunsigned: {
-      uint32_t x = node.value.u64;
+      uint32_t x;
+      if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        x = node.value.u64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
+        x = static_cast<uint64_t>(node.value.i64);
+      } else {
+        status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.resize(3);
       int3store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Unsigned: {
-      uint32_t x = node.value.u64;
+      uint32_t x;
+      if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        x = node.value.u64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
+        x = static_cast<uint64_t>(node.value.i64);
+      } else {
+        status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.resize(sizeof(uint32_t));
       int4store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Bigunsigned: {
+      uint64_t x;
+      if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        x = node.value.u64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
+        x = static_cast<uint64_t>(node.value.i64);
+      } else {
+        status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.resize(sizeof(int64_t));
-      int8store(bin.data(), node.value.u64);
+      int8store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Varchar: {
@@ -422,7 +488,10 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
         // This will not create problems as only six digit nanoseconds
         // are stored in Timestamp2
         my_timeval myTV{epoch, (Int32)lTime.second_part};
-        bin.resize(7);
+        // Timestamp2 size: 4 bytes + 0-3 bytes for fractional seconds
+        // precision 0: 4 bytes, 1-2: 5 bytes, 3-4: 6 bytes, 5-6: 7 bytes
+        int timestamp_size = 4 + (precision + 1) / 2;
+        bin.resize(timestamp_size);
         my_timestamp_to_binary(&myTV, (uchar *)bin.data(), precision);
         break;
       } else {
@@ -431,8 +500,381 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       }
       break;
     }
+    case NdbDictionary::Column::Decimalunsigned: {
+      // Check for negative value in unsigned decimal
+      if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        if (unlikely(node.value.s.find('-') != std::string::npos)) {
+          status = RS_CLIENT_ERROR("Expecting DECIMAL UNSIGNED. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      }
+      [[fallthrough]];
+    }
+    case NdbDictionary::Column::Decimal: {
+      // Uses decimal_str2bin() which wraps MySQL's str2my_decimal() + my_decimal2binary()
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Decimal column requires string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int precision = node.col->getPrecision();
+      int scale = node.col->getScale();
+      // Use actual column binary size based on precision and scale
+      int binSize = decimal_bin_size(precision, scale);
+      bin.resize(binSize);
+      int err = decimal_str2bin(node.value.s.data(), node.value.s.length(),
+                                precision, scale, bin.data(), bin.size());
+      if (unlikely(err != E_DEC_OK && err != E_DEC_TRUNCATED)) {
+        status = RS_CLIENT_ERROR("Invalid decimal value. Expecting Decimal with Precision: " +
+            std::to_string(precision) + " and Scale: " + std::to_string(scale) +
+            ". Column: " + std::string(node.col->getName()));
+      }
+      break;
+    }
+    case NdbDictionary::Column::Date: {
+      // Uses my_date_to_binary() from MySQL (my_time.h)
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Date column requires string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      MYSQL_TIME lTime;
+      MYSQL_TIME_STATUS time_status;
+      bool ret = str_to_datetime(node.value.s.data(), node.value.s.length(),
+                                 &lTime, 0, &time_status);
+      if (unlikely(ret != 0)) {
+        status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+        break;
+      }
+      // Date should not have time components
+      if (unlikely(lTime.hour != 0 || lTime.minute != 0 || lTime.second != 0 ||
+                   lTime.second_part != 0)) {
+        status = RS_CLIENT_ERROR("Expecting only date data (no time component). Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      bin.resize(3);  // DATE is stored in 3 bytes
+      my_date_to_binary(&lTime, (uchar *)bin.data());
+      break;
+    }
+    case NdbDictionary::Column::Datetime2: {
+      // Uses TIME_to_longlong_datetime_packed() + my_datetime_packed_to_binary() from MySQL
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Datetime2 column requires string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      MYSQL_TIME lTime;
+      MYSQL_TIME_STATUS time_status;
+      bool ret = str_to_datetime(node.value.s.data(), node.value.s.length(),
+                                 &lTime, 0, &time_status);
+      if (unlikely(ret != 0)) {
+        status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+        break;
+      }
+      uint32_t precision = node.col->getPrecision();
+      int warnings = 0;
+      my_datetime_adjust_frac(&lTime, precision, &warnings, true);
+      if (unlikely(warnings != 0)) {
+        status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+        break;
+      }
+      longlong numericDateTime = TIME_to_longlong_datetime_packed(lTime);
+      // Datetime2 size: 5 bytes + 0-3 bytes for fractional seconds
+      // precision 0: 5 bytes, 1-2: 6 bytes, 3-4: 7 bytes, 5-6: 8 bytes
+      int datetime_size = 5 + (precision + 1) / 2;
+      bin.resize(datetime_size);
+      my_datetime_packed_to_binary(numericDateTime, (uchar *)bin.data(), precision);
+      break;
+    }
+    case NdbDictionary::Column::Time2: {
+      // Uses str_to_time() + TIME_to_longlong_time_packed() + my_time_packed_to_binary() from MySQL
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Time2 column requires string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      MYSQL_TIME lTime;
+      MYSQL_TIME_STATUS time_status;
+      // Use str_to_time() for TIME values (not str_to_datetime)
+      bool ret = str_to_time(node.value.s.data(), node.value.s.length(),
+                             &lTime, &time_status, 0);
+      if (unlikely(ret != 0)) {
+        status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+        break;
+      }
+      uint32_t precision = node.col->getPrecision();
+      int warnings = 0;
+      my_datetime_adjust_frac(&lTime, precision, &warnings, true);
+      if (unlikely(warnings != 0)) {
+        status = RS_CLIENT_ERROR(
+            std::string(rdrsErrorMessage(ERROR_INVALID_DATE_TIME)) +
+            std::string(" Column: ") + std::string(node.col->getName()));
+        break;
+      }
+      longlong numericTime = TIME_to_longlong_time_packed(lTime);
+      // Time2 size: 3 bytes + 0-3 bytes for fractional seconds
+      int time_size = 3 + (precision + 1) / 2;
+      bin.resize(time_size);
+      my_time_packed_to_binary(numericTime, (uchar *)bin.data(), precision);
+      break;
+    }
+    case NdbDictionary::Column::Year: {
+      // Year 1901-2155 stored as (year - 1900) in 1 byte
+      // Matches MySQL's Field_year::store() in sql/field.cc
+      int64_t yearValue = 0;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        yearValue = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        yearValue = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char *endptr = nullptr;
+        errno = 0;
+        yearValue = strtoll(node.value.s.data(), &endptr, 10);
+        if (errno != 0 || endptr != node.value.s.data() + node.value.s.length()) {
+          status = RS_CLIENT_ERROR("Invalid year value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Year column requires integer or string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      // Validate year range: 0 or 1901-2155
+      if (yearValue != 0 && (yearValue < 1901 || yearValue > 2155)) {
+        status = RS_CLIENT_ERROR("Year value out of range [1901-2155]. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      bin.resize(1);
+      if (yearValue == 0) {
+        bin[0] = 0;
+      } else {
+        bin[0] = static_cast<uint8_t>(yearValue - 1900);
+      }
+      break;
+    }
+    case NdbDictionary::Column::Char: {
+      // Fixed-length character string, zero-padded for NDB operations
+      // Matches common.cpp SetOperationPKCol() implementation
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Char column requires string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int colMaxLen = node.col->getSizeInBytes();
+      if (static_cast<int>(node.value.s.size()) > colMaxLen) {
+        status = RS_CLIENT_ERROR("String length exceeds column size. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      bin.resize(colMaxLen);
+      memcpy(bin.data(), node.value.s.data(), node.value.s.size());
+      // Zero-pad the remaining bytes (NDB operations expect zero-padded CHAR)
+      if (node.value.s.size() < static_cast<size_t>(colMaxLen)) {
+        memset(bin.data() + node.value.s.size(), 0, colMaxLen - node.value.s.size());
+      }
+      break;
+    }
+    case NdbDictionary::Column::Float: {
+      // Float stored as 4 bytes little-endian
+      // Matches MySQL's Field_float::store() using float4store()
+      double dval = 0.0;
+      if (node.value.kind == Node::ParsedValue::Kind::DOUBLE) {
+        dval = node.value.d;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        dval = static_cast<double>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        dval = static_cast<double>(node.value.u64);
+      } else {
+        status = RS_CLIENT_ERROR("Float column requires numeric value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      float fval = static_cast<float>(dval);
+      bin.resize(sizeof(float));
+      float4store(bin.data(), fval);
+      break;
+    }
+    case NdbDictionary::Column::Double: {
+      // Double stored as 8 bytes little-endian
+      // Matches MySQL's Field_double::store() using float8store()
+      double dval = 0.0;
+      if (node.value.kind == Node::ParsedValue::Kind::DOUBLE) {
+        dval = node.value.d;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        dval = static_cast<double>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        dval = static_cast<double>(node.value.u64);
+      } else {
+        status = RS_CLIENT_ERROR("Double column requires numeric value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      bin.resize(sizeof(double));
+      float8store(bin.data(), dval);
+      break;
+    }
+    case NdbDictionary::Column::Binary: {
+      // Fixed-length binary, input is base64 encoded
+      // Matches common.cpp SetOperationPKCol() implementation
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Binary column requires base64 string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int colMaxLen = node.col->getSizeInBytes();
+
+      // Pre-validate: base64 decoded size is at most (input_len * 3) / 4
+      size_t maxDecodedLen = (node.value.s.length() * 3) / 4 + 3;  // +3 for safety
+      if (unlikely(maxDecodedLen > static_cast<size_t>(colMaxLen) + 16)) {
+        // Input is way too large - reject before decoding
+        status = RS_CLIENT_ERROR("Base64 input too large for column size. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+
+      // Use a temporary buffer for decoding to avoid overflow
+      std::vector<char> tempBuf(maxDecodedLen);
+      size_t outlen = 0;
+      int result = base64_decode(node.value.s.data(), node.value.s.length(),
+                                 tempBuf.data(), &outlen, 0);
+      if (unlikely(result == 0)) {
+        status = RS_CLIENT_ERROR("Error decoding base64. Column: " +
+            std::string(node.col->getName()));
+        break;
+      } else if (unlikely(result == -1)) {
+        status = RS_CLIENT_ERROR("Base64 decode error: codec not available. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (unlikely(static_cast<int>(outlen) > colMaxLen)) {
+        status = RS_CLIENT_ERROR("Decoded data length exceeds column size. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+
+      // Copy to output buffer with zero padding
+      bin.resize(colMaxLen);
+      memcpy(bin.data(), tempBuf.data(), outlen);
+      if (outlen < static_cast<size_t>(colMaxLen)) {
+        memset(bin.data() + outlen, 0, colMaxLen - outlen);
+      }
+      break;
+    }
+    case NdbDictionary::Column::Varbinary:
+      [[fallthrough]];
+    case NdbDictionary::Column::Longvarbinary: {
+      // Variable-length binary with 1 or 2 byte length prefix
+      // Input is base64 encoded
+      // Matches common.cpp SetOperationPKCol() implementation
+      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
+        status = RS_CLIENT_ERROR("Varbinary column requires base64 string value. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int colDataLen = node.col->getLength();  // max data length (without prefix)
+      int prefixLen = (node.col->getType() == NdbDictionary::Column::Varbinary) ? 1 : 2;
+
+      // Pre-validate: base64 decoded size is at most (input_len * 3) / 4
+      size_t maxDecodedLen = (node.value.s.length() * 3) / 4 + 3;  // +3 for safety
+      if (unlikely(maxDecodedLen > static_cast<size_t>(colDataLen) + 16)) {
+        status = RS_CLIENT_ERROR("Base64 input too large for column size. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+
+      // Use a temporary buffer for decoding to avoid overflow
+      std::vector<char> tempBuf(maxDecodedLen);
+      size_t outlen = 0;
+      int result = base64_decode(node.value.s.data(), node.value.s.length(),
+                                 tempBuf.data(), &outlen, 0);
+      if (unlikely(result == 0)) {
+        status = RS_CLIENT_ERROR("Error decoding base64. Column: " +
+            std::string(node.col->getName()));
+        break;
+      } else if (unlikely(result == -1)) {
+        status = RS_CLIENT_ERROR("Base64 decode error: codec not available. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (unlikely(static_cast<int>(outlen) > colDataLen)) {
+        status = RS_CLIENT_ERROR("Decoded data length exceeds column size. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+
+      // Set the length prefix and copy data
+      bin.resize(prefixLen + outlen);
+      if (prefixLen == 1) {
+        bin[0] = static_cast<uint8_t>(outlen);
+      } else {
+        bin[0] = static_cast<uint8_t>(outlen & 0xFF);
+        bin[1] = static_cast<uint8_t>((outlen >> 8) & 0xFF);
+      }
+      memcpy(bin.data() + prefixLen, tempBuf.data(), outlen);
+      break;
+    }
+    case NdbDictionary::Column::Bit: {
+      // Bit column - accept integer or base64 string
+      // NDB stores BIT as 32-bit words and compares them in native (little-endian) order
+      Uint32 bitLen = node.col->getLength();
+      Uint32 logicalByteLen = (bitLen + 7) / 8;  // Logical bytes needed for bits
+      // Use NDB's actual record size for filter operations (word-aligned)
+      Uint32 recordByteLen = node.col->getSizeInBytesForRecord();
+
+      // Initialize buffer to zero and fill with value in little-endian format
+      bin.resize(recordByteLen, 0);
+
+      if (node.value.kind == Node::ParsedValue::Kind::INT64 ||
+          node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        // Convert integer to little-endian bytes directly into bin
+        uint64_t val = (node.value.kind == Node::ParsedValue::Kind::INT64)
+                           ? static_cast<uint64_t>(node.value.i64)
+                           : node.value.u64;
+        for (Uint32 i = 0; i < recordByteLen && i < 8; i++) {
+          bin[i] = (val >> (i * 8)) & 0xFF;
+        }
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        // Decode base64
+        size_t maxDecodedLen = (node.value.s.length() * 3) / 4 + 3;
+        std::vector<char> tempBuf(maxDecodedLen);
+        size_t outlen = 0;
+        int result = base64_decode(node.value.s.data(), node.value.s.length(),
+                                   tempBuf.data(), &outlen, 0);
+        if (unlikely(result == 0)) {
+          status = RS_CLIENT_ERROR("Error decoding base64 for Bit column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+        if (unlikely(outlen > logicalByteLen)) {
+          status = RS_CLIENT_ERROR("Decoded data too large for Bit column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+        // Copy decoded bytes directly (already in little-endian from base64)
+        memcpy(bin.data(), tempBuf.data(), outlen);
+      } else {
+        status = RS_CLIENT_ERROR("Bit column requires integer or base64 string. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      break;
+    }
     default: {
-      assert(0);
+      status = RS_CLIENT_ERROR("Unsupported column type for filter/index. Column: " +
+          std::string(node.col->getName()) + " Type: " +
+          std::to_string(node.col->getType()));
       break;
     }
   }
@@ -682,8 +1124,160 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionar
       DEB_SCAN(time_str);
       break;
     }
+    case NdbDictionary::Column::Decimal:
+    case NdbDictionary::Column::Decimalunsigned: {
+      // Uses decimal_bin2str() which wraps MySQL's bin2decimal() + decimal2string()
+      char decStr[DECIMAL_MAX_STR_LEN_IN_BYTES];
+      int precision = col->getPrecision();
+      int scale = col->getScale();
+      int binLen = col->getSizeInBytesForRecord();
+      decimal_bin2str((void*)field, binLen, precision, scale, decStr, DECIMAL_MAX_STR_LEN_IN_BYTES);
+      writer.String(decStr);
+      DEB_SCAN(decStr);
+      break;
+    }
+    case NdbDictionary::Column::Date: {
+      ///< 3 bytes - Precision down to 1 day
+      // Uses my_unpack_date() which matches MySQL's Field_newdate::get_date_internal()
+      MYSQL_TIME lTime = {};
+      my_unpack_date(&lTime, field);
+      char to[MAX_DATE_STRING_REP_LENGTH];
+      my_date_to_str(lTime, to);
+      writer.String(to);
+      DEB_SCAN(to);
+      break;
+    }
+    case NdbDictionary::Column::Datetime2: {
+      ///< 5 bytes plus 0-3 fraction
+      // Uses my_datetime_packed_from_binary() + TIME_from_longlong_datetime_packed() from MySQL
+      uint precision = col->getPrecision();
+      longlong numericDate =
+          my_datetime_packed_from_binary((const unsigned char *)field, precision);
+      MYSQL_TIME lTime;
+      TIME_from_longlong_datetime_packed(&lTime, numericDate);
+      char to[MAX_DATE_STRING_REP_LENGTH];
+      my_TIME_to_str(lTime, to, precision);
+      writer.String(to);
+      DEB_SCAN(to);
+      break;
+    }
+    case NdbDictionary::Column::Time2: {
+      ///< 3 bytes + 0-3 fraction
+      // Uses my_time_packed_from_binary() + TIME_from_longlong_time_packed() from MySQL
+      uint precision = col->getPrecision();
+      longlong numericTime =
+          my_time_packed_from_binary((const unsigned char *)field, precision);
+      MYSQL_TIME lTime;
+      TIME_from_longlong_time_packed(&lTime, numericTime);
+      char to[MAX_DATE_STRING_REP_LENGTH];
+      my_TIME_to_str(lTime, to, precision);
+      writer.String(to);
+      DEB_SCAN(to);
+      break;
+    }
+    case NdbDictionary::Column::Year: {
+      ///< Year 1901-2155 (1 byte)
+      // Matches MySQL's Field_year::val_int() in sql/field.cc
+      Int32 year = static_cast<uint8_t>(field[0]);
+      if (year != 0) {
+        year += 1900;
+      }
+      writer.Int(year);
+      DEB_SCAN(year);
+      break;
+    }
+    case NdbDictionary::Column::Char: {
+      ///< Fixed-length character string (ArrayTypeFixed)
+      // Data may be padded with spaces or null bytes
+      Uint32 colLen = col->getLength();
+      writer.String(field, colLen);
+      DEB_SCAN("[" << colLen << "] " << std::string(field, colLen));
+      break;
+    }
+    case NdbDictionary::Column::Binary: {
+      ///< Fixed-length binary (ArrayTypeFixed)
+      // Returns base64 encoded string
+      Uint32 colLen = col->getLength();
+      // Base64 output size: 4 * ceil(input_size / 3) + 1 for null terminator
+      size_t base64_len = 4 * ((colLen + 2) / 3) + 1;
+      char* base64_buf = new char[base64_len];
+      size_t outlen = 0;
+      base64_encode(field, colLen, base64_buf, &outlen, 0);
+      writer.String(base64_buf, outlen);
+      DEB_SCAN("[binary:" << colLen << "] base64_len=" << outlen);
+      delete[] base64_buf;
+      break;
+    }
+    case NdbDictionary::Column::Varbinary:
+      [[fallthrough]];
+    case NdbDictionary::Column::Longvarbinary: {
+      ///< Variable-length binary with 1 or 2 byte length prefix
+      // Returns base64 encoded string
+      const char *dataStart = nullptr;
+      Uint32 attrBytes = 0;
+      const NdbDictionary::Column::ArrayType arrayType = col->getArrayType();
+      switch (arrayType) {
+        case NdbDictionary::Column::ArrayTypeFixed:
+          dataStart = field;
+          attrBytes = col->getLength();
+          break;
+        case NdbDictionary::Column::ArrayTypeShortVar:
+          dataStart = field + 1;
+          attrBytes = static_cast<Uint8>(field[0]);
+          break;
+        case NdbDictionary::Column::ArrayTypeMediumVar:
+          dataStart = field + 2;
+          attrBytes = static_cast<Uint8>(field[0]) +
+                      (static_cast<Uint8>(field[1]) << 8);
+          break;
+        default:
+          writer.String("Error: unknown array type");
+          return;
+      }
+      // Base64 output size: 4 * ceil(input_size / 3) + 1 for null terminator
+      size_t base64_len = 4 * ((attrBytes + 2) / 3) + 1;
+      char* base64_buf = new char[base64_len];
+      size_t outlen = 0;
+      base64_encode(dataStart, attrBytes, base64_buf, &outlen, 0);
+      writer.String(base64_buf, outlen);
+      DEB_SCAN("[varbinary:" << attrBytes << "] base64_len=" << outlen);
+      delete[] base64_buf;
+      break;
+    }
+    case NdbDictionary::Column::Bit: {
+      ///< Bit field
+      // Matches pkr_operation.cpp implementation: reverse byte order, return as base64
+      Uint32 bitLen = col->getLength();
+      Uint32 byteLen = bitLen / 8;
+      Uint32 bitsInLastByte = bitLen % 8;
+      Uint32 lastMask = 0xFF;
+      if (bitsInLastByte != 0) {
+        byteLen += 1;
+        lastMask = ((1 << bitsInLastByte) - 1);
+      }
+      // Reverse byte order (NDB stores in big-endian, we want little-endian for output)
+      char reversed[BIT_MAX_SIZE_IN_BYTES];
+      const Uint8* src = reinterpret_cast<const Uint8*>(field);
+      int i = 0;
+      for (int j = byteLen - 1; j >= 0; j--) {
+        if (j == static_cast<int>(byteLen - 1)) {
+          reversed[i++] = src[j] & lastMask;
+        } else {
+          reversed[i++] = src[j];
+        }
+      }
+      // Base64 encode
+      size_t base64_len = 4 * ((byteLen + 2) / 3) + 1;
+      char* base64_buf = new char[base64_len];
+      size_t outlen = 0;
+      base64_encode(reversed, byteLen, base64_buf, &outlen, 0);
+      writer.String(base64_buf, outlen);
+      DEB_SCAN("[bit:" << bitLen << "] bytes=" << byteLen << " base64_len=" << outlen);
+      delete[] base64_buf;
+      break;
+    }
     default:
-      DEB_SCAN("Unexpected column type");
+      DEB_SCAN("Unexpected column type: " << attrType);
       writer.String("Unexpected column type");
       break;
   }
