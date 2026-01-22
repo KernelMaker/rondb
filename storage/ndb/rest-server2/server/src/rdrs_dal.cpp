@@ -1946,6 +1946,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     // End of execute phase
     if (timing_enabled) {
       timing->execute_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+      phase_start = NdbTick_getCurrentTicks();
     }
 
     Uint32 table_rec_len = NdbDictionary::getRecordRowLength(table_rec);
@@ -1963,6 +1964,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.Key("data");
     writer.StartArray();
     uint64_t rows = 0;
+
+    // Add json init time to json_serialize_us
+    if (timing_enabled) {
+      timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
 
     // Timing for fetch loop
     NDB_TICKS next_result_start, json_start;
@@ -2012,12 +2018,18 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     if (timing_enabled) {
       timing->next_result_us += NdbTick_Elapsed(next_result_start, NdbTick_getCurrentTicks()).microSec();
       timing->rows_fetched = rows;
+      phase_start = NdbTick_getCurrentTicks();
     }
 
     writer.EndArray();
     writer.Key("rows");
     writer.Uint64(rows);
     writer.EndObject();
+
+    // Add json finalize time to json_serialize_us
+    if (timing_enabled) {
+      timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
 
     if (rc == -1) {
       status = RS_RONDB_SERVER_ERROR(
@@ -2027,7 +2039,15 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
     }
+
+    // Time operation->close()
+    if (timing_enabled) {
+      phase_start = NdbTick_getCurrentTicks();
+    }
     operation->close();
+    if (timing_enabled) {
+      timing->close_operation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
   } else {
     // Table scan
     NdbScanOperation* operation = nullptr;
@@ -2074,6 +2094,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     // End of execute phase (for table scan)
     if (timing_enabled) {
       timing->execute_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+      phase_start = NdbTick_getCurrentTicks();
     }
 
     Uint32 table_rec_len = NdbDictionary::getRecordRowLength(table_rec);
@@ -2090,6 +2111,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.Key("data");
     writer.StartArray();
     uint64_t rows = 0;
+
+    // Add json init time to json_serialize_us
+    if (timing_enabled) {
+      timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
 
     // Timing for fetch loop (table scan)
     NDB_TICKS next_result_start, json_start;
@@ -2139,12 +2165,18 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     if (timing_enabled) {
       timing->next_result_us += NdbTick_Elapsed(next_result_start, NdbTick_getCurrentTicks()).microSec();
       timing->rows_fetched = rows;
+      phase_start = NdbTick_getCurrentTicks();
     }
 
     writer.EndArray();
     writer.Key("rows");
     writer.Uint64(rows);
     writer.EndObject();
+
+    // Add json finalize time to json_serialize_us
+    if (timing_enabled) {
+      timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
 
     if (rc == -1) {
       status = RS_RONDB_SERVER_ERROR(
@@ -2154,7 +2186,15 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
     }
+
+    // Time operation->close()
+    if (timing_enabled) {
+      phase_start = NdbTick_getCurrentTicks();
+    }
     operation->close();
+    if (timing_enabled) {
+      timing->close_operation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    }
   }
 
   return status;
@@ -2182,12 +2222,25 @@ void ResetScanParams(ScanReadParams& scan_params) {
 
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc,
                     ScanPhaseTiming* timing) {
+  bool timing_enabled = (timing != nullptr);
+  NDB_TICKS phase_start;
+
+  // Time GetNdbObject
+  if (timing_enabled) {
+    phase_start = NdbTick_getCurrentTicks();
+  }
+
   Ndb *ndb_object  = nullptr;
   RS_Status status = rdrsRonDBConnectionPool->GetNdbObject(&ndb_object,
                                                            threadIndex);
   if (unlikely(status.http_code != SUCCESS)) {
     return status;
   }
+
+  if (timing_enabled) {
+    timing->get_ndb_object_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+  }
+
   DATA_OP_RETRY_HANDLER(
     status = perform_scan(scan_params, ndb_object, doc, timing);
     HandleSchemaErrors(ndb_object,
@@ -2198,8 +2251,19 @@ RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void*
       ResetScanParams(scan_params);
     }
   )
+
+  // Time ReturnNdbObject
+  if (timing_enabled) {
+    phase_start = NdbTick_getCurrentTicks();
+  }
+
   rdrsRonDBConnectionPool->ReturnNdbObject(ndb_object,
                                            &status,
                                            threadIndex);
+
+  if (timing_enabled) {
+    timing->return_ndb_object_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+  }
+
   return status;
 }
