@@ -183,15 +183,16 @@ void ScanReadCtrl::ScanRead(
     }
   }
 
-  // End of validation phase (includes auth)
-  if (timing_enabled) {
-    timing.validation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
-  }
-
   RJ_Document doc;
   RJ_StringBuffer buf;
   // TODO (Zhao)
   buf.Reserve(256 * 1024);
+
+  // End of validation phase (includes auth and buffer reserve)
+  if (timing_enabled) {
+    timing.validation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+  }
+
   status = scan_read(reqStruct, currentThreadIndex, (void*)&buf,
                      timing_enabled ? &timing : nullptr);
 

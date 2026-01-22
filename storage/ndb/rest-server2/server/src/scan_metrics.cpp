@@ -27,6 +27,9 @@ Uint32 g_slow_scan_buffer_size = 1000;
 // Global buffer
 SlowScanBuffer* g_slow_scan_buffer = nullptr;
 
+// Global per-thread statistics array (fixed size, statically allocated)
+PerThreadScanStats g_per_thread_scan_stats[MAX_SCAN_THREADS];
+
 // SlowScanBuffer implementation
 SlowScanBuffer::SlowScanBuffer(size_t capacity)
     : capacity_(capacity), head_(0), count_(0) {
@@ -98,17 +101,45 @@ void cleanupScanMetrics() {
 }
 
 void maybeRecordSlowScan(const ScanPhaseTiming& timing, Uint32 thread_id) {
-  // Skip if timing disabled or buffer not initialized
-  if (!g_scan_timing_enabled || g_slow_scan_buffer == nullptr) {
+  // Skip if timing disabled
+  if (!g_scan_timing_enabled) {
     return;
   }
 
-  // Only record if exceeds threshold
-  if (timing.total_us >= g_slow_scan_threshold_us) {
+  // Always record to per-thread statistics (no mutex, thread-local write)
+  if (thread_id < MAX_SCAN_THREADS) {
+    g_per_thread_scan_stats[thread_id].record(timing.total_us);
+  }
+
+  // Only record to slow scan buffer if exceeds threshold
+  if (g_slow_scan_buffer != nullptr &&
+      timing.total_us >= g_slow_scan_threshold_us) {
     SlowScanEntry entry;
     entry.timing = timing;
     entry.timestamp_ms = getCurrentTimestampMs();
     entry.thread_id = thread_id;
     g_slow_scan_buffer->add(entry);
+  }
+}
+
+AggregatedScanStats getAggregatedScanStats() {
+  AggregatedScanStats agg;
+  for (Uint32 i = 0; i < MAX_SCAN_THREADS; i++) {
+    const PerThreadScanStats& ts = g_per_thread_scan_stats[i];
+    agg.total_count += ts.total_count;
+    agg.sum_us += ts.sum_us;
+    if (ts.max_us > agg.max_us) {
+      agg.max_us = ts.max_us;
+    }
+    for (Uint32 j = 0; j < SCAN_HISTOGRAM_BUCKETS; j++) {
+      agg.buckets[j] += ts.buckets[j];
+    }
+  }
+  return agg;
+}
+
+void clearAllScanStats() {
+  for (Uint32 i = 0; i < MAX_SCAN_THREADS; i++) {
+    g_per_thread_scan_stats[i].clear();
   }
 }
