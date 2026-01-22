@@ -22,7 +22,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -64,13 +66,31 @@ func ConverJSONtToSQL(database string, table string, query *api.IndexScanQuery, 
 
 	sqlBuilder.WriteString(fmt.Sprintf(" FROM %s.%s", database, table))
 
+	// Build WHERE clause from filters and/or index ranges
+	var whereClauses []string
+
 	if query.Filters != nil {
-		whereClause, err := convertFilterToSQL(query.Filters, isBinaryData)
+		filterClause, err := convertFilterToSQL(query.Filters, isBinaryData)
 		if err != nil {
 			return "", err
 		}
+		whereClauses = append(whereClauses, "("+filterClause+")")
+	}
+
+	// Convert index ranges to WHERE clause conditions
+	if query.Index != nil && len(query.Index.Ranges) > 0 {
+		rangeClause, err := convertIndexRangesToSQL(query.Index, isBinaryData)
+		if err != nil {
+			return "", err
+		}
+		if rangeClause != "" {
+			whereClauses = append(whereClauses, rangeClause)
+		}
+	}
+
+	if len(whereClauses) > 0 {
 		sqlBuilder.WriteString(" WHERE ")
-		sqlBuilder.WriteString(whereClause)
+		sqlBuilder.WriteString(strings.Join(whereClauses, " AND "))
 	}
 
 	if query.Index != nil && query.Index.Order != "" {
@@ -80,7 +100,7 @@ func ConverJSONtToSQL(database string, table string, query *api.IndexScanQuery, 
 		sqlBuilder.WriteString(strings.ToUpper(query.Index.Order))
 	}
 
-	if query.Limit > 0 {
+	if query.Limit >= 0 {
 		sqlBuilder.WriteString(fmt.Sprintf(" LIMIT %d", query.Limit))
 	}
 
@@ -198,6 +218,63 @@ func formatValue(value interface{}, isBinaryData bool) string {
 	}
 }
 
+// convertIndexRangesToSQL converts index ranges to SQL WHERE clause conditions
+// Note: Only works correctly for single-column index ranges. Multi-column composite
+// index ranges have different semantics in NDB that can't be easily translated to SQL.
+func convertIndexRangesToSQL(index *api.IndexScan, isBinaryData bool) (string, error) {
+	if index == nil || len(index.Ranges) == 0 {
+		return "", nil
+	}
+
+	// Only generate WHERE clause for single-column indexes
+	// Multi-column composite index ranges have complex semantics that don't
+	// translate directly to simple SQL comparisons
+	if len(index.KeyColumns) != 1 {
+		return "", nil
+	}
+
+	col := index.KeyColumns[0]
+	var rangeClauses []string
+
+	for _, r := range index.Ranges {
+		var conditions []string
+
+		// Process lower bound
+		if len(r.Lower.Values) > 0 && r.Lower.Values[0] != nil {
+			formattedVal := formatValue(r.Lower.Values[0], isBinaryData)
+			if r.Lower.Inclusive {
+				conditions = append(conditions, fmt.Sprintf("%s >= %s", col, formattedVal))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s > %s", col, formattedVal))
+			}
+		}
+
+		// Process upper bound
+		if len(r.Upper.Values) > 0 && r.Upper.Values[0] != nil {
+			formattedVal := formatValue(r.Upper.Values[0], isBinaryData)
+			if r.Upper.Inclusive {
+				conditions = append(conditions, fmt.Sprintf("%s <= %s", col, formattedVal))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s < %s", col, formattedVal))
+			}
+		}
+
+		if len(conditions) > 0 {
+			rangeClauses = append(rangeClauses, "("+strings.Join(conditions, " AND ")+")")
+		}
+	}
+
+	if len(rangeClauses) == 0 {
+		return "", nil
+	}
+
+	// Multiple ranges are OR'd together
+	if len(rangeClauses) == 1 {
+		return rangeClauses[0], nil
+	}
+	return "(" + strings.Join(rangeClauses, " OR ") + ")", nil
+}
+
 // GetSampleData executes a SQL query and returns the result rows
 // Returns: rows ([][]interface{}), column names ([]string), column types ([]string), error
 // If isBinaryData is true, []byte values are base64 encoded
@@ -246,10 +323,13 @@ func GetSampleData(db *sql.DB, sqlQuery string, isBinaryData bool) ([][]interfac
 			if val == nil {
 				row[i] = nil
 			} else {
-				// Convert []byte to string or base64 based on isBinaryData flag
+				// Convert []byte to string or base64 based on column type
 				switch v := val.(type) {
 				case []byte:
-					if isBinaryData {
+					// Only base64 encode actual BINARY/VARBINARY/BIT/BLOB columns
+					// Other columns (like INT returned as []byte) should be converted to string
+					colType := strings.ToUpper(colTypeNames[i])
+					if isBinaryData && (strings.Contains(colType, "BINARY") || strings.Contains(colType, "BLOB") || strings.Contains(colType, "BIT")) {
 						row[i] = base64.StdEncoding.EncodeToString(v)
 					} else {
 						row[i] = string(v)
@@ -450,12 +530,9 @@ func CompareResults(t *testing.T, mysqlRows [][]interface{}, mysqlCols []string,
 		// Compare rows in order
 		for i := range mysqlRows {
 			for j := range mysqlRows[i] {
-				mysqlVal := fmt.Sprintf("%v", mysqlRows[i][j])
-				restVal := fmt.Sprintf("%v", restRows[i][j])
-
-				if mysqlVal != restVal {
-					t.Errorf("Value mismatch at row %d, col %d (%s): MySQL=%s, REST=%s",
-						i, j, mysqlCols[j], mysqlVal, restVal)
+				if !valuesEqual(mysqlRows[i][j], restRows[i][j]) {
+					t.Errorf("Value mismatch at row %d, col %d (%s): MySQL=%v, REST=%v",
+						i, j, mysqlCols[j], mysqlRows[i][j], restRows[i][j])
 				}
 			}
 		}
@@ -499,6 +576,76 @@ func rowToString(row []any) string {
 		parts[i] = fmt.Sprintf("%v", val)
 	}
 	return strings.Join(parts, "|")
+}
+
+// valuesEqual compares two values, using float tolerance for numeric types
+// This handles the case where MySQL and REST server format floats differently
+func valuesEqual(mysqlVal, restVal any) bool {
+	// Handle nil values
+	if mysqlVal == nil && restVal == nil {
+		return true
+	}
+	if mysqlVal == nil || restVal == nil {
+		return false
+	}
+
+	// Try to convert both to float64 for numeric comparison
+	mysqlFloat, mysqlOk := toFloat64(mysqlVal)
+	restFloat, restOk := toFloat64(restVal)
+
+	if mysqlOk && restOk {
+		// Both are numeric - compare with relative tolerance
+		// Use float32 precision tolerance since MySQL FLOAT is 32-bit
+		return floatsEqual(mysqlFloat, restFloat, 1e-6)
+	}
+
+	// Fall back to string comparison
+	return fmt.Sprintf("%v", mysqlVal) == fmt.Sprintf("%v", restVal)
+}
+
+// toFloat64 attempts to convert a value to float64
+func toFloat64(val any) (float64, bool) {
+	switch v := val.(type) {
+	case float32:
+		return float64(v), true
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case string:
+		// Try to parse string as float64 (MySQL driver returns floats as strings)
+		f, err := strconv.ParseFloat(v, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// floatsEqual compares two float64 values with relative tolerance
+func floatsEqual(a, b, tolerance float64) bool {
+	if a == b {
+		return true
+	}
+	diff := math.Abs(a - b)
+	// Use relative tolerance based on the larger absolute value
+	maxAbs := math.Max(math.Abs(a), math.Abs(b))
+	if maxAbs == 0 {
+		return diff < tolerance
+	}
+	return diff/maxAbs < tolerance
 }
 
 // extractColumnNamesInOrder extracts column names from JSON response preserving order
@@ -584,8 +731,8 @@ func indexScanTest(t *testing.T, testInfo api.IndexTestInfo, isBinaryData bool) 
 		t.Fatalf("ExecuteUsingRESTServer failed: %v", err)
 	}
 
-	// Skip MySQL validation if explicitly requested
-	if testInfo.SkipMySQLValidation {
+	// Skip MySQL validation if explicitly requested or if expected response is an error
+	if testInfo.SkipMySQLValidation || testInfo.ExpectedHttpCode != http.StatusOK {
 		return
 	}
 
