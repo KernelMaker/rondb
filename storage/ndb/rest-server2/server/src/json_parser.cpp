@@ -2036,6 +2036,9 @@ RS_Status JSONParser::scan_parse(simdjson::padded_string_view reqBody,
     return handle_simdjson_error(
         limitVal.error(), doc, currentLocation);
   } else if (unlikely(limitVal.is_null())) {
+    return CRS_Status(static_cast<HTTP_CODE>(
+          drogon::HttpStatusCode::k400BadRequest),
+        ERROR_SCAN_MISSING_LIMIT, std::string(rdrsErrorMessage(ERROR_SCAN_MISSING_LIMIT))).status;
   } else {
     error = limitVal.get(limit);
     if (unlikely(error != simdjson::SUCCESS)) {

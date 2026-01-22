@@ -3178,6 +3178,675 @@ func TestDataTypesLongVarbinary(t *testing.T) {
 	arrayColumnTest(t, "table1", testdbs.DB018, true, 256, DATA_DOES_NOT_NEED_BINARY_ENCODING)
 }
 
+// =========================================================================
+// Index Range Scan Tests - Tests index bounds (lower/upper) for each data type
+// These tests use DB030 which has indexed columns of various types
+// =========================================================================
+
+// Test index range scans on integer types
+func TestIndexRangeScanIntTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "int_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"tinyint_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_tinyint",
+					KeyColumns: []string{"col_tinyint"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-64}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{64}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"tinyint_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_tinyint_unsigned",
+					KeyColumns: []string{"col_tinyint_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{64}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{192}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"smallint_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_smallint",
+					KeyColumns: []string{"col_smallint"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-16384}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{16384}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"smallint_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_smallint_unsigned",
+					KeyColumns: []string{"col_smallint_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{16384}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{49152}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"mediumint_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_mediumint",
+					KeyColumns: []string{"col_mediumint"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-4194304}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{4194304}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"mediumint_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_mediumint_unsigned",
+					KeyColumns: []string{"col_mediumint_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{4194304}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{12582912}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"int_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int",
+					KeyColumns: []string{"col_int"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-1073741824}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{1073741824}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"int_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int_unsigned",
+					KeyColumns: []string{"col_int_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{1073741824}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{3221225472}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"bigint_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_bigint",
+					KeyColumns: []string{"col_bigint"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{int64(-4611686018427387904)}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{int64(4611686018427387904)}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"bigint_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_bigint_unsigned",
+					KeyColumns: []string{"col_bigint_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{uint64(4611686018427387904)}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{uint64(13835058055282163712)}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans on float/double types
+func TestIndexRangeScanFloatTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "float_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"float_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_float",
+					KeyColumns: []string{"col_float"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-100.25}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{100.25}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"double_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_double",
+					KeyColumns: []string{"col_double"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-100000.654321}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{100000.654321}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans on decimal types
+func TestIndexRangeScanDecimalTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "decimal_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"decimal_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_decimal",
+					KeyColumns: []string{"col_decimal"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"-50000000.50"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"50000000.50"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"decimal_unsigned_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_decimal_unsigned",
+					KeyColumns: []string{"col_decimal_unsigned"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"25000000.25"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"90000000.00"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans on string types (CHAR, VARCHAR)
+func TestIndexRangeScanStringTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "string_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"char_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_char",
+					KeyColumns: []string{"col_char"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"BBBB"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"FFFF"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"varchar_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_varchar",
+					KeyColumns: []string{"col_varchar"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"beta_002"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"epsilon_005"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans on binary types
+func TestIndexRangeScanBinaryTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "binary_range_table"
+
+	// Binary values from DB030.sql:
+	// X'0000000000000001', X'0000000000000010', X'0000000000000100', etc.
+	// These are base64 encoded for the API
+	lowBinary := base64.StdEncoding.EncodeToString([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10})
+	highBinary := base64.StdEncoding.EncodeToString([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00})
+
+	lowVarbinary := base64.StdEncoding.EncodeToString([]byte{0x00, 0x10})
+	highVarbinary := base64.StdEncoding.EncodeToString([]byte{0x00, 0x10, 0x00, 0x00})
+
+	tests := map[string]api.IndexTestInfo{
+		"binary_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_binary",
+					KeyColumns: []string{"col_binary"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{lowBinary}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{highBinary}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"varbinary_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_varbinary",
+					KeyColumns: []string{"col_varbinary"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{lowVarbinary}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{highVarbinary}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_NEEDS_BINARY_ENCODING)
+}
+
+// Test index range scans on date/time types
+func TestIndexRangeScanDateTimeTypes(t *testing.T) {
+	database := testdbs.DB030
+	table := "datetime_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"date_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_date",
+					KeyColumns: []string{"col_date"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"2021-03-15"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"2025-06-15"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"time_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_time",
+					KeyColumns: []string{"col_time"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"06:30:00"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"18:30:00"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"datetime_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_datetime",
+					KeyColumns: []string{"col_datetime"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"2021-03-15 06:30:00"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"2025-06-15 10:15:30"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"timestamp_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_timestamp",
+					KeyColumns: []string{"col_timestamp"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{"2021-03-15 06:30:00"}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{"2025-06-15 10:15:30"}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"year_range": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_year",
+					KeyColumns: []string{"col_year"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{2021}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{2025}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans with exclusive bounds
+func TestIndexRangeScanExclusiveBounds(t *testing.T) {
+	database := testdbs.DB030
+	table := "int_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"int_exclusive_lower": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int",
+					KeyColumns: []string{"col_int"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-536870912}, Inclusive: false},
+							Upper: api.BoundedScan{Values: []any{536870912}, Inclusive: true},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"int_exclusive_upper": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int",
+					KeyColumns: []string{"col_int"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-536870912}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{536870912}, Inclusive: false},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+		"int_both_exclusive": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int",
+					KeyColumns: []string{"col_int"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-536870912}, Inclusive: false},
+							Upper: api.BoundedScan{Values: []any{536870912}, Inclusive: false},
+						},
+					},
+					Order: "asc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
+// Test index range scans with descending order
+func TestIndexRangeScanDescOrder(t *testing.T) {
+	database := testdbs.DB030
+	table := "int_range_table"
+
+	tests := map[string]api.IndexTestInfo{
+		"int_desc_order": {
+			IndexScanReq: api.IndexScanQuery{
+				Limit: 100,
+				Index: &api.IndexScan{
+					Name:       "idx_int",
+					KeyColumns: []string{"col_int"},
+					Ranges: []api.RangeScan{
+						{
+							Lower: api.BoundedScan{Values: []any{-1073741824}, Inclusive: true},
+							Upper: api.BoundedScan{Values: []any{1073741824}, Inclusive: true},
+						},
+					},
+					Order: "desc",
+				},
+			},
+			Table:            table,
+			DB:               database,
+			ExpectedHttpCode: http.StatusOK,
+			BodyContains:     EMPTY_STRING,
+			RowsOrder:        ROWS_ORDER_MUST_MATCH,
+		},
+	}
+
+	indexScanTestMultiple(t, tests, DATA_DOES_NOT_NEED_BINARY_ENCODING)
+}
+
 // arrayColumnTest is a helper function for testing char/varchar/binary column types
 func arrayColumnTest(t *testing.T, table string, database string, isBinary bool, colWidth int, padding bool) {
 	tests := map[string]api.IndexTestInfo{

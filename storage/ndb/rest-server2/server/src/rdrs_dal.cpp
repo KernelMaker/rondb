@@ -318,111 +318,304 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
   bin.clear();
   switch(node.col->getType()) {
     case NdbDictionary::Column::Tinyint: {
-      int8_t x = node.value.i64;
+      int64_t val;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        val = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64 &&
+                 node.value.u64 <= static_cast<uint64_t>(INT8_MAX)) {
+        val = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        val = strtoll(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0') {
+          status = RS_CLIENT_ERROR("Invalid value for TINYINT column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Invalid value for TINYINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (val < INT8_MIN || val > INT8_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for TINYINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int8_t x = val;
       bin.push_back(*reinterpret_cast<int8_t*>(&x));
       break;
     }
     case NdbDictionary::Column::Smallint: {
-      int16_t x = node.value.i64;
+      int64_t val;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        val = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64 &&
+                 node.value.u64 <= static_cast<uint64_t>(INT16_MAX)) {
+        val = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        val = strtoll(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0') {
+          status = RS_CLIENT_ERROR("Invalid value for SMALLINT column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Invalid value for SMALLINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (val < INT16_MIN || val > INT16_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for SMALLINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int16_t x = val;
       bin.resize(sizeof(int16_t));
       int2store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Mediumint: {
-      int32_t x = node.value.i64;
+      // MEDIUMINT is 3-byte signed: -8388608 to 8388607
+      int64_t val;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        val = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64 &&
+                 node.value.u64 <= 8388607) {
+        val = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        val = strtoll(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0') {
+          status = RS_CLIENT_ERROR("Invalid value for MEDIUMINT column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Invalid value for MEDIUMINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (val < -8388608 || val > 8388607) {
+        status = RS_CLIENT_ERROR("Value out of range for MEDIUMINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int32_t x = val;
       bin.resize(3);
       int3store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Int: {
-      int32_t x = node.value.i64;
+      int64_t val;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        val = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64 &&
+                 node.value.u64 <= static_cast<uint64_t>(INT32_MAX)) {
+        val = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        val = strtoll(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0') {
+          status = RS_CLIENT_ERROR("Invalid value for INT column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Invalid value for INT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      if (val < INT32_MIN || val > INT32_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for INT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      int32_t x = val;
       bin.resize(sizeof(int32_t));
       int4store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Bigint: {
+      int64_t val;
+      if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        val = node.value.i64;
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64 &&
+                 node.value.u64 <= static_cast<uint64_t>(INT64_MAX)) {
+        val = static_cast<int64_t>(node.value.u64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoll(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' || errno == ERANGE) {
+          status = RS_CLIENT_ERROR("Invalid or out of range value for BIGINT column. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
+      } else {
+        status = RS_CLIENT_ERROR("Invalid value for BIGINT column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
       bin.resize(sizeof(int64_t));
-      int8store(bin.data(), node.value.i64);
+      int8store(bin.data(), val);
       break;
     }
     case NdbDictionary::Column::Tinyunsigned: {
       // JSON parser may store positive values as i64, so check both
-      uint8_t x;
+      uint64_t val;
       if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
-        x = node.value.u64;
+        val = node.value.u64;
       } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
-        x = static_cast<uint64_t>(node.value.i64);
+        val = static_cast<uint64_t>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoull(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' ||
+            errno == ERANGE || node.value.s[0] == '-') {
+          status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
       } else {
         status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
             std::string(node.col->getName()));
         break;
       }
+      if (val > UINT8_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for TINYINT UNSIGNED column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      uint8_t x = val;
       bin.push_back(*reinterpret_cast<uint8_t*>(&x));
       break;
     }
     case NdbDictionary::Column::Smallunsigned: {
-      uint16_t x;
+      uint64_t val;
       if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
-        x = node.value.u64;
+        val = node.value.u64;
       } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
-        x = static_cast<uint64_t>(node.value.i64);
+        val = static_cast<uint64_t>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoull(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' ||
+            errno == ERANGE || node.value.s[0] == '-') {
+          status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
       } else {
         status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
             std::string(node.col->getName()));
         break;
       }
+      if (val > UINT16_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for SMALLINT UNSIGNED column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      uint16_t x = val;
       bin.resize(sizeof(uint16_t));
       int2store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Mediumunsigned: {
-      uint32_t x;
+      // MEDIUMINT UNSIGNED is 3-byte: 0 to 16777215
+      uint64_t val;
       if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
-        x = node.value.u64;
+        val = node.value.u64;
       } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
-        x = static_cast<uint64_t>(node.value.i64);
+        val = static_cast<uint64_t>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoull(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' ||
+            errno == ERANGE || node.value.s[0] == '-') {
+          status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
       } else {
         status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
             std::string(node.col->getName()));
         break;
       }
+      if (val > 16777215) {
+        status = RS_CLIENT_ERROR("Value out of range for MEDIUMINT UNSIGNED column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      uint32_t x = val;
       bin.resize(3);
       int3store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Unsigned: {
-      uint32_t x;
+      uint64_t val;
       if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
-        x = node.value.u64;
+        val = node.value.u64;
       } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
-        x = static_cast<uint64_t>(node.value.i64);
+        val = static_cast<uint64_t>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoull(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' ||
+            errno == ERANGE || node.value.s[0] == '-') {
+          status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
       } else {
         status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
             std::string(node.col->getName()));
         break;
       }
+      if (val > UINT32_MAX) {
+        status = RS_CLIENT_ERROR("Value out of range for INT UNSIGNED column. Column: " +
+            std::string(node.col->getName()));
+        break;
+      }
+      uint32_t x = val;
       bin.resize(sizeof(uint32_t));
       int4store(bin.data(), x);
       break;
     }
     case NdbDictionary::Column::Bigunsigned: {
-      uint64_t x;
+      uint64_t val;
       if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
-        x = node.value.u64;
+        val = node.value.u64;
       } else if (node.value.kind == Node::ParsedValue::Kind::INT64 && node.value.i64 >= 0) {
-        x = static_cast<uint64_t>(node.value.i64);
+        val = static_cast<uint64_t>(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        char* endptr = nullptr;
+        errno = 0;
+        val = strtoull(node.value.s.c_str(), &endptr, 10);
+        if (endptr == node.value.s.c_str() || *endptr != '\0' ||
+            errno == ERANGE || node.value.s[0] == '-') {
+          status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
+              std::string(node.col->getName()));
+          break;
+        }
       } else {
         status = RS_CLIENT_ERROR("Invalid unsigned value. Column: " +
             std::string(node.col->getName()));
         break;
       }
       bin.resize(sizeof(int64_t));
-      int8store(bin.data(), x);
+      int8store(bin.data(), val);
       break;
     }
     case NdbDictionary::Column::Varchar: {
       if (node.value.s.size() > node.col->getLength()) {
-        status = RS_CLIENT_ERROR("The provided string is too long. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " The provided string is too long. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -435,7 +628,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
     }
     case NdbDictionary::Column::Longvarchar: {
       if (node.value.s.size() > node.col->getLength()) {
-        status = RS_CLIENT_ERROR("The provided string is too long. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " The provided string is too long. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -504,8 +698,20 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       // Check for negative value in unsigned decimal
       if (node.value.kind == Node::ParsedValue::Kind::STRING) {
         if (unlikely(node.value.s.find('-') != std::string::npos)) {
-          status = RS_CLIENT_ERROR("Expecting DECIMAL UNSIGNED. Column: " +
-              std::string(node.col->getName()));
+          status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+              " Expecting DECIMAL UNSIGNED. Column: " + std::string(node.col->getName()));
+          break;
+        }
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        if (unlikely(node.value.i64 < 0)) {
+          status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+              " Expecting DECIMAL UNSIGNED. Column: " + std::string(node.col->getName()));
+          break;
+        }
+      } else if (node.value.kind == Node::ParsedValue::Kind::DOUBLE) {
+        if (unlikely(node.value.d < 0)) {
+          status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+              " Expecting DECIMAL UNSIGNED. Column: " + std::string(node.col->getName()));
           break;
         }
       }
@@ -513,8 +719,22 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
     }
     case NdbDictionary::Column::Decimal: {
       // Uses decimal_str2bin() which wraps MySQL's str2my_decimal() + my_decimal2binary()
-      if (node.value.kind != Node::ParsedValue::Kind::STRING) {
-        status = RS_CLIENT_ERROR("Decimal column requires string value. Column: " +
+      // Convert numeric values to string for decimal processing
+      std::string decimalStr;
+      if (node.value.kind == Node::ParsedValue::Kind::STRING) {
+        decimalStr = node.value.s;
+      } else if (node.value.kind == Node::ParsedValue::Kind::DOUBLE) {
+        // Use high precision for double to string conversion
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.15g", node.value.d);
+        decimalStr = buf;
+      } else if (node.value.kind == Node::ParsedValue::Kind::INT64) {
+        decimalStr = std::to_string(node.value.i64);
+      } else if (node.value.kind == Node::ParsedValue::Kind::UINT64) {
+        decimalStr = std::to_string(node.value.u64);
+      } else {
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+            " Decimal column requires numeric or string value. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -523,11 +743,12 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       // Use actual column binary size based on precision and scale
       int binSize = decimal_bin_size(precision, scale);
       bin.resize(binSize);
-      int err = decimal_str2bin(node.value.s.data(), node.value.s.length(),
+      int err = decimal_str2bin(decimalStr.data(), decimalStr.length(),
                                 precision, scale, bin.data(), bin.size());
       if (unlikely(err != E_DEC_OK && err != E_DEC_TRUNCATED)) {
-        status = RS_CLIENT_ERROR("Invalid decimal value. Expecting Decimal with Precision: " +
-            std::to_string(precision) + " and Scale: " + std::to_string(scale) +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+            " Expecting Decimal with Precision: " + std::to_string(precision) +
+            " and Scale: " + std::to_string(scale) +
             ". Column: " + std::string(node.col->getName()));
       }
       break;
@@ -552,8 +773,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       // Date should not have time components
       if (unlikely(lTime.hour != 0 || lTime.minute != 0 || lTime.second != 0 ||
                    lTime.second_part != 0)) {
-        status = RS_CLIENT_ERROR("Expecting only date data (no time component). Column: " +
-            std::string(node.col->getName()));
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Expecting only date data. Column: " + std::string(node.col->getName()));
         break;
       }
       bin.resize(3);  // DATE is stored in 3 bytes
@@ -652,7 +873,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       }
       // Validate year range: 0 or 1901-2155
       if (yearValue != 0 && (yearValue < 1901 || yearValue > 2155)) {
-        status = RS_CLIENT_ERROR("Year value out of range [1901-2155]. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_WRONG_DATA_TYPE)) +
+            " Year value out of range [1901-2155]. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -674,7 +896,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       }
       int colMaxLen = node.col->getSizeInBytes();
       if (static_cast<int>(node.value.s.size()) > colMaxLen) {
-        status = RS_CLIENT_ERROR("String length exceeds column size. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " String length exceeds column size. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -687,6 +910,12 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       break;
     }
     case NdbDictionary::Column::Float: {
+      // Check if this is a PK column - hash indexes on float are not supported
+      if (node.col->getPrimaryKey()) {
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_UNSUPPORTED_HASH_INDEX)) +
+            " Column: " + std::string(node.col->getName()));
+        break;
+      }
       // Float stored as 4 bytes little-endian
       // Matches MySQL's Field_float::store() using float4store()
       double dval = 0.0;
@@ -707,6 +936,12 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       break;
     }
     case NdbDictionary::Column::Double: {
+      // Check if this is a PK column - hash indexes on double are not supported
+      if (node.col->getPrimaryKey()) {
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_UNSUPPORTED_HASH_INDEX)) +
+            " Column: " + std::string(node.col->getName()));
+        break;
+      }
       // Double stored as 8 bytes little-endian
       // Matches MySQL's Field_double::store() using float8store()
       double dval = 0.0;
@@ -739,7 +974,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       size_t maxDecodedLen = (node.value.s.length() * 3) / 4 + 3;  // +3 for safety
       if (unlikely(maxDecodedLen > static_cast<size_t>(colMaxLen) + 16)) {
         // Input is way too large - reject before decoding
-        status = RS_CLIENT_ERROR("Base64 input too large for column size. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Base64 input too large for column size. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -750,16 +986,19 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       int result = base64_decode(node.value.s.data(), node.value.s.length(),
                                  tempBuf.data(), &outlen, 0);
       if (unlikely(result == 0)) {
-        status = RS_CLIENT_ERROR("Error decoding base64. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Error decoding base64. Column: " +
             std::string(node.col->getName()));
         break;
       } else if (unlikely(result == -1)) {
-        status = RS_CLIENT_ERROR("Base64 decode error: codec not available. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Base64 decode error: codec not available. Column: " +
             std::string(node.col->getName()));
         break;
       }
       if (unlikely(static_cast<int>(outlen) > colMaxLen)) {
-        status = RS_CLIENT_ERROR("Decoded data length exceeds column size. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Decoded data length exceeds column size. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -789,7 +1028,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       // Pre-validate: base64 decoded size is at most (input_len * 3) / 4
       size_t maxDecodedLen = (node.value.s.length() * 3) / 4 + 3;  // +3 for safety
       if (unlikely(maxDecodedLen > static_cast<size_t>(colDataLen) + 16)) {
-        status = RS_CLIENT_ERROR("Base64 input too large for column size. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Base64 input too large for column size. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -800,16 +1040,19 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
       int result = base64_decode(node.value.s.data(), node.value.s.length(),
                                  tempBuf.data(), &outlen, 0);
       if (unlikely(result == 0)) {
-        status = RS_CLIENT_ERROR("Error decoding base64. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Error decoding base64. Column: " +
             std::string(node.col->getName()));
         break;
       } else if (unlikely(result == -1)) {
-        status = RS_CLIENT_ERROR("Base64 decode error: codec not available. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Base64 decode error: codec not available. Column: " +
             std::string(node.col->getName()));
         break;
       }
       if (unlikely(static_cast<int>(outlen) > colDataLen)) {
-        status = RS_CLIENT_ERROR("Decoded data length exceeds column size. Column: " +
+        status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+            " Decoded data length exceeds column size. Column: " +
             std::string(node.col->getName()));
         break;
       }
@@ -858,7 +1101,8 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
           break;
         }
         if (unlikely(outlen > logicalByteLen)) {
-          status = RS_CLIENT_ERROR("Decoded data too large for Bit column. Column: " +
+          status = RS_CLIENT_ERROR(std::string(rdrsErrorMessage(ERROR_INVALID_COLUMN_DATA)) +
+              " Decoded data too large for Bit column. Column: " +
               std::string(node.col->getName()));
           break;
         }
@@ -879,6 +1123,19 @@ RS_Status GenerateBinary(Node& node, std::vector<uint8_t>& bin) {
     }
   }
   return status;
+}
+
+void ClearFilterColumns(std::shared_ptr<FilterNode>& node) {
+  if (node == nullptr) {
+    return;
+  }
+  if (node->type != FilterNode::Type::LOGIC) {
+    node->col = nullptr;
+  } else {
+    for (auto& child : node->children) {
+      ClearFilterColumns(child);
+    }
+  }
 }
 
 RS_Status BindFilterColumns(std::shared_ptr<FilterNode>& node,
@@ -1188,8 +1445,12 @@ void WriteColumnData2Json(RJ_Writer& writer, Uint32 attrType, const NdbDictionar
     }
     case NdbDictionary::Column::Char: {
       ///< Fixed-length character string (ArrayTypeFixed)
-      // Data may be padded with spaces or null bytes
+      // Data may be padded with spaces - trim trailing spaces to match MySQL behavior
       Uint32 colLen = col->getLength();
+      // Find actual string length by removing trailing spaces
+      while (colLen > 0 && field[colLen - 1] == ' ') {
+        colLen--;
+      }
       writer.String(field, colLen);
       DEB_SCAN("[" << colLen << "] " << std::string(field, colLen));
       break;
@@ -1420,11 +1681,10 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
     bound.range_no = range_no;
     range_no++;
     if (operation->setBound(index_rec, bound)) {
-      RS_Status err = RS_SERVER_ERROR(
+      RS_Status err = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to setBound. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to setBound.") +
           std::string(" Index: ") + index_params.name);
       return err;
     }
@@ -1454,6 +1714,10 @@ class TransactionGuard {
 };
 
 RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf) {
+  // Clear the JSON buffer in case this is a retry
+  RJ_StringBuffer* buffer = (RJ_StringBuffer*)json_str_buf;
+  buffer->Clear();
+
   std::string db = std::string(scan_params.path.db);
   if (ndb_object->setDatabaseName(db.c_str())) {
     RS_Status err = RS_CLIENT_404_WITH_MSG_ERROR(
@@ -1517,11 +1781,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
 
   NdbTransaction *transaction = ndb_object->startTransaction();
   if (transaction == nullptr) {
-    RS_Status err = RS_SERVER_ERROR(
+    RS_Status err = RS_RONDB_SERVER_ERROR(
+        ndb_object->getNdbError(),
         std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-        std::string("Failed to start transaction. Error: ") +
-        std::to_string(ndb_object->getNdbError().code) + ", " +
-        std::string(ndb_object->getNdbError().message) +
+        std::string("Failed to start transaction.") +
         std::string(" Database: ") + db +
         std::string(" Table: ") + scan_params.path.table);
     return err;
@@ -1609,11 +1872,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
         nullptr,
         &scan_options, sizeof(NdbScanOperation::ScanOptions));
     if (operation == nullptr) {
-      RS_Status err = RS_SERVER_ERROR(
+      RS_Status err = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to start scanIndex operation. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to start scanIndex operation.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table +
           std::string(" Index: ") + index_params.name);
@@ -1633,11 +1895,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     }
 
     if (transaction->execute(NdbTransaction::NoCommit) != 0) {
-      RS_Status err = RS_SERVER_ERROR(
+      RS_Status err = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to execute transaction. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to execute transaction.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
       return err;
@@ -1660,6 +1921,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     uint64_t rows = 0;
     while ((rc = operation->nextResult(reinterpret_cast<const char **>(&row_ptr),
             true, false)) == 0) {
+      if (rows >= scan_params.limit) {
+        break;
+      }
       rows++;
       writer.StartObject();
       for (auto& column : read_columns) {
@@ -1679,9 +1943,6 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       }
       writer.EndObject();
       DEB_SCAN(std::endl);
-      if (rows >= scan_params.limit) {
-        break;
-      }
     }
     writer.EndArray();
     writer.Key("rows");
@@ -1689,11 +1950,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.EndObject();
 
     if (rc == -1) {
-      status = RS_SERVER_ERROR(
+      status = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to read tuple. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to read tuple.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
     }
@@ -1716,22 +1976,20 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
           nullptr, 0);
     }
     if (operation == nullptr) {
-      RS_Status err = RS_SERVER_ERROR(
+      RS_Status err = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to start scanTable operation. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to start scanTable operation.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
       return err;
     }
 
     if (transaction->execute(NdbTransaction::NoCommit) != 0) {
-      RS_Status err = RS_SERVER_ERROR(
+      RS_Status err = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to execute transaction. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to execute transaction.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
       return err;
@@ -1754,6 +2012,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     uint64_t rows = 0;
     while ((rc = operation->nextResult(reinterpret_cast<const char **>(&row_ptr),
             true, false)) == 0) {
+      if (rows >= scan_params.limit) {
+        break;
+      }
       rows++;
       writer.StartObject();
       for (auto& column : read_columns) {
@@ -1773,9 +2034,6 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       }
       writer.EndObject();
       DEB_SCAN(std::endl);
-      if (rows >= scan_params.limit) {
-        break;
-      }
     }
     writer.EndArray();
     writer.Key("rows");
@@ -1783,11 +2041,10 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     writer.EndObject();
 
     if (rc == -1) {
-      status = RS_SERVER_ERROR(
+      status = RS_RONDB_SERVER_ERROR(
+          transaction->getNdbError(),
           std::string(rdrsErrorMessage(ERROR_SCAN_OPERATION_FAILED)) +
-          std::string("Failed to read tuple. Error: ") +
-          std::to_string(transaction->getNdbError().code) + ", " +
-          std::string(transaction->getNdbError().message) +
+          std::string("Failed to read tuple.") +
           std::string(" Database: ") + db +
           std::string(" Table: ") + scan_params.path.table);
     }
@@ -1795,6 +2052,26 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
   }
 
   return status;
+}
+
+void ResetScanParams(ScanReadParams& scan_params) {
+  // Clear cached column pointers in filter tree
+  ClearFilterColumns(scan_params.filterRoot);
+
+  // Clear cached index column pointers and buffer
+  if (scan_params.index != std::nullopt) {
+    scan_params.index.value().cols.clear();
+    if (scan_params.index.value().index_recs_buffer != nullptr) {
+      delete[] scan_params.index.value().index_recs_buffer;
+      scan_params.index.value().index_recs_buffer = nullptr;
+    }
+  }
+
+  // Clear cached table record buffer
+  if (scan_params.table_rec_buffer != nullptr) {
+    delete[] scan_params.table_rec_buffer;
+    scan_params.table_rec_buffer = nullptr;
+  }
 }
 
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc) {
@@ -1806,6 +2083,13 @@ RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void*
   }
   DATA_OP_RETRY_HANDLER(
     status = perform_scan(scan_params, ndb_object, doc);
+    HandleSchemaErrors(ndb_object,
+                       status,
+                       {std::make_tuple(std::string(scan_params.path.db),
+                                        std::string(scan_params.path.table))});
+    if (CanRetryOperation(status)) {
+      ResetScanParams(scan_params);
+    }
   )
   rdrsRonDBConnectionPool->ReturnNdbObject(ndb_object,
                                            &status,

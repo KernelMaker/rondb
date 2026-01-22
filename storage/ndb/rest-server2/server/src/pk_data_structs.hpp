@@ -37,7 +37,7 @@
 
 // Debug macro for scan operations
 // Uncomment the line below to enable debug output
-#define DEBUG_SCAN 1
+// #define DEBUG_SCAN 1
 
 #ifdef DEBUG_SCAN
 #define DEB_SCAN(x) do { std::cout << x; } while(0)
