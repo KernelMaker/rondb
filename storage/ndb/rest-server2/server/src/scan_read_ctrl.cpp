@@ -25,6 +25,7 @@
 #include "api_key.hpp"
 #include "src/constants.hpp"
 #include "metrics.hpp"
+#include "scan_metrics.hpp"
 
 #include <cstring>
 #include <drogon/HttpTypes.h>
@@ -58,6 +59,15 @@ void ScanReadCtrl::ScanRead(
   // BatchPkReadEndPointMetricsUpdater metricsUpdater(resp);
   bool use_compressed = globalConfigs.rest.useCompression;
 
+  // Timing setup
+  bool timing_enabled = g_scan_timing_enabled;
+  ScanPhaseTiming timing;
+  NDB_TICKS total_start, phase_start;
+  if (timing_enabled) {
+    total_start = NdbTick_getCurrentTicks();
+    phase_start = total_start;
+  }
+
   size_t currentThreadIndex = drogon::app().getCurrentThreadIndex();
   if (unlikely(currentThreadIndex >= globalConfigs.rest.numThreads)) {
     resp->setBody("Too many threads");
@@ -90,6 +100,12 @@ void ScanReadCtrl::ScanRead(
                                    globalConfigs.internal.maxReqSize +
                                    simdjson::SIMDJSON_PADDING),
                                    reqStruct);
+
+  // End of json_parse phase
+  if (timing_enabled) {
+    timing.json_parse_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    phase_start = NdbTick_getCurrentTicks();
+  }
 
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
       drogon::HttpStatusCode::k200OK)) {
@@ -167,11 +183,17 @@ void ScanReadCtrl::ScanRead(
     }
   }
 
+  // End of validation phase (includes auth)
+  if (timing_enabled) {
+    timing.validation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+  }
+
   RJ_Document doc;
   RJ_StringBuffer buf;
   // TODO (Zhao)
   buf.Reserve(256 * 1024);
-  status = scan_read(reqStruct, currentThreadIndex, (void*)&buf);
+  status = scan_read(reqStruct, currentThreadIndex, (void*)&buf,
+                     timing_enabled ? &timing : nullptr);
 
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
       drogon::HttpStatusCode::k200OK)) {
@@ -181,8 +203,31 @@ void ScanReadCtrl::ScanRead(
     return;
   }
 
+  // Start callback timing
+  if (timing_enabled) {
+    phase_start = NdbTick_getCurrentTicks();
+  }
+
   resp->setBody(std::string(buf.GetString(), buf.GetSize()));
   resp->setStatusCode(drogon::HttpStatusCode::k200OK);
   callback(resp);
+
+  // End of callback phase and record metrics
+  if (timing_enabled) {
+    timing.callback_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
+    timing.total_us = NdbTick_Elapsed(total_start, NdbTick_getCurrentTicks()).microSec();
+
+    // Fill in context
+    timing.database = std::string(reqStruct.path.db);
+    timing.table = std::string(reqStruct.path.table);
+    timing.limit = reqStruct.limit;
+    timing.has_filter = (reqStruct.filterRoot != nullptr);
+    timing.is_index_scan = (reqStruct.index != std::nullopt);
+    if (timing.is_index_scan) {
+      timing.index_name = reqStruct.index.value().name;
+    }
+
+    maybeRecordSlowScan(timing, currentThreadIndex);
+  }
   return;
 }

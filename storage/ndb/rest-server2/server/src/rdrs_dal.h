@@ -209,8 +209,9 @@ void* get_rdrs_ndb_object(int thread_index);
 void return_rdrs_ndb_object(void *ndb_object, int thread_index);
 
 class ScanReadParams;
+struct ScanPhaseTiming;
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex,
-                    void* json_string_buf);
+                    void* json_string_buf, ScanPhaseTiming* timing = nullptr);
 
 #endif
 

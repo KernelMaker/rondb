@@ -65,6 +65,8 @@ file(GLOB_RECURSE SRC
         db_operations/ronsql/ronsql_operation.cpp
         ttl_purge.cpp
         scan_read_ctrl.cpp
+        scan_metrics.cpp
+        slow_scan_ctrl.cpp
 )
 NDB_ADD_EXECUTABLE(${PROJECT_NAME} ${SRC} STATIC_NDBCLIENT)
 
