@@ -18,9 +18,10 @@
  */
 
 #include "scan_metrics.hpp"
+#include "config_structs.hpp"
 
-// Global configuration - defaults
-bool g_scan_timing_enabled = true;
+// Global configuration - defaults (will be overwritten by config in initScanMetrics)
+bool g_scan_timing_enabled = false;
 Uint64 g_slow_scan_threshold_us = 10000;  // 10ms default
 Uint32 g_slow_scan_buffer_size = 1000;
 
@@ -88,6 +89,11 @@ Uint64 SlowScanBuffer::totalCount() const {
 }
 
 void initScanMetrics() {
+  // Apply configuration values
+  g_scan_timing_enabled = globalConfigs.internal.scanTimingEnabled;
+  g_slow_scan_threshold_us = globalConfigs.internal.slowScanThresholdUs;
+  g_slow_scan_buffer_size = globalConfigs.internal.slowScanBufferSize;
+
   if (g_slow_scan_buffer == nullptr) {
     g_slow_scan_buffer = new SlowScanBuffer(g_slow_scan_buffer_size);
   }

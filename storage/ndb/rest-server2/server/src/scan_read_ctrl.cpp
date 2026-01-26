@@ -55,9 +55,7 @@ void ScanReadCtrl::ScanRead(
        const std::string_view& table) {
 
   drogon::HttpResponsePtr resp = drogon::HttpResponse::newHttpResponse();
-  // TODO (Zhao)
-  // BatchPkReadEndPointMetricsUpdater metricsUpdater(resp);
-  bool use_compressed = globalConfigs.rest.useCompression;
+  IndexScanEndPointMetricsUpdater metricsUpdater(resp);
 
   // Timing setup
   bool timing_enabled = g_scan_timing_enabled;
@@ -185,16 +183,16 @@ void ScanReadCtrl::ScanRead(
 
   RJ_Document doc;
   RJ_StringBuffer buf;
-  // TODO (Zhao)
-  buf.Reserve(256 * 1024);
+  buf.Reserve(globalConfigs.internal.scanRespBufferSize);
 
   // End of validation phase (includes auth and buffer reserve)
   if (timing_enabled) {
     timing.validation_us = NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
   }
 
+  uint64_t rows_fetched = 0;
   status = scan_read(reqStruct, currentThreadIndex, (void*)&buf,
-                     timing_enabled ? &timing : nullptr);
+                     &rows_fetched, timing_enabled ? &timing : nullptr);
 
   if (unlikely(static_cast<drogon::HttpStatusCode>(status.http_code) !=
       drogon::HttpStatusCode::k200OK)) {
@@ -203,6 +201,8 @@ void ScanReadCtrl::ScanRead(
     callback(resp);
     return;
   }
+
+  metricsUpdater.set_rows_fetched(rows_fetched);
 
   // Start callback timing
   if (timing_enabled) {

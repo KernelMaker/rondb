@@ -25,6 +25,7 @@ extern "C" {
 #define STORAGE_NDB_REST_SERVER2_SERVER_SRC_RDRS_DAL_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef enum HTTP_CODE {
   SUCCESS      = 200,
@@ -211,7 +212,8 @@ void return_rdrs_ndb_object(void *ndb_object, int thread_index);
 class ScanReadParams;
 struct ScanPhaseTiming;
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex,
-                    void* json_string_buf, ScanPhaseTiming* timing = nullptr);
+                    void* json_string_buf, uint64_t* rows_fetched_out = nullptr,
+                    ScanPhaseTiming* timing = nullptr);
 
 #endif
 

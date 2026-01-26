@@ -1173,7 +1173,11 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
   }
   if (node->type == FilterNode::Type::LOGIC) {
     DEB_SCAN("  filter->begin(" << node->group << ")" << std::endl);
-    filter->begin(node->group);
+    if (filter->begin(node->group) == -1) {
+      return RS_SERVER_ERROR(
+          std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+          " filter->begin() failed");
+    }
   } else {
     assert(node->col != nullptr);
     switch (node->type) {
@@ -1192,15 +1196,31 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
           }
           std::cout << std::dec << ")" << std::endl;
         );
-        filter->cmp(node->cond, node->col->getAttrId(), node->binary.data(), node->binary.size());
+        if (filter->cmp(node->cond, node->col->getAttrId(),
+                        node->binary.data(), node->binary.size()) == -1) {
+          return RS_SERVER_ERROR(
+              std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+              " filter->cmp() failed for column: " +
+              std::string(node->col->getName()));
+        }
         break;
       case FilterNode::Type::IS_NULL:
         DEB_SCAN("  filter->isnull(" << node->col->getAttrId() << ")" << std::endl);
-        filter->isnull(node->col->getAttrId());
+        if (filter->isnull(node->col->getAttrId()) == -1) {
+          return RS_SERVER_ERROR(
+              std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+              " filter->isnull() failed for column: " +
+              std::string(node->col->getName()));
+        }
         break;
       case FilterNode::Type::IS_NOT_NULL:
         DEB_SCAN("  filter->isnotnull(" << node->col->getAttrId() << ")" << std::endl);
-        filter->isnotnull(node->col->getAttrId());
+        if (filter->isnotnull(node->col->getAttrId()) == -1) {
+          return RS_SERVER_ERROR(
+              std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+              " filter->isnotnull() failed for column: " +
+              std::string(node->col->getName()));
+        }
         break;
       default:
         status = RS_CLIENT_ERROR(
@@ -1212,12 +1232,16 @@ RS_Status CompileFilter(std::shared_ptr<FilterNode>& node,
   for (auto& child : node->children) {
     status = CompileFilter(child, filter);
     if (status.http_code != HTTP_CODE::SUCCESS) {
-      break;
+      return status;
     }
   }
   if (node->type == FilterNode::Type::LOGIC) {
     DEB_SCAN("  filter->end()" << std::endl);
-    filter->end();
+    if (filter->end() == -1) {
+      return RS_SERVER_ERROR(
+          std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+          " filter->end() failed");
+    }
   }
   return status;
 }
@@ -1572,7 +1596,9 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
       Uint32 curr_attrId = 0;
       Uint32 curr_pos = 0;
       bool ret = NdbDictionary::getFirstAttrId(index_rec, curr_attrId);
-      assert(ret);
+      if (!ret) {
+        return RS_SERVER_ERROR("Failed to get first attribute ID for index record");
+      }
       for (auto& node : lower.values) {
         node.col = index_params.cols[curr_pos];
         RS_Status status = GenerateBinary(node, node.binary);
@@ -1592,8 +1618,10 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
           ret = NdbDictionary::getNullBitOffset(index_rec, curr_attrId,
               nullbit_byte_offset,
               nullbit_bit_in_byte);
-          assert(ret);
-          row_ptr[nullbit_bit_in_byte] |= (1 << nullbit_bit_in_byte);
+          if (!ret) {
+            return RS_SERVER_ERROR("Failed to get null bit offset for index column");
+          }
+          row_ptr[nullbit_byte_offset] |= (1 << nullbit_bit_in_byte);
         } else {
           memcpy(field, node.binary.data(), node.binary.size());
         }
@@ -1630,7 +1658,9 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
       Uint32 curr_attrId = 0;
       Uint32 curr_pos = 0;
       bool ret = NdbDictionary::getFirstAttrId(index_rec, curr_attrId);
-      assert(ret);
+      if (!ret) {
+        return RS_SERVER_ERROR("Failed to get first attribute ID for index record");
+      }
       for (auto& node : upper.values) {
         node.col = index_params.cols[curr_pos];
         RS_Status status = GenerateBinary(node, node.binary);
@@ -1650,8 +1680,10 @@ RS_Status CompileIndexRanges(const NdbTransaction* transaction,
           ret = NdbDictionary::getNullBitOffset(index_rec, curr_attrId,
               nullbit_byte_offset,
               nullbit_bit_in_byte);
-          assert(ret);
-          row_ptr[nullbit_bit_in_byte] |= (1 << nullbit_bit_in_byte);
+          if (!ret) {
+            return RS_SERVER_ERROR("Failed to get null bit offset for index column");
+          }
+          row_ptr[nullbit_byte_offset] |= (1 << nullbit_bit_in_byte);
         } else {
           memcpy(field, node.binary.data(), node.binary.size());
         }
@@ -1715,7 +1747,7 @@ class TransactionGuard {
 };
 
 RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_str_buf,
-                       ScanPhaseTiming* timing) {
+                       uint64_t* rows_fetched_out, ScanPhaseTiming* timing) {
   // Clear the JSON buffer in case this is a retry
   RJ_StringBuffer* buffer = (RJ_StringBuffer*)json_str_buf;
   buffer->Clear();
@@ -1755,8 +1787,9 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     read_cols_provided = false;
     for (int i = 0; i < table->getNoOfColumns(); i++) {
       const NdbDictionary::Column *column = table->getColumn(i);
-      // TODO (Zhao)
-      assert(column);
+      if (column == nullptr) {
+        return RS_SERVER_ERROR("Failed to get column at index " + std::to_string(i));
+      }
       read_columns.push_back(column);
     }
   } else {
@@ -1826,16 +1859,24 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     DEB_SCAN(std::endl);
     DEB_SCAN(">>>>>> Compiling PHYSICAL Scan Filter" << std::endl);
     if (scan_params.filterRoot->type != FilterNode::Type::LOGIC) {
-      filter.begin(FilterNode::Group::AND);
       DEB_SCAN("  filter->begin(" << FilterNode::Group::AND << ")" << std::endl);
+      if (filter.begin(FilterNode::Group::AND) == -1) {
+        return RS_SERVER_ERROR(
+            std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+            " filter->begin() failed");
+      }
     }
     err = CompileFilter(scan_params.filterRoot, &filter);
     if (err.http_code != HTTP_CODE::SUCCESS) {
       return err;
     }
     if (scan_params.filterRoot->type != FilterNode::Type::LOGIC) {
-      filter.end();
       DEB_SCAN("  filter->end()" << std::endl);
+      if (filter.end() == -1) {
+        return RS_SERVER_ERROR(
+            std::string(rdrsErrorMessage(ERROR_SET_FILTER_FAILED)) +
+            " filter->end() failed");
+      }
     }
     DEB_SCAN("<<<<<<" << std::endl);
   }
@@ -2032,6 +2073,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
     }
 
+    // Output rows_fetched for Prometheus metrics
+    if (rows_fetched_out != nullptr) {
+      *rows_fetched_out = rows;
+    }
+
     if (rc == -1) {
       status = RS_RONDB_SERVER_ERROR(
           transaction->getNdbError(),
@@ -2173,6 +2219,11 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
       timing->json_serialize_us += NdbTick_Elapsed(phase_start, NdbTick_getCurrentTicks()).microSec();
     }
 
+    // Output rows_fetched for Prometheus metrics
+    if (rows_fetched_out != nullptr) {
+      *rows_fetched_out = rows;
+    }
+
     if (rc == -1) {
       status = RS_RONDB_SERVER_ERROR(
           transaction->getNdbError(),
@@ -2216,7 +2267,7 @@ void ResetScanParams(ScanReadParams& scan_params) {
 }
 
 RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void* doc,
-                    ScanPhaseTiming* timing) {
+                    uint64_t* rows_fetched_out, ScanPhaseTiming* timing) {
   bool timing_enabled = (timing != nullptr);
   NDB_TICKS phase_start;
 
@@ -2237,7 +2288,7 @@ RS_Status scan_read(ScanReadParams& scan_params, unsigned int threadIndex, void*
   }
 
   DATA_OP_RETRY_HANDLER(
-    status = perform_scan(scan_params, ndb_object, doc, timing);
+    status = perform_scan(scan_params, ndb_object, doc, rows_fetched_out, timing);
     HandleSchemaErrors(ndb_object,
                        status,
                        {std::make_tuple(std::string(scan_params.path.db),

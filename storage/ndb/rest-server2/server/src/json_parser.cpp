@@ -1510,7 +1510,7 @@ RS_Status extract_db_and_table(const std::string_view &relativeUrl,
   table = checkUrl.substr(secondLastSlashPos + 1,
                           lastSlashPos - secondLastSlashPos - 1);
   request_type = checkUrl.substr(lastSlashPos + 1);
-  if (std::string(request_type) == expected_op &&
+  if (request_type == expected_op &&
       db.length() > 0 &&
       table.length() > 0) {
     return CRS_Status::SUCCESS.status;
@@ -1603,11 +1603,24 @@ RS_Status ParseJsonValue(simdjson::simdjson_result<simdjson::ondemand::value> v,
       std::string(rdrsErrorMessage(ERROR_SCAN_INVALID_VALUE))).status;
 }
 
+// Security limits for scan operations
+static constexpr int MAX_FILTER_DEPTH = 32;
+static constexpr size_t MAX_SCAN_RANGES = 64;
+
 RS_Status parseScanFilter(
     simdjson::ondemand::document& doc,
     simdjson::ondemand::object obj,
     std::shared_ptr<FilterNode>& out,
-    std::string& err) {
+    std::string& err,
+    int depth = 0) {
+
+  // Check recursion depth to prevent stack overflow
+  if (depth > MAX_FILTER_DEPTH) {
+    return CRS_Status(static_cast<HTTP_CODE>(
+          drogon::HttpStatusCode::k400BadRequest),
+        ERROR_SCAN_FILTER_TOO_DEEP,
+        std::string(rdrsErrorMessage(ERROR_SCAN_FILTER_TOO_DEEP))).status;
+  }
 
   const char *currentLocation = nullptr;
   auto opVal = obj["op"];
@@ -1658,7 +1671,7 @@ RS_Status parseScanFilter(
       }
 
       std::shared_ptr<FilterNode> sub;
-      RS_Status ret = parseScanFilter(doc, childObj, sub, err);
+      RS_Status ret = parseScanFilter(doc, childObj, sub, err, depth + 1);
       if (ret.http_code != HTTP_CODE::SUCCESS) {
         return ret;
       }
@@ -1714,17 +1727,17 @@ RS_Status parseScanFilter(
     }
 
     FilterNode::Condition cond = FilterNode::Condition::COND_LE;
-    if (std::string(cond_string) == "LE") {
+    if (cond_string == "LE") {
       cond = FilterNode::Condition::COND_LE;
-    } else if (std::string(cond_string) == "LT") {
+    } else if (cond_string == "LT") {
       cond = FilterNode::Condition::COND_LT;
-    } else if (std::string(cond_string) == "GE") {
+    } else if (cond_string == "GE") {
       cond = FilterNode::Condition::COND_GE;
-    } else if (std::string(cond_string) == "GT") {
+    } else if (cond_string == "GT") {
       cond = FilterNode::Condition::COND_GT;
-    } else if (std::string(cond_string) == "EQ") {
+    } else if (cond_string == "EQ") {
       cond = FilterNode::Condition::COND_EQ;
-    } else if (std::string(cond_string) == "NE") {
+    } else if (cond_string == "NE") {
       cond = FilterNode::Condition::COND_NE;
     } else {
       return CRS_Status(static_cast<HTTP_CODE>(
@@ -1886,10 +1899,9 @@ RS_Status parseScanIndex(simdjson::ondemand::document& doc,
             ERROR_SCAN_INDEX_ORDER_INVALID,
             std::string(rdrsErrorMessage(ERROR_SCAN_INDEX_ORDER_INVALID))).status;
       }
-      std::string order_string = std::string(order);
-      if (order_string == "asc") {
+      if (order == "asc") {
         index.order = IndexScanParams::Order::ASC;
-      } else if (order_string == "desc") {
+      } else if (order == "desc") {
         index.order = IndexScanParams::Order::DESC;
       } else {
         return CRS_Status(static_cast<HTTP_CODE>(
@@ -2000,6 +2012,13 @@ RS_Status parseScanIndex(simdjson::ondemand::document& doc,
         }
       }
 
+      // Check ranges limit before adding
+      if (index.ranges.size() >= MAX_SCAN_RANGES) {
+        return CRS_Status(static_cast<HTTP_CODE>(
+              drogon::HttpStatusCode::k400BadRequest),
+            ERROR_SCAN_TOO_MANY_RANGES,
+            std::string(rdrsErrorMessage(ERROR_SCAN_TOO_MANY_RANGES))).status;
+      }
       index.ranges.emplace_back(std::move(range));
     }
   }

@@ -133,7 +133,9 @@ typedef enum {
   ERROR_SCAN_INDEX_BOUND_INCLUSIVE_INVALID = 102,
   ERROR_INDEX_NOT_EXIST = 103,
   ERROR_SCAN_MISSING_LIMIT = 104,
-  __MAX_INDEX__                         = 105  // this SHOULD always be last with max index number
+  ERROR_SCAN_FILTER_TOO_DEEP = 105,
+  ERROR_SCAN_TOO_MANY_RANGES = 106,
+  __MAX_INDEX__                         = 107  // this SHOULD always be last with max index number
 } ErrorCode;
 
 // Struct to tie error codes with messages
@@ -249,6 +251,8 @@ static const ErrorEntry errorTable[] = {
     {ERROR_SCAN_INDEX_BOUND_INCLUSIVE_INVALID, "[ScanIndex] Range bound inclusive must be boolean"},
     {ERROR_INDEX_NOT_EXIST, "[Scan] Index does not exist."},
     {ERROR_SCAN_MISSING_LIMIT, "[Scan] Must provide limit field"},
+    {ERROR_SCAN_FILTER_TOO_DEEP, "[ScanFilter] Filter nesting too deep (max 32 levels)"},
+    {ERROR_SCAN_TOO_MANY_RANGES, "[ScanIndex] Too many ranges (max 64)"},
     {__MAX_INDEX__, "__MAX_INDEX__ Place holder"}
 };
 
