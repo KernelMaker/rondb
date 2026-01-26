@@ -1850,6 +1850,7 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
   scan_options.optionsPresent = 0;
 	if (scan_params.limit < 384 /* NDBAPI DEF_BATCH_SIZE */) {
     scan_options.batch = scan_params.limit;
+    scan_options.optionsPresent |= NdbScanOperation::ScanOptions::SO_BATCH;
   }
   Uint32 scan_flags = 0;
   RS_Status status = RS_OK;
@@ -2052,19 +2053,13 @@ RS_Status perform_scan(ScanReadParams& scan_params, Ndb* ndb_object, void* json_
     // Table scan
     NdbScanOperation* operation = nullptr;
     if (scan_params.filterRoot) {
-      scan_options.optionsPresent = NdbScanOperation::ScanOptions::SO_INTERPRETED;
+      scan_options.optionsPresent |= NdbScanOperation::ScanOptions::SO_INTERPRETED;
       scan_options.interpretedCode = &filter_code;
-
-      operation = transaction->scanTable(table_rec,
-          NdbOperation::LockMode::LM_CommittedRead,
-          read_cols_provided ? read_set.bitmap() : nullptr,
-          &scan_options, sizeof(NdbScanOperation::ScanOptions));
-    } else {
-      operation = transaction->scanTable(table_rec,
-          NdbOperation::LockMode::LM_CommittedRead,
-          read_cols_provided ? read_set.bitmap() : nullptr,
-          nullptr, 0);
     }
+    operation = transaction->scanTable(table_rec,
+        NdbOperation::LockMode::LM_CommittedRead,
+        read_cols_provided ? read_set.bitmap() : nullptr,
+        &scan_options, sizeof(NdbScanOperation::ScanOptions));
     if (operation == nullptr) {
       RS_Status err = RS_RONDB_SERVER_ERROR(
           transaction->getNdbError(),
