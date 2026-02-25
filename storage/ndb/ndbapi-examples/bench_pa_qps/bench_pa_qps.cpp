@@ -53,6 +53,7 @@ static int g_duration    = 60;   // seconds
 static int g_warmup      = 5;    // seconds
 static std::vector<int> g_tiers = {100, 500, 10000, 100000, 500000};
 static int g_batch_size  = 90000;
+static int g_ndb_connections = 4; // number of NDB cluster connections (match mysqld)
 
 // Query definitions — each is a (name, programming_fn) pair
 struct QueryDef {
@@ -109,7 +110,7 @@ static int program_q3(NdbAggregator &agg) {
 }
 
 // Q4: COUNT(*), SUM(val1), AVG(val3) with filter (filter_date >= '2024-07-01')
-// Same aggregation program as Q1; filter applied separately via NdbScanFilter
+// Same aggregation program as Q1; filter applied via index scan on idx_date
 static int program_q4(NdbAggregator &agg) {
   return program_q1(agg);
 }
@@ -336,6 +337,7 @@ static void encode_ndb_date(int year, int month, int day, char *buf) {
 
 static void pa_worker(Ndb_cluster_connection *conn,
                       const NdbDictionary::Table *table,
+                      const NdbDictionary::Index *index,  // idx_date for Q4
                       int query_idx,
                       int duration_s,
                       LatencyCollector *collector,
@@ -343,6 +345,10 @@ static void pa_worker(Ndb_cluster_connection *conn,
                       std::atomic<bool> *start_flag) {
   Ndb myNdb(conn, g_database);
   if (myNdb.init()) die("Ndb::init failed in worker");
+
+  // Pre-encode filter date for Q4
+  char date_buf[3];
+  encode_ndb_date(2024, 7, 1, date_buf);
 
   // Signal ready and wait for coordinated start
   ready->store(true);
@@ -361,23 +367,34 @@ static void pa_worker(Ndb_cluster_connection *conn,
       continue;
     }
 
-    NdbScanOperation *scanOp = trans->getNdbScanOperation(table);
-    if (!scanOp) {
-      myNdb.closeTransaction(trans);
-      continue;
-    }
+    NdbScanOperation *scanOp = nullptr;
 
-    scanOp->readTuples(NdbOperation::LM_CommittedRead);
+    // Q4: use index scan on idx_date with bound (matches MySQL's index usage)
+    if (query_idx == 3 && index != nullptr) {
+      NdbIndexScanOperation *idxScanOp =
+          trans->getNdbIndexScanOperation(index);
+      if (!idxScanOp) {
+        myNdb.closeTransaction(trans);
+        continue;
+      }
+      idxScanOp->readTuples(NdbOperation::LM_CommittedRead);
 
-    // Apply filter for Q4
-    if (query_idx == 3) {
-      NdbScanFilter filter(scanOp);
-      char date_buf[3];
-      encode_ndb_date(2024, 7, 1, date_buf);
-      filter.begin(NdbScanFilter::AND);
-      filter.cmp(NdbScanFilter::COND_GE, g_filter_date_col_id,
-                 date_buf, 3);
-      filter.end();
+      // filter_date >= '2024-07-01' → constant is lower bound → BoundLE
+      if (idxScanOp->setBound("filter_date",
+                               NdbIndexScanOperation::BoundLE,
+                               date_buf) ||
+          idxScanOp->end_of_bound(0)) {
+        myNdb.closeTransaction(trans);
+        continue;
+      }
+      scanOp = idxScanOp;  // NdbIndexScanOperation inherits NdbScanOperation
+    } else {
+      scanOp = trans->getNdbScanOperation(table);
+      if (!scanOp) {
+        myNdb.closeTransaction(trans);
+        continue;
+      }
+      scanOp->readTuples(NdbOperation::LM_CommittedRead);
     }
 
     NdbAggregator aggregator(table);
@@ -451,8 +468,9 @@ static void mysql_worker(const char *sql,
 // Run workers for one (engine, tier, query) combination
 // ---------------------------------------------------------------------------
 static Stats run_workers(const char *engine,
-                         Ndb_cluster_connection *ndb_conn,
+                         std::vector<Ndb_cluster_connection*> &ndb_conns,
                          const NdbDictionary::Table *table,
+                         const NdbDictionary::Index *index,
                          int tier, int query_idx,
                          int duration_s) {
   LatencyCollector collector;
@@ -473,8 +491,10 @@ static Stats run_workers(const char *engine,
 
   for (int i = 0; i < g_concurrency; i++) {
     if (strcmp(engine, "ndb_pa") == 0) {
+      // Round-robin distribute workers across NDB connections
+      Ndb_cluster_connection *conn = ndb_conns[i % ndb_conns.size()];
       threads.emplace_back(pa_worker,
-          ndb_conn, table, query_idx, duration_s,
+          conn, table, index, query_idx, duration_s,
           &collector, &ready[i], &start_flag);
     } else {
       threads.emplace_back(mysql_worker,
@@ -546,6 +566,9 @@ static void parse_args(int argc, char **argv) {
       g_mysql_pass = argv[++i];
     } else if ((arg == "-d" || arg == "--database") && i + 1 < argc) {
       g_database = argv[++i];
+    } else if (arg == "--ndb-connections" && i + 1 < argc) {
+      g_ndb_connections = atoi(argv[++i]);
+      if (g_ndb_connections < 1) g_ndb_connections = 1;
     } else if (arg == "--concurrency" && i + 1 < argc) {
       g_concurrency = atoi(argv[++i]);
     } else if (arg == "--duration" && i + 1 < argc) {
@@ -572,6 +595,7 @@ static void parse_args(int argc, char **argv) {
              "  -u, --mysql-user       MySQL user (default: root)\n"
              "  -p, --mysql-password   MySQL password\n"
              "  -d, --database         Database name (default: bench_pa_qps)\n"
+             "  --ndb-connections N    NDB cluster connections for PA (default: 4)\n"
              "  --concurrency N        Connections per engine (default: 32)\n"
              "  --duration N           Seconds per data point (default: 60)\n"
              "  --warmup N             Warmup seconds (default: 5)\n"
@@ -592,12 +616,19 @@ static void parse_args(int argc, char **argv) {
 int main(int argc, char **argv) {
   parse_args(argc, argv);
 
-  // --- NDB init ---
+  // --- NDB init: create multiple cluster connections (like mysqld) ---
   ndb_init();
-  Ndb_cluster_connection ndb_conn(g_ndb_connectstring);
-  ndb_conn.set_name("bench_pa_qps");
-  if (ndb_conn.connect(5, 3, 1) != 0) die("Cannot connect to NDB mgmd");
-  if (ndb_conn.wait_until_ready(30, 0) != 0) die("NDB cluster not ready");
+  std::vector<Ndb_cluster_connection*> ndb_conns;
+  for (int i = 0; i < g_ndb_connections; i++) {
+    auto *conn = new Ndb_cluster_connection(g_ndb_connectstring);
+    char name[64];
+    snprintf(name, sizeof(name), "bench_pa_qps_%d", i);
+    conn->set_name(name);
+    if (conn->connect(5, 3, 1) != 0) die("Cannot connect to NDB mgmd");
+    if (conn->wait_until_ready(30, 0) != 0) die("NDB cluster not ready");
+    ndb_conns.push_back(conn);
+  }
+  fprintf(stderr, "Created %d NDB cluster connections.\n", g_ndb_connections);
 
   // --- MySQL init ---
   MYSQL *setup_mysql = mysql_connect_new();
@@ -619,10 +650,11 @@ int main(int argc, char **argv) {
   printf("  NDB Pushdown Aggregation (direct API) vs MySQL — QPS Benchmark\n");
   printf("=========================================================================\n");
   printf("\n");
-  printf("  NDB:          %s\n", g_ndb_connectstring);
+  printf("  NDB:          %s (%d cluster connections)\n",
+         g_ndb_connectstring, g_ndb_connections);
   printf("  MySQL:        %s:%d\n", g_mysql_host, g_mysql_port);
   printf("  Database:     %s\n", g_database);
-  printf("  Concurrency:  %d connections per engine\n", g_concurrency);
+  printf("  Concurrency:  %d workers per engine\n", g_concurrency);
   printf("  Duration:     %ds measured + %ds warmup\n", g_duration, g_warmup);
   printf("  Row tiers:    ");
   for (size_t i = 0; i < g_tiers.size(); i++) {
@@ -636,14 +668,15 @@ int main(int argc, char **argv) {
   // Phase 1: Prepare tables
   prepare_tables(setup_mysql);
 
-  // Phase 2: Get NDB table objects and resolve column IDs
-  Ndb myNdb(&ndb_conn, g_database);
+  // Phase 2: Get NDB table objects, indexes, and resolve column IDs
+  Ndb myNdb(ndb_conns[0], g_database);
   if (myNdb.init()) die("Ndb::init failed");
 
-  // Cache table pointers for each tier (resolve once, reuse)
+  // Cache table and index pointers for each tier (resolve once, reuse)
   struct TierInfo {
     int rows;
     const NdbDictionary::Table *table;
+    const NdbDictionary::Index *idx_date;  // for Q4 index scan
   };
   std::vector<TierInfo> tier_infos;
 
@@ -656,17 +689,27 @@ int main(int argc, char **argv) {
               tbl.c_str(), dict->getNdbError().message);
       exit(1);
     }
-    tier_infos.push_back({rows, table});
 
-    // Resolve filter_date column ID (for Q4 filter) from first table
+    // Resolve idx_date ordered index for Q4 index scan
+    const NdbDictionary::Index *idx_date =
+        dict->getIndex("idx_date", tbl.c_str());
+    if (!idx_date) {
+      fprintf(stderr, "WARNING: Cannot find index idx_date on %s: %s\n",
+              tbl.c_str(), dict->getNdbError().message);
+    }
+
+    tier_infos.push_back({rows, table, idx_date});
+
+    // Resolve filter_date column ID from first table (for fallback)
     if (g_filter_date_col_id < 0) {
       const NdbDictionary::Column *col = table->getColumn("filter_date");
       if (col) g_filter_date_col_id = col->getColumnNo();
     }
   }
 
-  fprintf(stderr, "Tables resolved. filter_date col_id=%d\n",
-          g_filter_date_col_id);
+  fprintf(stderr, "Tables resolved. filter_date col_id=%d, idx_date=%s\n",
+          g_filter_date_col_id,
+          tier_infos[0].idx_date ? "found" : "NOT found");
 
   // Phase 3: Run benchmarks
   // Store summary data: summary[tier_idx] = {sum_m_qps, sum_m_avg, ... }
@@ -699,22 +742,23 @@ int main(int argc, char **argv) {
     for (size_t ti = 0; ti < tier_infos.size(); ti++) {
       int rows = tier_infos[ti].rows;
       const NdbDictionary::Table *table = tier_infos[ti].table;
+      const NdbDictionary::Index *index = tier_infos[ti].idx_date;
 
       // Warmup
       fprintf(stderr, "Warmup: %d rows, %s, %d conn, %ds...\n",
               rows, g_queries[qi].name, g_concurrency, g_warmup);
-      run_workers("mysql", &ndb_conn, table, rows, qi, g_warmup);
-      run_workers("ndb_pa", &ndb_conn, table, rows, qi, g_warmup);
+      run_workers("mysql", ndb_conns, table, index, rows, qi, g_warmup);
+      run_workers("ndb_pa", ndb_conns, table, index, rows, qi, g_warmup);
 
       // MySQL measured
       fprintf(stderr, "MySQL:  %d rows, %s, %d conn, %ds...\n",
               rows, g_queries[qi].name, g_concurrency, g_duration);
-      Stats ms = run_workers("mysql", &ndb_conn, table, rows, qi, g_duration);
+      Stats ms = run_workers("mysql", ndb_conns, table, index, rows, qi, g_duration);
 
       // NDB PA measured
       fprintf(stderr, "NDB PA: %d rows, %s, %d conn, %ds...\n",
               rows, g_queries[qi].name, g_concurrency, g_duration);
-      Stats ps = run_workers("ndb_pa", &ndb_conn, table, rows, qi, g_duration);
+      Stats ps = run_workers("ndb_pa", ndb_conns, table, index, rows, qi, g_duration);
 
       print_row(rows, ms, ps);
 
@@ -786,6 +830,8 @@ int main(int argc, char **argv) {
   printf("\n  Completed in %dm %ds\n\n", elapsed / 60, elapsed % 60);
 
   mysql_close(setup_mysql);
+  for (auto *conn : ndb_conns) delete conn;
+  ndb_conns.clear();
   ndb_end(0);
   return 0;
 }
