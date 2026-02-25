@@ -54,6 +54,7 @@ static int g_warmup      = 5;    // seconds
 static std::vector<int> g_tiers = {100, 500, 10000, 100000, 500000};
 static int g_batch_size  = 90000;
 static int g_ndb_connections = 4; // number of NDB cluster connections (match mysqld)
+static bool g_validate = false;   // validate PA results against MySQL before benchmarking
 
 // Query definitions — each is a (name, programming_fn) pair
 struct QueryDef {
@@ -429,6 +430,189 @@ static void pa_worker(Ndb_cluster_connection *conn,
 }
 
 // ---------------------------------------------------------------------------
+// TierInfo — table + index pointers for each row tier
+// ---------------------------------------------------------------------------
+struct TierInfo {
+  int rows;
+  const NdbDictionary::Table *table;
+  const NdbDictionary::Index *idx_date;  // for Q4 index scan
+};
+
+// ---------------------------------------------------------------------------
+// Validation: run one PA query and compare results against MySQL
+// ---------------------------------------------------------------------------
+// Extract a double from a PA aggregation result regardless of its type
+static double pa_result_as_double(NdbAggregator::Result &res) {
+  switch (res.type()) {
+    case NdbDictionary::Column::Bigint:
+      return (double)res.data_int64();
+    case NdbDictionary::Column::Bigunsigned:
+      return (double)res.data_uint64();
+    case NdbDictionary::Column::Double:
+      return res.data_double();
+    default:
+      return (double)res.data_int64();
+  }
+}
+
+static bool validate_query(Ndb_cluster_connection *conn,
+                           MYSQL *mysql,
+                           const NdbDictionary::Table *table,
+                           const NdbDictionary::Index *index,
+                           int tier, int query_idx) {
+  const char *qname = g_queries[query_idx].name;
+  std::string tbl = table_name(tier);
+
+  // --- Run MySQL query ---
+  char sql[512];
+  snprintf(sql, sizeof(sql), g_queries[query_idx].sql_fmt, tbl.c_str());
+  if (mysql_real_query(mysql, sql, strlen(sql))) {
+    fprintf(stderr, "  FAIL %s @ %d rows: MySQL error: %s\n",
+            qname, tier, mysql_error(mysql));
+    return false;
+  }
+  MYSQL_RES *mres = mysql_store_result(mysql);
+  if (!mres) {
+    fprintf(stderr, "  FAIL %s @ %d rows: MySQL no result\n", qname, tier);
+    return false;
+  }
+  MYSQL_ROW mrow = mysql_fetch_row(mres);
+  if (!mrow) {
+    fprintf(stderr, "  FAIL %s @ %d rows: MySQL empty result\n", qname, tier);
+    mysql_free_result(mres);
+    return false;
+  }
+  unsigned int num_fields = mysql_num_fields(mres);
+  std::vector<double> mysql_vals;
+  for (unsigned int i = 0; i < num_fields; i++) {
+    mysql_vals.push_back(mrow[i] ? atof(mrow[i]) : 0.0);
+  }
+  mysql_free_result(mres);
+
+  // --- Run PA query ---
+  Ndb myNdb(conn, g_database);
+  if (myNdb.init()) {
+    fprintf(stderr, "  FAIL %s @ %d rows: Ndb::init failed\n", qname, tier);
+    return false;
+  }
+
+  NdbTransaction *trans = myNdb.startTransaction();
+  if (!trans) {
+    fprintf(stderr, "  FAIL %s @ %d rows: startTransaction failed\n",
+            qname, tier);
+    return false;
+  }
+
+  NdbScanOperation *scanOp = nullptr;
+  if (query_idx == 3 && index != nullptr) {
+    NdbIndexScanOperation *idxScanOp =
+        trans->getNdbIndexScanOperation(index);
+    if (!idxScanOp) {
+      fprintf(stderr, "  FAIL %s @ %d rows: getNdbIndexScanOperation failed\n",
+              qname, tier);
+      myNdb.closeTransaction(trans);
+      return false;
+    }
+    idxScanOp->readTuples(NdbOperation::LM_CommittedRead);
+    char date_buf[3];
+    encode_ndb_date(2024, 7, 1, date_buf);
+    idxScanOp->setBound("filter_date", NdbIndexScanOperation::BoundLE,
+                         date_buf);
+    idxScanOp->end_of_bound(0);
+    scanOp = idxScanOp;
+  } else {
+    scanOp = trans->getNdbScanOperation(table);
+    if (!scanOp) {
+      fprintf(stderr, "  FAIL %s @ %d rows: getNdbScanOperation failed\n",
+              qname, tier);
+      myNdb.closeTransaction(trans);
+      return false;
+    }
+    scanOp->readTuples(NdbOperation::LM_CommittedRead);
+  }
+
+  NdbAggregator aggregator(table);
+  g_queries[query_idx].program(aggregator);
+  aggregator.Finalize();
+
+  if (scanOp->setAggregationCode(&aggregator) < 0 ||
+      scanOp->DoAggregation() < 0) {
+    fprintf(stderr, "  FAIL %s @ %d rows: DoAggregation failed: %s\n",
+            qname, tier, trans->getNdbError().message);
+    myNdb.closeTransaction(trans);
+    return false;
+  }
+
+  // Collect PA results
+  std::vector<double> pa_vals;
+  aggregator.PrepareResults();
+  NdbAggregator::ResultRecord record = aggregator.FetchResultRecord();
+  while (!record.end()) {
+    NdbAggregator::Column col = record.FetchGroupbyColumn();
+    while (!col.end()) col = record.FetchGroupbyColumn();
+    NdbAggregator::Result res = record.FetchAggregationResult();
+    while (!res.end()) {
+      pa_vals.push_back(pa_result_as_double(res));
+      res = record.FetchAggregationResult();
+    }
+    record = aggregator.FetchResultRecord();
+  }
+  myNdb.closeTransaction(trans);
+
+  // --- Compare ---
+  if (pa_vals.size() != mysql_vals.size()) {
+    fprintf(stderr, "  FAIL %s @ %d rows: column count mismatch "
+            "(MySQL=%zu, PA=%zu)\n",
+            qname, tier, mysql_vals.size(), pa_vals.size());
+    return false;
+  }
+
+  bool pass = true;
+  for (size_t i = 0; i < mysql_vals.size(); i++) {
+    double m = mysql_vals[i];
+    double p = pa_vals[i];
+    double diff = std::abs(m - p);
+    // Allow relative tolerance of 1e-6 or absolute tolerance of 1.0
+    // (floating-point aggregation over many rows has rounding differences)
+    double tol = std::max(1.0, std::abs(m) * 1e-6);
+    if (diff > tol) {
+      fprintf(stderr, "  FAIL %s @ %d rows: col[%zu] mismatch "
+              "MySQL=%.6f PA=%.6f diff=%.6f\n",
+              qname, tier, i, m, p, diff);
+      pass = false;
+    }
+  }
+
+  if (pass) {
+    fprintf(stderr, "  PASS %s @ %d rows  (%zu values match)\n",
+            qname, tier, pa_vals.size());
+  }
+  return pass;
+}
+
+static bool validate_all(Ndb_cluster_connection *conn,
+                         MYSQL *mysql,
+                         const std::vector<TierInfo> &tier_infos) {
+  fprintf(stderr, "\n=== Validation: PA results vs MySQL ===\n");
+  bool all_pass = true;
+  for (int qi = 0; qi < NUM_QUERIES; qi++) {
+    for (size_t ti = 0; ti < tier_infos.size(); ti++) {
+      if (!validate_query(conn, mysql, tier_infos[ti].table,
+                          tier_infos[ti].idx_date,
+                          tier_infos[ti].rows, qi)) {
+        all_pass = false;
+      }
+    }
+  }
+  if (all_pass) {
+    fprintf(stderr, "=== All validations PASSED ===\n\n");
+  } else {
+    fprintf(stderr, "=== Some validations FAILED ===\n\n");
+  }
+  return all_pass;
+}
+
+// ---------------------------------------------------------------------------
 // MySQL worker
 // ---------------------------------------------------------------------------
 static void mysql_worker(const char *sql,
@@ -582,6 +766,8 @@ static void parse_args(int argc, char **argv) {
         g_tiers.push_back(atoi(tok));
         tok = strtok(nullptr, ",");
       }
+    } else if (arg == "--validate") {
+      g_validate = true;
     } else if (arg == "--quick") {
       g_tiers = {100, 10000, 500000};
       g_duration = 15;
@@ -600,6 +786,7 @@ static void parse_args(int argc, char **argv) {
              "  --duration N           Seconds per data point (default: 60)\n"
              "  --warmup N             Warmup seconds (default: 5)\n"
              "  --tiers 100,500,...    Row tiers (default: 100,500,10000,100000,500000)\n"
+             "  --validate             Validate PA results against MySQL before benchmarking\n"
              "  --quick                Quick mode (fewer tiers, 15s, 16 conn)\n",
              argv[0]);
       exit(0);
@@ -669,47 +856,53 @@ int main(int argc, char **argv) {
   prepare_tables(setup_mysql);
 
   // Phase 2: Get NDB table objects, indexes, and resolve column IDs
-  Ndb myNdb(ndb_conns[0], g_database);
-  if (myNdb.init()) die("Ndb::init failed");
-
-  // Cache table and index pointers for each tier (resolve once, reuse)
-  struct TierInfo {
-    int rows;
-    const NdbDictionary::Table *table;
-    const NdbDictionary::Index *idx_date;  // for Q4 index scan
-  };
   std::vector<TierInfo> tier_infos;
+  {
+    Ndb myNdb(ndb_conns[0], g_database);
+    if (myNdb.init()) die("Ndb::init failed");
 
-  for (int rows : g_tiers) {
-    std::string tbl = table_name(rows);
-    const NdbDictionary::Dictionary *dict = myNdb.getDictionary();
-    const NdbDictionary::Table *table = dict->getTable(tbl.c_str());
-    if (!table) {
-      fprintf(stderr, "FATAL: Cannot find table %s: %s\n",
-              tbl.c_str(), dict->getNdbError().message);
-      exit(1);
+    for (int rows : g_tiers) {
+      std::string tbl = table_name(rows);
+      const NdbDictionary::Dictionary *dict = myNdb.getDictionary();
+      const NdbDictionary::Table *table = dict->getTable(tbl.c_str());
+      if (!table) {
+        fprintf(stderr, "FATAL: Cannot find table %s: %s\n",
+                tbl.c_str(), dict->getNdbError().message);
+        exit(1);
+      }
+
+      // Resolve idx_date ordered index for Q4 index scan
+      const NdbDictionary::Index *idx_date =
+          dict->getIndex("idx_date", tbl.c_str());
+      if (!idx_date) {
+        fprintf(stderr, "WARNING: Cannot find index idx_date on %s: %s\n",
+                tbl.c_str(), dict->getNdbError().message);
+      }
+
+      tier_infos.push_back({rows, table, idx_date});
+
+      // Resolve filter_date column ID from first table (for fallback)
+      if (g_filter_date_col_id < 0) {
+        const NdbDictionary::Column *col = table->getColumn("filter_date");
+        if (col) g_filter_date_col_id = col->getColumnNo();
+      }
     }
-
-    // Resolve idx_date ordered index for Q4 index scan
-    const NdbDictionary::Index *idx_date =
-        dict->getIndex("idx_date", tbl.c_str());
-    if (!idx_date) {
-      fprintf(stderr, "WARNING: Cannot find index idx_date on %s: %s\n",
-              tbl.c_str(), dict->getNdbError().message);
-    }
-
-    tier_infos.push_back({rows, table, idx_date});
-
-    // Resolve filter_date column ID from first table (for fallback)
-    if (g_filter_date_col_id < 0) {
-      const NdbDictionary::Column *col = table->getColumn("filter_date");
-      if (col) g_filter_date_col_id = col->getColumnNo();
-    }
-  }
+  }  // myNdb destroyed here, before connections are deleted
 
   fprintf(stderr, "Tables resolved. filter_date col_id=%d, idx_date=%s\n",
           g_filter_date_col_id,
           tier_infos[0].idx_date ? "found" : "NOT found");
+
+  // Phase 2.5: Validate PA results against MySQL (if requested)
+  if (g_validate) {
+    if (!validate_all(ndb_conns[0], setup_mysql, tier_infos)) {
+      fprintf(stderr, "Validation failed. Aborting benchmark.\n");
+      mysql_close(setup_mysql);
+      for (auto *conn : ndb_conns) delete conn;
+      ndb_end(0);
+      return 1;
+    }
+  }
 
   // Phase 3: Run benchmarks
   // Store summary data: summary[tier_idx] = {sum_m_qps, sum_m_avg, ... }
