@@ -35,12 +35,14 @@ class NdbRecord;
 class NdbOperation;
 
 /**
- * @brief Helper for inserting rows into ring buffer tables via NDB API.
+ * @brief Helper for managing rows in ring buffer tables via NDB API.
  *
- * NdbRingBufferWriter encapsulates the ring buffer INSERT protocol that
- * is normally performed by the MySQL handler (ha_ndbcluster.cc).  It
- * manages the internal ring_idx and ring_meta columns automatically,
- * so the caller only needs to provide user column values.
+ * NdbRingBufferWriter encapsulates the ring buffer INSERT and
+ * DELETE-OLDEST protocols normally performed by (or restricted by) the
+ * MySQL handler (ha_ndbcluster.cc).  It manages the internal ring_idx
+ * and ring_meta columns automatically, so the caller only needs to
+ * provide user column values (for insert) or PK-prefix values (for
+ * delete-oldest).
  *
  * Usage:
  * @code
@@ -112,6 +114,33 @@ class NdbRingBufferWriter {
    */
   int flush();
 
+  /**
+   * Delete the N oldest data rows for a single PK prefix.
+   *
+   * Reads the meta row with exclusive lock, computes which slots hold
+   * the oldest rows from (next_pos, count), queues deleteTuple ops for
+   * those slots, and updates the meta row with count -= N (next_pos
+   * and total_inserts unchanged).  No hole forms: subsequent inserts
+   * land at next_pos and refill the freed slots in arrival order.
+   *
+   * @param pkPrefixRow  Row in NdbRecord layout with PK-prefix columns
+   *                     filled in.  ring_idx is ignored, all other
+   *                     columns ignored.
+   * @param maxN         Maximum rows to delete.  If the ring contains
+   *                     fewer rows, deletes what's available.  Empty
+   *                     ring is not an error — outActual is set to 0.
+   * @param outActual    Output: number of rows actually deleted.
+   * @return 0 on success, -1 on error.
+   *
+   * Cannot be mixed with an active addRow batch on the same Writer
+   * instance — caller must call flush() before deleteOldest() if rows
+   * have been added.
+   *
+   * Internally calls execute(NoCommit).  Caller is responsible for
+   * committing the transaction.
+   */
+  int deleteOldest(const char *pkPrefixRow, Uint32 maxN, Uint32 *outActual);
+
   /** Get the NDB error code of the last failed operation. */
   int getErrorCode() const { return m_error_code; }
 
@@ -168,6 +197,14 @@ class NdbRingBufferWriter {
   const NdbOperation *writeDataRow(const char *rowBuffer,
                                    const unsigned char *userMask);
   int writeMetaRow();
+
+  /*
+   * Compute the ring_idx (1-based) of the i-th oldest data row given
+   * the current meta state.  i=0 returns the oldest, i=1 the next
+   * oldest, etc.  Caller must ensure i < count.
+   */
+  static Uint32 computeOldestSlot(const Ring_meta &meta, Uint32 i,
+                                  Uint32 ring_size);
   bool pkPrefixMatches(const char *row1, const char *row2) const;
   void setRingIdxInBuffer(char *buf, Uint32 value) const;
   void setRingMetaNullInBuffer(char *buf) const;

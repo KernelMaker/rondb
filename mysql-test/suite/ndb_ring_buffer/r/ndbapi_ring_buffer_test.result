@@ -39,9 +39,21 @@ CREATE DATABASE IF NOT EXISTS test;
   Data rows: 5
   Total rows (with meta): 6
   PASS: Concurrent same-prefix inserts
+[Test 18] deleteOldest — basic partial ring
+  PASS: deleteOldest — basic partial ring
+[Test 19] deleteOldest — clamp + idempotent on drained
+  PASS: deleteOldest — clamp + idempotent on drained
+[Test 20] deleteOldest — empty table
+  PASS: deleteOldest — empty table
+[Test 21] deleteOldest — after wrap
+  PASS: deleteOldest — after wrap
+[Test 22] deleteOldest — refill order (no-hole proof)
+  PASS: deleteOldest — refill order (no-hole proof)
+[Test 23] deleteOldest — multi-prefix isolation
+  PASS: deleteOldest — multi-prefix isolation
 
 === Results ===
-Passed: 17
+Passed: 23
 Failed: 0
 #
 # Done
