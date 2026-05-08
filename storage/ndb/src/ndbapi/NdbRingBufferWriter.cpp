@@ -516,14 +516,15 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
         m_batch_meta.init_first_insert();
       } else {
         m_batch_meta.unpack(data_ptr);
-
-        // Grow adjustment: after ALTER TABLE increases ring_size,
-        // next_pos may point to an occupied slot
-        bool ring_full =
-            (m_batch_meta.count >= m_ring_buffer_size);
-        if (!ring_full && m_batch_meta.next_pos <= m_batch_meta.count) {
-          m_batch_meta.next_pos = m_batch_meta.count + 1;
-        }
+        /*
+         * No grow-adjustment here.  Mutating next_pos based on the
+         * heuristic next_pos<=count would corrupt the meta after a
+         * deleteOldest call, since deleteOldest produces exactly that
+         * shape with non-contiguous slot occupancy.  The cost of not
+         * adjusting is that the first INSERT after ALTER grow on a
+         * wrapped ring overwrites the oldest pre-grow row instead of
+         * filling an empty slot — a documented limitation.
+         */
       }
     }
   } else if (read_err.code == 626) {
@@ -706,4 +707,120 @@ int NdbRingBufferWriter::flush() {
   int ret = writeMetaRow();
   m_batch_active = false;
   return ret;
+}
+
+// ---------------------------------------------------------------
+// computeOldestSlot — math: ring_idx (1-based) of the i-th oldest row
+// ---------------------------------------------------------------
+
+Uint32 NdbRingBufferWriter::computeOldestSlot(const Ring_meta &meta,
+                                              Uint32 i, Uint32 ring_size) {
+  /*
+   * tail = ring_idx of the oldest data row.
+   *   - Full ring (count == ring_size): the slot about to be overwritten
+   *     by the next insert IS the oldest, so tail = next_pos.
+   *   - Partial ring: oldest sits behind next_pos by (count) slots,
+   *     wrapping at ring_size.  Underflow-safe because next_pos >= 1
+   *     and count <= ring_size, so the addition stays >= 0 in Uint32.
+   */
+  Uint32 tail;
+  if (meta.count >= ring_size) {
+    tail = meta.next_pos;
+  } else {
+    tail = ((meta.next_pos + ring_size - meta.count - 1) % ring_size) + 1;
+  }
+  // Walk i slots forward from tail, wrapping at ring_size
+  return ((tail - 1 + i) % ring_size) + 1;
+}
+
+// ---------------------------------------------------------------
+// deleteOldest — public entry point
+// ---------------------------------------------------------------
+
+int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
+                                      Uint32 maxN, Uint32 *outActual) {
+  if (m_error_code != 0) {
+    return -1;  // constructor or earlier op failed
+  }
+
+  if (!pkPrefixRow || !outActual) {
+    setError(4000, "NdbRingBufferWriter::deleteOldest: null argument");
+    return -1;
+  }
+
+  *outActual = 0;
+  m_error_code = 0;
+  m_error_message[0] = '\0';
+
+  // Auto-flush any pending insert batch — its meta write must commit
+  // before we read the meta row here, or we'd see stale state.
+  if (m_batch_active) {
+    if (flush() != 0) return -1;
+  }
+
+  // Read meta with LM_Exclusive — serializes with concurrent inserts /
+  // delete-oldest on the same PK prefix until the txn commits.
+  if (readMetaRow(pkPrefixRow) != 0) return -1;
+
+  // Empty ring (no meta row, or meta exists with count=0): no-op success.
+  if (!m_batch_meta_existed || m_batch_meta.count == 0) {
+    return 0;
+  }
+
+  if (maxN == 0) {
+    return 0;
+  }
+
+  const Uint32 popN =
+      (maxN < m_batch_meta.count) ? maxN : m_batch_meta.count;
+
+  // Cache PK prefix so writeMetaRow() can build the meta row's key.
+  memcpy(m_pk_prefix_buffer, pkPrefixRow, m_row_size);
+
+  NdbOperation::OperationOptions del_opts;
+  memset(&del_opts, 0, sizeof(del_opts));
+  del_opts.optionsPresent =
+      NdbOperation::OperationOptions::OO_RING_BUFFER_OP;
+
+  /*
+   * Queue one deleteTuple per oldest slot.  buildSignalsNdbRecord copies
+   * the key buffer at call time, so we can reuse m_data_row_buffer
+   * across iterations.  m_data_row_buffer gets the full pkPrefixRow
+   * memcpy'd in (sets PK columns; non-PK column values are irrelevant
+   * for deleteTuple key extraction) plus ring_idx overwritten per slot.
+   */
+  for (Uint32 i = 0; i < popN; i++) {
+    Uint32 slot =
+        computeOldestSlot(m_batch_meta, i, m_ring_buffer_size);
+
+    memcpy(m_data_row_buffer, pkPrefixRow, m_row_size);
+    setRingIdxInBuffer(m_data_row_buffer, slot);
+
+    const NdbOperation *del_op = m_trans->deleteTuple(
+        m_ndb_record, m_data_row_buffer, m_ndb_record,
+        nullptr,  // result row
+        nullptr,  // result mask
+        &del_opts, sizeof(NdbOperation::OperationOptions));
+
+    if (!del_op) {
+      const NdbError &err = m_trans->getNdbError();
+      setError(err.code, err.message);
+      return -1;
+    }
+  }
+
+  /*
+   * Update meta: count -= popN.  next_pos and total_inserts unchanged
+   * — that's what makes subsequent inserts refill the freed slots in
+   * arrival order with no permanent hole.
+   */
+  m_batch_meta.count -= popN;
+
+  // writeMetaRow uses m_pk_prefix_buffer + m_batch_meta_existed (true,
+  // so it issues updateTuple) and finishes with execute(NoCommit) —
+  // single round-trip flushes the queued deletes plus the meta update.
+  if (writeMetaRow() != 0) return -1;
+
+  *outActual = popN;
+  return 0;
 }
