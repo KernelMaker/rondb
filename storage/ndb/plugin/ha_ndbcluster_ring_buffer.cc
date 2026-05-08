@@ -736,13 +736,14 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
           meta.unpack((const uchar *)meta_str.ptr());
           ring_full = (meta.count >= ring_buffer_size);
           /*
-           * Grow adjustment: after ALTER TABLE increases ring_size,
-           * next_pos may point to an occupied slot (it wrapped at
-           * the old smaller size). Redirect to first empty slot.
+           * No grow-adjustment here.  The previous heuristic mutated
+           * next_pos when next_pos<=count, intending to skip occupied
+           * slots after ALTER grow.  But the same shape arises after
+           * deleteOldest with non-contiguous occupancy, where mutating
+           * next_pos picks the wrong row.  Cost of not adjusting: the
+           * first INSERT after grow on a wrapped ring overwrites the
+           * oldest pre-grow row (documented limitation).
            */
-          if (!ring_full && meta.next_pos <= meta.count) {
-            meta.next_pos = meta.count + 1;
-          }
           data_slot = meta.next_pos;
           meta.advance(ring_buffer_size);
         }
