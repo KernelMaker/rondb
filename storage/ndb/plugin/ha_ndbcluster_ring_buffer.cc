@@ -114,6 +114,11 @@ struct Ring_meta {
     advance(ring_size);  /* Sets next_pos, count=1, total_inserts=1 */
   }
 
+  /*
+   * Online ring-buffer resize is disabled (rejected upstream by
+   * ha_ndbcluster's parse_comment validator), so post-grow stale-meta
+   * states cannot arise here and the formula needs no grow-adjustment.
+   */
   void advance(Uint32 ring_size) {
     next_pos = (next_pos % ring_size) + 1;
     if (count < ring_size) count++;
@@ -735,15 +740,6 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
         } else {
           meta.unpack((const uchar *)meta_str.ptr());
           ring_full = (meta.count >= ring_buffer_size);
-          /*
-           * No grow-adjustment here.  The previous heuristic mutated
-           * next_pos when next_pos<=count, intending to skip occupied
-           * slots after ALTER grow.  But the same shape arises after
-           * deleteOldest with non-contiguous occupancy, where mutating
-           * next_pos picks the wrong row.  Cost of not adjusting: the
-           * first INSERT after grow on a wrapped ring overwrites the
-           * oldest pre-grow row (documented limitation).
-           */
           data_slot = meta.next_pos;
           meta.advance(ring_buffer_size);
         }
