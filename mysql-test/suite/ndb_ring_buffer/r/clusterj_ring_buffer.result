@@ -4,10 +4,7 @@ Found Java
 Found clusterj.jar
 Found clusterj_test jar
 Found ndbclient library
-WARNING in native method: JNI call made without checking exceptions when required to from CallStaticObjectMethod
-WARNING in native method: JNI call made without checking exceptions when required to from CallStaticObjectMethod
-WARNING in native method: JNI call made without checking exceptions when required to from CallStaticObjectMethod
-Java 1.8.0_442
+Java <VERSION>
 Running named tests in '/home/zhao/workspace/kernelmaker/rondb-bin/storage/ndb/clusterj/clusterj-test/clusterj-test-26.02.2.jar'
 Found 2 test classes.
 1: testsuite.clusterj.ClearSmokeTest.test running...testsuite.clusterj.ClearSmokeTest

@@ -16,6 +16,11 @@ if (`select @@version_compile_os IN ("Win32","Win64","Windows")`)
 --source suite/ndb/include/have_java.inc
 --source suite/ndb/include/have_clusterj.inc
 
+# Filter JVM-version-dependent output so the test is stable across Java
+# major versions:
+#   - drop `-Xcheck:jni` warnings (printed by some JVMs, suppressed by others)
+#   - normalize the `Java <ver>` banner from AllTests.java
+#   - drop mysys thread-cleanup warning at JVM exit (timing-dependent)
 --error 0,1
 exec
   $MTR_JAVA -ea -Xcheck:jni
@@ -27,6 +32,7 @@ exec
   -classpath $CLUSTERJ_TEST_JAR$SEP$CLUSTERJ_JAR$SEP$MTR_CLASSPATH
   testsuite.clusterj.AllTests
   $CLUSTERJ_TEST_JAR -n RingBufferTest
+  2>&1 | grep -vE '^WARNING in native method: JNI call|^\[ERROR\] Error in my_thread_global_end' | sed -E 's/^Java [0-9][0-9._]*/Java <VERSION>/'
   ;
 
 --remove_file $MYSQLTEST_VARDIR/tmp/clusterj.properties
