@@ -10063,9 +10063,9 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
         Ndb_table_guard old_tab_g(ndb, orig_db, orig_name);
         const NDBTAB *old_tab = old_tab_g.get_table();
         if (old_tab && old_tab->isRingBuffer() &&
-            rb_spec.size < old_tab->getRingBufferSize()) {
+            rb_spec.size != old_tab->getRingBufferSize()) {
           return create.failed_illegal_create_option(
-              "Cannot shrink ring buffer size");
+              "Cannot change ring buffer size; use DROP+CREATE to resize");
         }
       }
       found_ring_buffer = true;
@@ -16824,8 +16824,8 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
       /* off on non-ring-buffer table — no-op, ignore */
     } else {
       if (old_tab->isRingBuffer() &&
-          rb_spec.size < old_tab->getRingBufferSize()) {
-        *reason = "Cannot shrink ring buffer size";
+          rb_spec.size != old_tab->getRingBufferSize()) {
+        *reason = "Cannot change ring buffer size; use DROP+CREATE to resize";
         return true;
       }
       if (const char *err =

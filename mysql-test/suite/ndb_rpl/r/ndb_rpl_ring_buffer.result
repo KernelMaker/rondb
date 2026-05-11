@@ -204,9 +204,10 @@ client_id	ring_idx	event_data
 1	1	post_trunc_A
 1	2	post_trunc_B
 #
-# Case 11: ALTER TABLE grow replicates to slave
+# Case 11: ALTER TABLE resize rejected; table unchanged on both sides
 #
 ALTER TABLE test.rb COMMENT="NDB_TABLE=NOLOGGING=1,MAX_ROWS_PER_PK=8@ring_idx@ring_meta";
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Cannot change ring buffer size; use DROP+CREATE to resize'
 SHOW CREATE TABLE test.rb;
 Table	Create Table
 rb	CREATE TABLE `rb` (
@@ -215,7 +216,7 @@ rb	CREATE TABLE `rb` (
   `ring_meta` varbinary(64) DEFAULT NULL,
   `event_data` varchar(100) DEFAULT NULL,
   PRIMARY KEY (`client_id`,`ring_idx`)
-) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=NOLOGGING=1,MAX_ROWS_PER_PK=8@ring_idx@ring_meta'
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=4@ring_idx@ring_meta'
 SHOW CREATE TABLE test.rb;
 Table	Create Table
 rb	CREATE TABLE `rb` (
@@ -224,16 +225,12 @@ rb	CREATE TABLE `rb` (
   `ring_meta` varbinary(64) DEFAULT NULL,
   `event_data` varchar(100) DEFAULT NULL,
   PRIMARY KEY (`client_id`,`ring_idx`)
-) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=NOLOGGING=1,MAX_ROWS_PER_PK=8@ring_idx@ring_meta'
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=4@ring_idx@ring_meta'
 #
-# Case 12: INSERT after grow uses new ring size
+# Case 12: INSERT after rejected resize continues at ring_size=4
 #
 INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_C');
 INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_D');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_E');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_F');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_G');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_H');
 SELECT client_id, ring_idx, event_data FROM test.rb
 WHERE client_id = 1 ORDER BY ring_idx;
 client_id	ring_idx	event_data
@@ -241,33 +238,21 @@ client_id	ring_idx	event_data
 1	2	post_trunc_B
 1	3	grow_C
 1	4	grow_D
-1	5	grow_E
-1	6	grow_F
-1	7	grow_G
-1	8	grow_H
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'wrap_I');
+INSERT INTO test.rb (client_id, event_data) VALUES (1, 'wrap_E');
 SELECT client_id, ring_idx, event_data FROM test.rb
 WHERE client_id = 1 ORDER BY ring_idx;
 client_id	ring_idx	event_data
-1	1	wrap_I
+1	1	wrap_E
 1	2	post_trunc_B
 1	3	grow_C
 1	4	grow_D
-1	5	grow_E
-1	6	grow_F
-1	7	grow_G
-1	8	grow_H
 SELECT client_id, ring_idx, event_data FROM test.rb
 WHERE client_id = 1 ORDER BY ring_idx;
 client_id	ring_idx	event_data
-1	1	wrap_I
+1	1	wrap_E
 1	2	post_trunc_B
 1	3	grow_C
 1	4	grow_D
-1	5	grow_E
-1	6	grow_F
-1	7	grow_G
-1	8	grow_H
 #
 # Case 13: DELETE + re-INSERT cycle replicates
 #

@@ -266,17 +266,18 @@ SELECT client_id, ring_idx, event_data FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
 
 ###############################################################################
-# Case 11: ALTER TABLE grow replicates
+# Case 11: ALTER TABLE resize is rejected (online resize disabled)
 ###############################################################################
 
 --echo #
---echo # Case 11: ALTER TABLE grow replicates to slave
+--echo # Case 11: ALTER TABLE resize rejected; table unchanged on both sides
 --echo #
 
 --connection master
 
-# Current ring_size=4, grow to 8
-# Need NOLOGGING=1 in replication setup to match table's current setting
+# Online ring-buffer resize is disabled; this grow must fail and nothing
+# may replicate.
+--error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb COMMENT="NDB_TABLE=NOLOGGING=1,MAX_ROWS_PER_PK=8@ring_idx@ring_meta";
 
 SHOW CREATE TABLE test.rb;
@@ -284,34 +285,29 @@ SHOW CREATE TABLE test.rb;
 --sync_slave_with_master
 --connection slave
 
-# Slave should have the grown ring_size
+# Slave still has the original ring_size
 SHOW CREATE TABLE test.rb;
 
 ###############################################################################
-# Case 12: INSERT after grow uses new ring size on both master and slave
+# Case 12: INSERT after rejected resize continues at original ring size
 ###############################################################################
 
 --echo #
---echo # Case 12: INSERT after grow uses new ring size
+--echo # Case 12: INSERT after rejected resize continues at ring_size=4
 --echo #
 
 --connection master
 
-# Currently has 2 rows (post_trunc_A, post_trunc_B). Ring size is now 8.
-# Add 6 more to fill ring at new size
+# Currently has 2 rows (post_trunc_A, post_trunc_B). Fill to ring_size=4.
 INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_C');
 INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_D');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_E');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_F');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_G');
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_H');
 
-# Ring full at size 8, all 8 slots occupied
+# Ring full at size 4, all 4 slots occupied
 SELECT client_id, ring_idx, event_data FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
 
-# Wrap at new size
-INSERT INTO test.rb (client_id, event_data) VALUES (1, 'wrap_I');
+# Wrap at the original size — oldest row (post_trunc_A) overwritten
+INSERT INTO test.rb (client_id, event_data) VALUES (1, 'wrap_E');
 
 SELECT client_id, ring_idx, event_data FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;

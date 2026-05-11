@@ -80,6 +80,9 @@ class RingBufferWriter {
             totalInserts = 0;
         }
 
+        // Online ring-buffer resize is disabled (rejected upstream by
+        // ha_ndbcluster's parse_comment validator), so post-grow stale-meta
+        // states cannot arise here and the formula needs no grow-adjustment.
         void advance(int ringSize) {
             nextPos = (nextPos % ringSize) + 1;
             if (count < ringSize) count++;
@@ -375,12 +378,6 @@ class RingBufferWriter {
             byte[] metaBytes = ndbRecordImpl.getBytes(metaRowBuffer, ringMetaColumnId);
             batchMeta.unpack(metaBytes);
             batchMetaExisted = true;
-
-            // Handle ring size growth: if next_pos <= count but count < new ring size
-            if (batchMeta.nextPos <= batchMeta.count
-                    && batchMeta.count < ringBufferSize) {
-                batchMeta.nextPos = batchMeta.count + 1;
-            }
         } else if (errorCode == ROW_NOT_FOUND) {
             // Meta row doesn't exist yet -- fresh ring.
             // The 626 propagates to the NdbTransaction error/commit state.

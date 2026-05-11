@@ -66,6 +66,9 @@ void NdbRingBufferWriter::Ring_meta::init_first_insert() {
   reserved_2 = 0;
 }
 
+// Online ring-buffer resize is disabled (rejected upstream by ha_ndbcluster's
+// parse_comment validator), so post-grow stale-meta states cannot arise here
+// and the formula needs no grow-adjustment.
 void NdbRingBufferWriter::Ring_meta::advance(Uint32 ring_size) {
   next_pos = (next_pos % ring_size) + 1;
   if (count < ring_size) count++;
@@ -516,15 +519,6 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
         m_batch_meta.init_first_insert();
       } else {
         m_batch_meta.unpack(data_ptr);
-        /*
-         * No grow-adjustment here.  Mutating next_pos based on the
-         * heuristic next_pos<=count would corrupt the meta after a
-         * deleteOldest call, since deleteOldest produces exactly that
-         * shape with non-contiguous slot occupancy.  The cost of not
-         * adjusting is that the first INSERT after ALTER grow on a
-         * wrapped ring overwrites the oldest pre-grow row instead of
-         * filling an empty slot — a documented limitation.
-         */
       }
     }
   } else if (read_err.code == 626) {
