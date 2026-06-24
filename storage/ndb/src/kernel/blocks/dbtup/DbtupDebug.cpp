@@ -242,6 +242,20 @@ Dbtup::execDUMP_STATE_ORD(Signal* signal)
   Uint32 type = signal->theData[0];
 
   (void)type;
+  if (type == 18200) {
+    /*
+     * TTL BENCHMARK SCAFFOLD (not for production): set the checkTTL optimization
+     * mode (0=baseline, 1=+Task1, 2=+Task3b, 3=+Task3a). Broadcast with
+     * 'ALL DUMP 18200 <mode>'. Sets the process-wide static, so it applies to
+     * every LDM/query thread in this data node. Remove with the instrumentation.
+     */
+    if (signal->getLength() >= 2) {
+      g_ttl_bench_mode = signal->theData[1];
+    }
+    g_eventLogger->info("TTL_BENCH_MODE set to %u (inst %u)",
+                        g_ttl_bench_mode, instance());
+    return;
+  }
 #if 0
   if (type == 100) {
     RelTabMemReq * const req = (RelTabMemReq *)signal->getDataPtrSend();

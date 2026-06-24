@@ -803,6 +803,8 @@ class Dblqh : public SimulatedBlock {
     Uint8 m_ttl_ignore_for_ral; // ignore set by Read after lock
     Uint8 m_ttl_only_expired;   // Only be insterested in expired rows
     Uint32 m_ttl_purge_window_size;
+    Uint32 m_ttl_now_sec;       // wall-clock "now" (UTC epoch sec) sampled once
+                                // per scan batch for TTL expiry checks; 0 = unset
   };
   static constexpr Uint32 DBLQH_SCAN_RECORD_TRANSIENT_POOL_INDEX = 1;
   typedef Ptr<ScanRecord> ScanRecordPtr;
@@ -2681,6 +2683,7 @@ class Dblqh : public SimulatedBlock {
   };  // Size 100 bytes
   typedef Ptr<Tablerec> TablerecPtr;
   bool is_ttl_table(Uint32 table_id);
+  void set_scan_ttl_now_sec(ScanRecord *scanPtr, Uint32 table_id);
   void release_frag_array(Tablerec*);
   Uint32 findFreeFragEntry(Uint32 num_fragments_in_array);
   bool seize_frag_array(Tablerec*,

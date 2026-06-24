@@ -2171,6 +2171,7 @@ Uint32 cnoOfMaxAllocatedTriggerRec;
     Uint32 agg_curr_batch_size_bytes;
     Uint32 agg_n_res_recs;
     Uint32 ttl_purge_window_size;
+    Uint32 ttl_now_sec;  // per-scan-batch UTC "now" from DBLQH; 0 = use my_micro_time()
   };
 
   friend struct Undo_buffer;
@@ -2739,6 +2740,14 @@ private:
                KeyReqStruct *req_struct,
                bool* has_error,
                int* err_no);
+  /*
+   * TTL BENCHMARK SCAFFOLD (not for production): selects how much of the TTL
+   * optimization stack checkTTL() runs, so each task's per-row contribution can
+   * be measured from a SINGLE binary. Set at runtime via DUMP 18200 <mode>:
+   *   0=baseline, 1=+Task1(now_sec), 2=+Task3b(direct read), 3=+Task3a(integer).
+   * Cumulative; default 3 = production behavior. Remove with the instrumentation.
+   */
+  static Uint32 g_ttl_bench_mode;
 
   void PrepareAccLockReq4RAL(void* scan_rec,
                              Signal* signal);

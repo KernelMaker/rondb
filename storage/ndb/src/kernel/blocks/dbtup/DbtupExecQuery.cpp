@@ -48,6 +48,9 @@
 #include "AggInterpreter.hpp"
 #include "my_time.h"
 #include "my_systime.h"
+// #include <x86intrin.h>  // __rdtsc() for TTL cyc/call instrumentation (disabled
+//                         // for the RPS/latency benchmark; the per-row reads would
+//                         // skew end-to-end timing -- re-enable with the #if 0 blocks)
 #include <signaldata/AccLock.hpp>
 #include "rondb_hash.hpp"
 #include "../dbtux/Dbtux.hpp"
@@ -2050,6 +2053,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
   req_struct.agg_n_res_recs = 0;
 
   req_struct.ttl_purge_window_size = 0;
+  req_struct.ttl_now_sec = 0;
 
   if (unlikely(trans_state != TRANS_IDLE)) {
     TUPKEY_abort(&req_struct, 39);
@@ -2122,6 +2126,13 @@ bool Dbtup::execTUPKEYREQ(Signal* signal,
       regOperPtr->ttl_ignore = lqhOpPtrP->ttl_ignore;
     }
     req_struct.ttl_purge_window_size = lqhScanPtrP->m_ttl_purge_window_size;
+    /*
+     * TTL related
+     * Reuse the wall-clock "now" sampled once per scan batch in DBLQH instead
+     * of calling my_micro_time() per row in checkTTL. PK/UPDATE/DELETE keep
+     * ttl_now_sec == 0 and read the clock per op.
+     */
+    req_struct.ttl_now_sec = lqhScanPtrP->m_ttl_now_sec;
   } else {
     Uint32 attrBufLen = lqhOpPtrP->totReclenAi;
     Uint32 dirtyOp = lqhOpPtrP->dirtyOp;
@@ -2916,10 +2927,27 @@ static inline void ttl_utc_sec_to_TIME(time_t t, MYSQL_TIME *out) {
   out->time_type = MYSQL_TIMESTAMP_DATETIME;
 }
 
+// TTL BENCHMARK SCAFFOLD (not for production): default 3 = full optimization
+// stack (production behavior). Flipped at runtime via DUMP 18200 <mode>.
+Uint32 Dbtup::g_ttl_bench_mode = 3;
+
 int Dbtup::checkTTL(Tablerec* regTabPtr,
                     KeyReqStruct *req_struct,
                     bool* has_error,
                     int* err_no) {
+  /*
+   * TTL BENCHMARK INSTRUMENTATION (rdtsc cyc/call) -- DISABLED.
+   * The AWS benchmark measures end-to-end RPS/latency, for which the two
+   * per-row __rdtsc() reads are both useless and harmful (they add per-row
+   * cost that skews the latency being measured). Kept under #if 0 so the
+   * single-binary per-task cyc/call attribution can be re-enabled; the
+   * matching epilogue block sits just before the return.
+   */
+#if 0
+  static thread_local Uint64 s_ttl_instr_cycles = 0;
+  static thread_local Uint64 s_ttl_instr_calls = 0;
+  const Uint64 ttl_instr_c0 = __rdtsc();
+#endif
   Uint32 attrId = (regTabPtr->m_ttl_col_no);
   const Uint32* attrDescriptor = regTabPtr->tabDescriptor +
     (attrId * ZAD_SIZE);
@@ -2939,61 +2967,113 @@ int Dbtup::checkTTL(Tablerec* regTabPtr,
                   req_struct->fragPtrP->fragTableId, type_id, size,
                   size_in_bytes, size_in_words);
   /*
-   * TTL related
-   * Prepare correct attribute id format before passing it to readAttributes
+   * TTL BENCHMARK SCAFFOLD (not for production): g_ttl_bench_mode selects how
+   * much of the optimization stack runs, so each task's per-row contribution is
+   * measurable from ONE binary (flip via DUMP 18200 <mode>, no rebuild).
+   * Cumulative: 0=baseline, 1=+Task1(now_sec), 2=+Task3b(direct read),
+   * 3=+Task3a(integer compare, default). Read once for a consistent decision.
    */
-  attrId = attrId << 16;
-  Uint32 out_buf[3];
-  /*
-   * TTL related
-   * TODO (Zhao)
-   * Double check whether it's safe to reuse req_struct here or not.
-   */
-  int ret = readAttributes(req_struct,
-      &attrId,
-      1,
-      out_buf,
-      3);
-  AttributeHeader* ahOut = (AttributeHeader*)out_buf;
-  TTL_RONDB_TRACE(req_struct->fragPtrP->fragTableId,
-                  "Get ttl column data, col_id: %u, "
-                  "byte_size: %u, data_size: %u, is_null: %u",
-                  ahOut->getAttributeId(), ahOut->getByteSize(),
-                  ahOut->getDataSize(), ahOut->isNULL());
-  ndbrequire(regTabPtr->m_ttl_col_no == ahOut->getAttributeId());
+  const Uint32 bench_mode = g_ttl_bench_mode;
+
+  const Uint32 TattrDesc2 = attrDescriptor[1];  // AttributeOffset word
+  ndbrequire(!AttributeDescriptor::getDiskBased(TattrDesc1));
+  Uint32 out_buf[3];  // backing store for ttl_data on the readAttributes path
+  const unsigned char* ttl_data;
+  bool is_null = false;
+  if (bench_mode >= 2 && !AttributeDescriptor::getDynamic(TattrDesc1)) {
+    /*
+     * Task 3b: read the fixed-format column directly from the fixed in-memory
+     * tuple part (avoids readAttributes' dispatch + copy + header setup).
+     */
+    const Uint32 readOffset = AttributeOffset::getOffset(TattrDesc2);
+    ttl_data = reinterpret_cast<const unsigned char*>(
+        req_struct->m_tuple_ptr->m_data + readOffset);
+    if (AttributeDescriptor::getNullable(TattrDesc1)) {
+      const Uint64 attrDes = (Uint64(TattrDesc2) << 32) + Uint64(TattrDesc1);
+      is_null = nullFlagCheck(req_struct, attrDes);
+    }
+  } else {
+    /*
+     * Baseline/Task1 column read (modes 0-1) AND the Task-3b dynamic-format
+     * fallback (mode >= 2 on a DYNAMIC column): the general readAttributes()
+     * decode, whose read-function array handles dynamic columns.
+     */
+    Uint32 rd_attrId = (Uint32)(regTabPtr->m_ttl_col_no) << 16;
+    const int ret = readAttributes(req_struct, &rd_attrId, 1, out_buf, 3);
+    // Cannot fail for validated TTL column metadata: valid internal attr id,
+    // in-memory column, 3-word buffer big enough for TIMESTAMP2/DATETIME2.
+    ndbrequire(ret >= 0);
+    AttributeHeader* ahOut = (AttributeHeader*)out_buf;
+    ndbrequire(regTabPtr->m_ttl_col_no == ahOut->getAttributeId());
+    is_null = ahOut->isNULL();
+    ttl_data = reinterpret_cast<const unsigned char*>(ahOut->getDataPtr());
+  }
 
   int cmp_ret = 0;
   *has_error = false;
-  if (ret >= 0) {
-    if (!ahOut->isNULL()) {
+  *err_no = 0;
+  if (!is_null) {
+    if (bench_mode >= 3) {
       /*
-       * TTL related
-       * Just need to parse to second part.
+       * Task 3a: integer expiry compare. Replaces the broken-down-time dance
+       * (2x ttl_utc_sec_to_TIME + date_add_interval + my_time_compare).
+       * Equivalent because UTC has no DST, a MySQL day is exactly 86400s and
+       * there are no leap seconds. cmp_ret <= 0 == expired.
+       */
+      // Widen before adding (pre-existing Uint32 m_ttl_sec+window wrap hazard).
+      const int64_t ttl_sec = (int64_t)regTabPtr->m_ttl_sec +
+                              (int64_t)req_struct->ttl_purge_window_size;
+      const int64_t now_sec = (req_struct->ttl_now_sec != 0)
+                              ? (int64_t)req_struct->ttl_now_sec
+                              : (int64_t)(my_micro_time() / 1000000);
+      if (type_id == NDB_TYPE_TIMESTAMP2) {
+        // TIMESTAMP2 stores UTC epoch seconds -> pure integer compare.
+        my_timeval timeval;
+        my_timestamp_from_binary(&timeval, ttl_data, 0);
+        const int64_t row_sec = (int64_t)timeval.m_tv_sec;
+        cmp_ret = (row_sec + ttl_sec <= now_sec) ? -1 : 1; /* <=0 == expired */
+      } else {
+        // DATETIME2 UTC wall-clock -> linearize via calc_daynr.
+        const int64_t dt_bin = my_datetime_packed_from_binary(ttl_data, 0);
+        MYSQL_TIME dt;
+        TIME_from_longlong_datetime_packed(&dt, dt_bin);
+        int was_cut = 0;
+        if (unlikely(check_datetime_range(dt) ||
+                     check_date(dt, non_zero_date(dt),
+                                TIME_NO_ZERO_IN_DATE | TIME_NO_ZERO_DATE,
+                                &was_cut))) {
+          // Invalid/zero/out-of-range date -> non-expiring (fail-open).
+          cmp_ret = 1;
+        } else {
+          const int64_t linear_row =
+              (int64_t)calc_daynr(dt.year, dt.month, dt.day) * 86400 +
+              (int64_t)dt.hour * 3600 + (int64_t)dt.minute * 60 +
+              (int64_t)dt.second;
+          const int64_t linear_now = now_sec + (int64_t)719528 * 86400;
+          static const int64_t MAX_DT_LINEAR =
+              (int64_t)calc_daynr(9999, 12, 31) * 86400 +
+              23 * 3600 + 59 * 60 + 59;
+          cmp_ret = (linear_row + ttl_sec > MAX_DT_LINEAR)
+                        ? 1
+                        : ((linear_row + ttl_sec <= linear_now) ? -1 : 1);
+        }
+      }
+    } else {
+      /*
+       * Baseline / Task1 calendar path (modes 0-2): broken-down-time compare.
+       * The "now" clock is read per row in mode 0 (baseline) and from the
+       * per-batch cached now_sec (Task 1) in mode >= 1 when available.
        */
       MYSQL_TIME dt;
       if (type_id == NDB_TYPE_TIMESTAMP2) {
         my_timeval timeval;
-        my_timestamp_from_binary(&timeval,
-            reinterpret_cast<const unsigned char*>(
-              ahOut->getDataPtr()), 0);
-        /*
-         * TTL related
-         * Lock-free UTC conversion: avoids glibc gmtime_r()'s tzset_lock,
-         * which serializes all LDM threads on the TTL purge hot path.
-         */
+        my_timestamp_from_binary(&timeval, ttl_data, 0);
         const time_t tmp_t = (time_t)timeval.m_tv_sec;
         ttl_utc_sec_to_TIME(tmp_t, &dt);
       } else {
-        int64_t dt_bin = my_datetime_packed_from_binary(
-            reinterpret_cast<const unsigned char*>(
-              ahOut->getDataPtr()), 0);
+        int64_t dt_bin = my_datetime_packed_from_binary(ttl_data, 0);
         TIME_from_longlong_datetime_packed(&dt, dt_bin);
       }
-      TTL_RONDB_TRACE(req_struct->fragPtrP->fragTableId,
-                      "Parsed TTL column data: "
-                      "%u.%u.%u %u:%u:%u",
-                      dt.year, dt.month, dt.day,
-                      dt.hour, dt.minute, dt.second);
       Uint32 ttl_sec = regTabPtr->m_ttl_sec;
       ttl_sec += req_struct->ttl_purge_window_size;
       bool valid_future_dt = true;
@@ -3001,64 +3081,41 @@ int Dbtup::checkTTL(Tablerec* regTabPtr,
         Interval interval;
         memset(&interval, 0, sizeof(interval));
         interval.second = ttl_sec;
-        bool add_ret = date_add_interval(&dt, INTERVAL_SECOND,
-            interval, nullptr);
+        bool add_ret = date_add_interval(&dt, INTERVAL_SECOND, interval,
+                                         nullptr);
         if (add_ret) {
-          g_eventLogger->warning("TTL column adds "
-              "interval overflowing");
+          g_eventLogger->warning("TTL column adds interval overflowing");
           valid_future_dt = false;
         }
       }
       if (valid_future_dt) {
-        /*
-         * TTL related
-         * Get current utc time
-         */
         MYSQL_TIME curr_dt;
-        time_t t_now = (time_t)my_micro_time() / 1000000; /* second */
-        /*
-         * TTL related
-         * Lock-free UTC conversion (see ttl_utc_sec_to_TIME) to keep the TTL
-         * purge hot path off glibc's global tzset_lock.
-         */
+        time_t t_now = (bench_mode >= 1 && req_struct->ttl_now_sec != 0)
+                           ? (time_t)req_struct->ttl_now_sec
+                           : (time_t)(my_micro_time() / 1000000);
         ttl_utc_sec_to_TIME(t_now, &curr_dt);
-
-        /*
-         * TTL related
-         * Compare with TTL
-         */
-        TTL_RONDB_TRACE(req_struct->fragPtrP->fragTableId,
-                        "Get TTL [%u + (%u) = %u], "
-                        "expired time: %u.%u.%u %u:%u:%u, "
-                        "current time: %u.%u.%u %u:%u:%u",
-                        regTabPtr->m_ttl_sec,
-                        req_struct->ttl_purge_window_size, ttl_sec,
-                        dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-                        curr_dt.year, curr_dt.month, curr_dt.day, curr_dt.hour,
-                        curr_dt.minute, curr_dt.second);
         cmp_ret = my_time_compare(dt, curr_dt);
       } else {
-        // future_dt overflows, we assume this row doesn't expire
-        cmp_ret = 1;
+        cmp_ret = 1;  // future_dt overflows -> this row doesn't expire
       }
-    } else {
-      /*
-       * TTL related
-       * TODO (Zhao)
-       * remove the warning log here.
-       */
-#ifdef TTL_DEBUG
-      g_eventLogger->warning("Zard, Read a NULL TTL column");
-#endif  // TTL_DEBUG
-      ndbassert(*has_error == false);
-      // NULL equals no TTL is set on the row
-      cmp_ret = 1;
     }
   } else {
-    jam();
-    *has_error = true;
-    *err_no = ret;
+    // NULL equals no TTL is set on the row
+    ndbassert(*has_error == false);
+    cmp_ret = 1;
   }
+  /* TTL BENCHMARK INSTRUMENTATION (rdtsc cyc/call) -- DISABLED, see entry. */
+#if 0
+  s_ttl_instr_cycles += (__rdtsc() - ttl_instr_c0);
+  if (++s_ttl_instr_calls >= 100000) {
+    g_eventLogger->info("TTL_INSTR mode=%u inst=%u calls=%llu cyc/call=%.2f",
+        g_ttl_bench_mode, instance(),
+        (unsigned long long)s_ttl_instr_calls,
+        (double)s_ttl_instr_cycles / (double)s_ttl_instr_calls);
+    s_ttl_instr_cycles = 0;
+    s_ttl_instr_calls = 0;
+  }
+#endif
   return cmp_ret;
 }
 
