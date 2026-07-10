@@ -341,7 +341,7 @@ content TEXT NOT NULL,
 PRIMARY KEY (id, ring_idx)
 ) ENGINE = NDB,
 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
-ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Ring buffer tables cannot have NOT NULL BLOB/TEXT columns'
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Ring buffer: no NOT NULL BLOB/TEXT/JSON/GEOMETRY columns'
 CREATE TABLE test.rb_nn_blob2 (
 id INT NOT NULL,
 ring_idx INT NOT NULL DEFAULT 0,
@@ -350,7 +350,7 @@ payload BLOB NOT NULL,
 PRIMARY KEY (id, ring_idx)
 ) ENGINE = NDB,
 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
-ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Ring buffer tables cannot have NOT NULL BLOB/TEXT columns'
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Ring buffer: no NOT NULL BLOB/TEXT/JSON/GEOMETRY columns'
 #
 # Case 22: Size only — default column names (ring_idx, ring_meta)
 #

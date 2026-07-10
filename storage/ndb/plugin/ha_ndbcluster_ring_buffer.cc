@@ -74,6 +74,15 @@ static const Uint32 RING_META_SIZE = ndb_ring_buffer::META_SIZE;
 
 namespace {
 
+/* Types NDB stores as blobs: classic BLOB/TEXT plus the blob-backed JSON
+   and GEOMETRY types. The meta row cannot carry an inline zero-default for
+   any of these. */
+bool is_blob_backed_type(enum_field_types ft) {
+  return ft == MYSQL_TYPE_BLOB || ft == MYSQL_TYPE_TINY_BLOB ||
+         ft == MYSQL_TYPE_MEDIUM_BLOB || ft == MYSQL_TYPE_LONG_BLOB ||
+         ft == MYSQL_TYPE_JSON || ft == MYSQL_TYPE_GEOMETRY;
+}
+
 struct Ring_meta {
   Uint16 version;
   Uint16 reserved_0;
@@ -289,8 +298,8 @@ const char *validate_columns_mysql(const TABLE *table, const Spec &spec) {
   }
   if (!found_meta) return "Ring meta column not found in table";
 
-  /* No NOT NULL BLOB/TEXT user columns (meta rows cannot set zero-defaults
-     for BLOB types → NDB error 839 at runtime). */
+  /* No NOT NULL blob-backed user columns (meta rows cannot set
+     zero-defaults for blob types → NDB error 839 at runtime). */
   for (uint i = 0; i < table->s->fields; i++) {
     Field *const field = table->field[i];
     if (!my_strcasecmp(system_charset_info, field->field_name,
@@ -299,12 +308,9 @@ const char *validate_columns_mysql(const TABLE *table, const Spec &spec) {
                        spec.meta_col_name.c_str())) {
       continue;
     }
-    if (!field->is_nullable()) {
-      enum_field_types ft = field->real_type();
-      if (ft == MYSQL_TYPE_BLOB || ft == MYSQL_TYPE_TINY_BLOB ||
-          ft == MYSQL_TYPE_MEDIUM_BLOB || ft == MYSQL_TYPE_LONG_BLOB) {
-        return "Ring buffer tables cannot have NOT NULL BLOB/TEXT columns";
-      }
+    if (!field->is_nullable() && is_blob_backed_type(field->real_type())) {
+      /* Keep under the 64-char %-.64s limit of ER_ILLEGAL_HA_CREATE_OPTION */
+      return "Ring buffer: no NOT NULL BLOB/TEXT/JSON/GEOMETRY columns";
     }
   }
   return nullptr;
@@ -442,15 +448,13 @@ int ha_ndbcluster::flush_ring_buffer_batch() {
   /*
    * Include NOT NULL user columns with zero-defaults so that
    * DBTUP's checkNullAttributes() does not reject the meta row.
-   * Skip BLOB/TEXT columns (handled by NdbBlob separately).
+   * Skip blob-backed columns (handled by NdbBlob separately).
    */
   ptrdiff_t nn_offset = meta_rec - table->record[0];
   for (uint i = 0; i < table->s->fields; i++) {
     Field *f = table->field[i];
     if (!bitmap_is_set(&metaMask, i) && !f->is_nullable()) {
-      enum_field_types ft = f->real_type();
-      if (ft == MYSQL_TYPE_BLOB || ft == MYSQL_TYPE_TINY_BLOB ||
-          ft == MYSQL_TYPE_MEDIUM_BLOB || ft == MYSQL_TYPE_LONG_BLOB) {
+      if (is_blob_backed_type(f->real_type())) {
         continue;
       }
       f->move_field_offset(nn_offset);
@@ -914,9 +918,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
       for (uint i = 0; i < table->s->fields; i++) {
         Field *f = table->field[i];
         if (!bitmap_is_set(&metaMask, i) && !f->is_nullable()) {
-          enum_field_types ft = f->real_type();
-          if (ft == MYSQL_TYPE_BLOB || ft == MYSQL_TYPE_TINY_BLOB ||
-              ft == MYSQL_TYPE_MEDIUM_BLOB || ft == MYSQL_TYPE_LONG_BLOB) {
+          if (is_blob_backed_type(f->real_type())) {
             continue;
           }
           f->move_field_offset(row_offset);
