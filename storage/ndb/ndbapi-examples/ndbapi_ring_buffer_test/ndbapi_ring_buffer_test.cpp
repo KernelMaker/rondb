@@ -2461,6 +2461,62 @@ static bool test_meta_absorb_preserves_unrelated_op(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Test 26 (B3): refreshTuple() on a ring buffer table must be blocked. The
+ * DBTUP write guard only lists INSERT/WRITE/UPDATE/DELETE, so a raw ZREFRESH
+ * slips through and mutates row/GCI state and fires events without going
+ * through the ring bookkeeping.
+ *
+ * Before the fix: refreshTuple succeeds (rc == 0) -> this test FAILS.
+ * After the fix:  refreshTuple is rejected with error 940 -> this test PASSES.
+ */
+static bool test_refresh_tuple_blocked(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 26] refreshTuple on ring buffer table blocked"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t26");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t26", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t26");
+  const NdbDictionary::Table *table = dict->getTable("rb_t26");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(table);
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 2),
+              "insert 2 rows");
+
+  // refreshTuple on an existing data row (client_id=1, ring_idx=1), built as
+  // an NdbRecord key buffer (refreshTuple is the NdbRecord form on the txn).
+  const NdbRecord::Attr *ridx = findAttr(h.record, table, "ring_idx");
+  TEST_ASSERT(ridx != nullptr, "ring_idx attr");
+  h.fillRow(rowbuf, 1, "");         // client_id = 1
+  setInt32(rowbuf, ridx, 1);        // ring_idx = 1
+
+  NdbTransaction *trans = ndb->startTransaction(table);
+  TEST_ASSERT(trans != nullptr, "startTransaction");
+  const NdbOperation *op = trans->refreshTuple(h.record, rowbuf);
+  TEST_ASSERT(op != nullptr, "refreshTuple define");
+  int rc = trans->execute(NdbTransaction::Commit);
+  int err = trans->getNdbError().code;
+  std::cerr << "  (refresh rc=" << rc << " err=" << err << ")" << std::endl;
+  TEST_ASSERT(rc != 0, "refreshTuple on ring buffer table must be rejected");
+  TEST_ASSERT(err == 940,
+              "expected error 940, got " + std::to_string(err));
+  ndb->closeTransaction(trans);
+
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t26");
+  TEST_PASS("refreshTuple on ring buffer table blocked");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2538,6 +2594,7 @@ int main(int argc, char **argv) {
 
     test_alter_ring_size_rejected(&ndb, &mysql);
     test_meta_absorb_preserves_unrelated_op(&ndb, &mysql);
+    test_refresh_tuple_blocked(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;

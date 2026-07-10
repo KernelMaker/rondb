@@ -4546,7 +4546,8 @@ public:
                                     bool is_replica_applier) {
     if (!is_ring_buffer_table(regTabPtr)) return false;
     if (Roptype != ZINSERT && Roptype != ZWRITE &&
-        Roptype != ZUPDATE && Roptype != ZDELETE) return false;
+        Roptype != ZUPDATE && Roptype != ZDELETE &&
+        Roptype != ZREFRESH) return false;
     if (regOperPtr->ring_buffer_op) return false;
     return !is_replica_applier;
   }

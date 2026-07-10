@@ -55,9 +55,11 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: raw-API ring buffer resize rejected
 [Test 25] meta-read absorb preserves unrelated op error
   PASS: meta-read absorb preserves unrelated op error
+[Test 26] refreshTuple on ring buffer table blocked
+  PASS: refreshTuple on ring buffer table blocked
 
 === Results ===
-Passed: 25
+Passed: 26
 Failed: 0
 #
 # Done
