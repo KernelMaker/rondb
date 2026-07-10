@@ -127,6 +127,35 @@ client_id	ring_idx	HEX(ring_meta)
 3	0	0100000002000000010000000000000001000000000000000000000000000000
 SET ndb_ring_buffer_show_meta = OFF;
 #
+# Case 11: COUNT(*) invariant — bare COUNT excludes meta rows and equals
+#          the sum of per-prefix data counts; show_meta exposes exactly
+#          one meta row per prefix
+#
+SELECT COUNT(*) AS bare_count FROM test.rb;
+bare_count
+7
+SELECT COUNT(*) AS where_all_prefixes FROM test.rb WHERE client_id IN (1, 2, 3);
+where_all_prefixes
+7
+SELECT
+(SELECT COUNT(*) FROM test.rb WHERE client_id = 1) +
+(SELECT COUNT(*) FROM test.rb WHERE client_id = 2) +
+(SELECT COUNT(*) FROM test.rb WHERE client_id = 3) AS sum_per_prefix;
+sum_per_prefix
+7
+SELECT CASE WHEN (SELECT COUNT(*) FROM test.rb) =
+(SELECT COUNT(*) FROM test.rb WHERE client_id = 1)
++ (SELECT COUNT(*) FROM test.rb WHERE client_id = 2)
++ (SELECT COUNT(*) FROM test.rb WHERE client_id = 3)
+THEN 'MATCH' ELSE 'MISMATCH' END AS bare_eq_sum_per_prefix;
+bare_eq_sum_per_prefix
+MATCH
+SET ndb_ring_buffer_show_meta = ON;
+SELECT COUNT(*) AS with_meta FROM test.rb;
+with_meta
+10
+SET ndb_ring_buffer_show_meta = OFF;
+#
 # Cleanup
 #
 DROP TABLE test.rb;

@@ -1203,6 +1203,15 @@ void ha_ndbcluster::set_rec_per_key(THD *thd) {
 int ha_ndbcluster::records(ha_rows *num_rows) {
   DBUG_TRACE;
 
+  /* Ring buffer: stats.records is the physical row count, which includes
+     the hidden meta rows (one per PK prefix). Use the base-class scan
+     count instead — the scan passes the kernel meta-row filter. The scan
+     branch engages because table_flags() clears HA_COUNT_ROWS_INSTANT
+     for ring buffer tables. */
+  if (m_table != nullptr && m_table->isRingBuffer()) {
+    return handler::records(num_rows);
+  }
+
   // Read fresh stats from NDB (one roundtrip)
   const int error = update_stats(table->in_use, true);
   if (error != 0) {
@@ -13704,6 +13713,16 @@ ulonglong ha_ndbcluster::table_flags(void) const {
                 HA_HAS_OWN_BINLOGGING | HA_BINLOG_ROW_CAPABLE |
                 HA_COUNT_ROWS_INSTANT | HA_READ_BEFORE_WRITE_REMOVAL |
                 HA_GENERATED_COLUMNS | 0;
+
+  /*
+    Bare SELECT COUNT(*) must not use the instant row-count fast path on
+    ring buffer tables: the physical count includes the hidden meta rows
+    (one per PK prefix). Falling back to the scan count respects the
+    kernel meta-row filter. m_table is not yet open on some early calls
+    (handler init); the cached flags are refreshed in ha_external_lock.
+  */
+  if (m_table != nullptr && m_table->isRingBuffer())
+    f &= ~HA_COUNT_ROWS_INSTANT;
 
   /*
     To allow for logging of NDB tables during stmt based logging;
