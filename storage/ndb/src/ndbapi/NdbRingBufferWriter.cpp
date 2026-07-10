@@ -470,6 +470,14 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
     return -1;
   }
 
+  // Ignore ONLY this meta-read's error (the expected 626 on the first insert
+  // for a PK prefix) and keep it off the transaction-level error, so any
+  // unrelated operations the caller batched into the same transaction retain
+  // their own errors. Mirrors NdbBlob's optional head-read idiom. read_op is
+  // const only because readTuple returns a const handle; NdbRingBufferWriter
+  // is a friend of NdbOperation.
+  const_cast<NdbOperation *>(read_op)->m_noErrorPropagation = true;
+
   m_trans->execute(NdbTransaction::NoCommit,
                    NdbOperation::DefaultAbortOption);
 
@@ -522,13 +530,10 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
       }
     }
   } else if (read_err.code == 626) {
-    // Meta row not found - first insert for this PK prefix.
-    // The 626 propagates to theError.code via setOperationErrorCode().
-    // Clear it and release the completed read so subsequent writeTuple
-    // calls on this transaction are not rejected.
-    m_trans->theCommitStatus = NdbTransaction::Started;
-    m_trans->theError.code = 0;
-    m_trans->releaseCompletedOpsAndQueries();
+    // Meta row not found - first insert for this PK prefix. The read op carries
+    // m_noErrorPropagation, so the expected 626 never reached the transaction
+    // error; no transaction cleanup is needed and unrelated operations in the
+    // same transaction keep their own errors (see the meta read above).
     m_batch_meta_existed = false;
     m_batch_meta.init_first_insert();
   } else {
@@ -704,7 +709,7 @@ int NdbRingBufferWriter::flush() {
 }
 
 // ---------------------------------------------------------------
-// computeOldestSlot — math: ring_idx (1-based) of the i-th oldest row
+// computeOldestSlot - math: ring_idx (1-based) of the i-th oldest row
 // ---------------------------------------------------------------
 
 Uint32 NdbRingBufferWriter::computeOldestSlot(const Ring_meta &meta,
@@ -728,7 +733,7 @@ Uint32 NdbRingBufferWriter::computeOldestSlot(const Ring_meta &meta,
 }
 
 // ---------------------------------------------------------------
-// deleteOldest — public entry point
+// deleteOldest - public entry point
 // ---------------------------------------------------------------
 
 int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
@@ -746,13 +751,13 @@ int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
   m_error_code = 0;
   m_error_message[0] = '\0';
 
-  // Auto-flush any pending insert batch — its meta write must commit
+  // Auto-flush any pending insert batch - its meta write must commit
   // before we read the meta row here, or we'd see stale state.
   if (m_batch_active) {
     if (flush() != 0) return -1;
   }
 
-  // Read meta with LM_Exclusive — serializes with concurrent inserts /
+  // Read meta with LM_Exclusive - serializes with concurrent inserts /
   // delete-oldest on the same PK prefix until the txn commits.
   if (readMetaRow(pkPrefixRow) != 0) return -1;
 
@@ -805,13 +810,13 @@ int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
 
   /*
    * Update meta: count -= popN.  next_pos and total_inserts unchanged
-   * — that's what makes subsequent inserts refill the freed slots in
+   * - that's what makes subsequent inserts refill the freed slots in
    * arrival order with no permanent hole.
    */
   m_batch_meta.count -= popN;
 
   // writeMetaRow uses m_pk_prefix_buffer + m_batch_meta_existed (true,
-  // so it issues updateTuple) and finishes with execute(NoCommit) —
+  // so it issues updateTuple) and finishes with execute(NoCommit) -
   // single round-trip flushes the queued deletes plus the meta update.
   if (writeMetaRow() != 0) return -1;
 
