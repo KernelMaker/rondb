@@ -2304,6 +2304,77 @@ static bool test_delete_oldest_multi_prefix(Ndb *ndb, MYSQL *mysql) {
 // Main
 // ---------------------------------------------------------------
 
+/*
+ * Test 24: the raw NDB API cannot resize a ring buffer table.
+ *
+ * The MySQL handler rejects ALTER of MAX_ROWS_PER_PK, but the raw NDB API
+ * (Table::setRingBufferSize + Dictionary::alterTable) reaches DBDICT directly.
+ * DICT must reject the change (getRingBufferSizeFlag in alterTable_parse);
+ * otherwise existing meta rows, which pack ManagedState for the original ring
+ * size, would be left inconsistent. Before the DICT fix this alterTable
+ * returned 0 (silent online resize) — this test would then fail at the
+ * "must be rejected" assertion.
+ */
+static bool test_alter_ring_size_rejected(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 24] raw-API ring buffer resize rejected" << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t24");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t24", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t24");
+  const NdbDictionary::Table *oldTab = dict->getTable("rb_t24");
+  TEST_ASSERT(oldTab != nullptr, "getTable");
+  TEST_ASSERT(oldTab->isRingBuffer(), "should be ring buffer");
+  TEST_ASSERT(oldTab->getRingBufferSize() == 5, "ring_size=5");
+
+  // Seed one row so a (buggy) resize would have real meta to corrupt.
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(oldTab), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(oldTab);
+  TEST_ASSERT(insertN(ndb, oldTab, h, rowbuf, mask, 1, "row", 1),
+              "insert 1 row before alter");
+
+  // Attempt to grow the ring via the raw API.
+  NdbDictionary::Table newTab(*oldTab);
+  newTab.setRingBufferSize(oldTab->getRingBufferSize() + 1);
+  int rc = dict->alterTable(*oldTab, newTab);
+  TEST_ASSERT(rc != 0, "alterTable resize must be rejected by DICT");
+  // Diagnostic to stderr (discarded by the MTR wrapper) — keep stdout, which
+  // is compared against the .result, free of the variable error code/message.
+  std::cerr << "  (rejected as expected: " << dict->getNdbError().code << " "
+            << dict->getNdbError().message << ")" << std::endl;
+
+  // The stored size must be unchanged and the ring must still work.
+  dict->invalidateTable("rb_t24");
+  const NdbDictionary::Table *check = dict->getTable("rb_t24");
+  TEST_ASSERT(check != nullptr, "re-getTable");
+  TEST_ASSERT(check->getRingBufferSize() == 5,
+              "ring_size still 5 after rejected alter");
+
+  BasicRecordHelper h2;
+  TEST_ASSERT(h2.init(check), "re-init record helper");
+  char *rowbuf2 = h2.newRow();
+  unsigned char *mask2 = h2.newUserMask(check);
+  TEST_ASSERT(insertN(ndb, check, h2, rowbuf2, mask2, 1, "row", 2),
+              "insert after rejected alter");
+  auto rows = readDataRows(mysql, "rb_t24", 1);
+  TEST_ASSERT(rows.size() == 3,
+              "expected 3 rows after rejected alter, got " +
+                  std::to_string(rows.size()));
+
+  delete[] rowbuf;
+  delete[] mask;
+  delete[] rowbuf2;
+  delete[] mask2;
+  mysql_exec(mysql, "DROP TABLE test.rb_t24");
+  TEST_PASS("raw-API ring buffer resize rejected");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2378,6 +2449,8 @@ int main(int argc, char **argv) {
     test_delete_oldest_after_wrap(&ndb, &mysql);
     test_delete_oldest_refill_order(&ndb, &mysql);
     test_delete_oldest_multi_prefix(&ndb, &mysql);
+
+    test_alter_ring_size_rejected(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;

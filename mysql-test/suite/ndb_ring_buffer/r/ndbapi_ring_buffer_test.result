@@ -51,9 +51,11 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: deleteOldest — refill order (no-hole proof)
 [Test 23] deleteOldest — multi-prefix isolation
   PASS: deleteOldest — multi-prefix isolation
+[Test 24] raw-API ring buffer resize rejected
+  PASS: raw-API ring buffer resize rejected
 
 === Results ===
-Passed: 23
+Passed: 24
 Failed: 0
 #
 # Done

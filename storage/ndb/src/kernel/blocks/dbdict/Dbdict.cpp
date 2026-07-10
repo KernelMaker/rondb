@@ -9532,6 +9532,16 @@ void Dbdict::alterTable_parse(Signal *signal, bool master, SchemaOpPtr op_ptr,
     setError(error, AlterTableRef::UnsupportedChange, __LINE__);
     return;
   }
+  if (AlterTableReq::getRingBufferSizeFlag(impl_req->changeMask)) {
+    jam();
+    // Online change of the ring buffer size (or the ring_idx/ring_meta column
+    // numbers) is not supported: existing meta rows pack ManagedState for the
+    // original ring size, so a resize would leave them inconsistent. The MySQL
+    // handler already rejects this, but the raw NDB API (setRingBufferSize +
+    // alterTable) reaches DICT directly, so reject it here too.
+    setError(error, AlterTableRef::UnsupportedChange, __LINE__);
+    return;
+  }
 
   // save it for abort code
 
