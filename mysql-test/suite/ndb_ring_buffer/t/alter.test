@@ -55,6 +55,13 @@ ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_met
 # Verify data unchanged
 SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
 
+--echo #
+--echo # Case 4b: Adding FULLY_REPLICATED to a ring-buffer table is rejected
+--echo #
+
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
 DROP TABLE test.rb_alter;
 
 --echo #

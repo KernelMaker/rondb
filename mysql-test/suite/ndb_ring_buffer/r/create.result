@@ -239,6 +239,43 @@ PRIMARY KEY (client_id, ring_idx)
 COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
 ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both TTL and MAX_ROWS_PER_PK'
 #
+# Case 17b: Error — fully replicated and MAX_ROWS_PER_PK mutual exclusion
+#
+CREATE TABLE test.t17b (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+data VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both fully replicated and MAX_ROWS_PER_PK'
+#
+# Case 17c: Error — fully replicated via server default (ndb_fully_replicated=1)
+#            and MAX_ROWS_PER_PK mutual exclusion; FULLY_REPLICATED=0 escapes
+#
+SET @save_fr = @@global.ndb_fully_replicated;
+SET GLOBAL ndb_fully_replicated = 1;
+CREATE TABLE test.t17c (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+data VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both fully replicated and MAX_ROWS_PER_PK'
+CREATE TABLE test.t17c (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+data VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=FULLY_REPLICATED=0,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+DROP TABLE test.t17c;
+SET GLOBAL ndb_fully_replicated = @save_fr;
+#
 # Case 18: Error — size is not a number
 #
 CREATE TABLE test.t18 (
