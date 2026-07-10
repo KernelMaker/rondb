@@ -53,9 +53,11 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: deleteOldest — multi-prefix isolation
 [Test 24] raw-API ring buffer resize rejected
   PASS: raw-API ring buffer resize rejected
+[Test 25] meta-read absorb preserves unrelated op error
+  PASS: meta-read absorb preserves unrelated op error
 
 === Results ===
-Passed: 24
+Passed: 25
 Failed: 0
 #
 # Done

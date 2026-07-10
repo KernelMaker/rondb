@@ -2375,6 +2375,92 @@ static bool test_alter_ring_size_rejected(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Test 25 (B2): the ring meta-read "absorb" must not scrub the whole
+ * transaction. When the first insert for a PK prefix reads the (absent) meta
+ * row it gets the expected 626; the writer must ignore only that read, not
+ * reset the transaction. Before the fix it did
+ *   theCommitStatus=Started; theError.code=0; releaseCompletedOpsAndQueries();
+ * which erased the error of, and freed, any UNRELATED operation the caller had
+ * queued in the same transaction.
+ *
+ * Repro: in one transaction queue a duplicate insert into a plain table
+ * (AO_IgnoreError, so it records error 630 without aborting), then ring-insert
+ * a FRESH prefix (drives the 626 absorb). The unrelated op's error must still
+ * be visible on the transaction afterwards.
+ *
+ * We never dereference the user op after addRow(): before the fix the scrub
+ * has freed it, so touching it would be a use-after-free. We assert on the
+ * transaction-level error only, which is safe.
+ *
+ * Before the fix: trans error == 0 (630 swallowed) -> this test FAILS.
+ * After the fix:  trans error != 0 (630 preserved) -> this test PASSES.
+ */
+static bool test_meta_absorb_preserves_unrelated_op(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 25] meta-read absorb preserves unrelated op error"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.pt_t25");
+  mysql_exec(mysql,
+             "CREATE TABLE test.pt_t25 ("
+             "  id INT NOT NULL PRIMARY KEY,"
+             "  data VARCHAR(50)"
+             ") ENGINE=NDB");
+  mysql_exec(mysql, "INSERT INTO test.pt_t25 VALUES (1, 'seed')");
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t25");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t25", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("pt_t25");
+  dict->invalidateTable("rb_t25");
+  const NdbDictionary::Table *pt = dict->getTable("pt_t25");
+  const NdbDictionary::Table *rb = dict->getTable("rb_t25");
+  TEST_ASSERT(pt != nullptr && rb != nullptr, "getTable");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(rb), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(rb);
+  h.fillRow(rowbuf, 7, "x");  // fresh prefix 7
+
+  NdbTransaction *trans = ndb->startTransaction(rb);
+  TEST_ASSERT(trans != nullptr, "startTransaction");
+
+  // (a) Unrelated op in the SAME transaction: duplicate insert -> 630.
+  //     AO_IgnoreError records the error without aborting the transaction.
+  NdbOperation *userOp = trans->getNdbOperation(pt);
+  TEST_ASSERT(userOp != nullptr, "getNdbOperation(pt)");
+  TEST_ASSERT(userOp->insertTuple() == 0, "insertTuple");
+  TEST_ASSERT(userOp->equal("id", 1) == 0, "equal id");
+  TEST_ASSERT(userOp->setValue("data", "dup") == 0, "setValue data");
+  userOp->setAbortOption(NdbOperation::AO_IgnoreError);
+
+  // (b) Ring insert for a FRESH prefix -> readMetaRow() executes the round
+  //     (runs the pending dup + the meta read) and, on 626, (unfixed) scrubs
+  //     the transaction, erasing the dup's 630.
+  NdbRingBufferWriter writer(rb, h.record, trans);
+  TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+  const NdbOperation *addOp = writer.addRow(rowbuf, mask);
+  TEST_ASSERT(addOp != nullptr, std::string("addRow: ") + writer.getErrorMessage());
+
+  // (c) The unrelated op's failure must still be observable. Do NOT touch
+  //     userOp here — before the fix it has been freed by the scrub.
+  int transErr = trans->getNdbError().code;
+  std::cerr << "  (transErr after absorb = " << transErr << ")" << std::endl;
+  TEST_ASSERT(transErr != 0,
+              "unrelated dup insert error (630) swallowed by meta-read absorb");
+
+  ndb->closeTransaction(trans);
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t25");
+  mysql_exec(mysql, "DROP TABLE test.pt_t25");
+  TEST_PASS("meta-read absorb preserves unrelated op error");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2451,6 +2537,7 @@ int main(int argc, char **argv) {
     test_delete_oldest_multi_prefix(&ndb, &mysql);
 
     test_alter_ring_size_rejected(&ndb, &mysql);
+    test_meta_absorb_preserves_unrelated_op(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;
