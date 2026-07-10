@@ -249,6 +249,54 @@ CREATE TABLE test.t17 (
   COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
 
 --echo #
+--echo # Case 17b: Error — fully replicated and MAX_ROWS_PER_PK mutual exclusion
+--echo #
+
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE test.t17b (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    data VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+
+--echo #
+--echo # Case 17c: Error — fully replicated via server default (ndb_fully_replicated=1)
+--echo #            and MAX_ROWS_PER_PK mutual exclusion; FULLY_REPLICATED=0 escapes
+--echo #
+
+SET @save_fr = @@global.ndb_fully_replicated;
+SET GLOBAL ndb_fully_replicated = 1;
+
+# Server default makes the table fully replicated even without a
+# FULLY_REPLICATED comment modifier — the combination must still be rejected.
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE test.t17c (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    data VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+
+# Escape hatch: FULLY_REPLICATED=0 in the comment overrides the server default,
+# so the ring buffer table can still be created.
+CREATE TABLE test.t17c (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    data VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=FULLY_REPLICATED=0,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+DROP TABLE test.t17c;
+
+SET GLOBAL ndb_fully_replicated = @save_fr;
+
+--echo #
 --echo # Case 18: Error — size is not a number
 --echo #
 

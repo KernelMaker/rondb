@@ -10224,6 +10224,12 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
 
     if (use_fully_replicated) {
       /* Fully replicated table */
+      if (found_ring_buffer) {
+        /* The fully-replicated copy trigger does not carry the ring buffer
+           bypass flag, so every write would fail; reject the combination. */
+        return create.failed_illegal_create_option(
+            "A table cannot be both fully replicated and MAX_ROWS_PER_PK");
+      }
       if (mod_read_backup->m_found && !mod_read_backup->m_val_bool) {
         /**
          * Cannot mix FULLY_REPLICATED=1 and READ_BACKUP=0 since
@@ -16839,6 +16845,16 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
   /* Mutual exclusion: TTL and MAX_ROWS_PER_PK */
   if (new_tab->isTTLEnabled() && new_tab->isRingBuffer()) {
     *reason = "A table cannot be both TTL and MAX_ROWS_PER_PK";
+    return true;
+  }
+
+  /* Mutual exclusion: fully replicated and MAX_ROWS_PER_PK (the
+     fully-replicated copy trigger does not carry the ring buffer
+     bypass flag, so every write would fail). */
+  if (new_tab->isRingBuffer() &&
+      (new_tab->getFullyReplicated() ||
+       (mod_fully_replicated->m_found && mod_fully_replicated->m_val_bool))) {
+    *reason = "A table cannot be both fully replicated and MAX_ROWS_PER_PK";
     return true;
   }
 
