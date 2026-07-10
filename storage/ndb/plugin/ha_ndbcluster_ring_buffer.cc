@@ -201,6 +201,12 @@ bool delete_where_allowed(const TABLE *table, unsigned ring_idx_field_index,
                                             pk_info, cond);
 }
 
+bool delete_statement_shape_allowed(const THD *thd) {
+  if (thd->lex->sql_command == SQLCOM_DELETE_MULTI) return false;
+  const Query_block *qb = thd->lex->query_block;
+  return !qb->has_limit() && !qb->is_ordered();
+}
+
 bool show_meta_active(THD *thd, bool is_ring_buffer, bool delete_allowed) {
   if (thdvar_show_meta(thd)) return true;
   if (delete_allowed) return true;

@@ -481,7 +481,7 @@ id	ring_idx	data
 1	2	new_b
 DROP TABLE test.rb_cycle;
 #
-# Case 36: DELETE with LIMIT (high enough to cover all rows)
+# Case 36: DELETE with LIMIT, ORDER BY, or multi-table form — blocked
 #
 CREATE TABLE test.rb_limit (
 id INT NOT NULL,
@@ -495,6 +495,23 @@ INSERT INTO test.rb_limit (id, val) VALUES (1, 'x');
 INSERT INTO test.rb_limit (id, val) VALUES (1, 'y');
 INSERT INTO test.rb_limit (id, val) VALUES (2, 'z');
 DELETE FROM test.rb_limit WHERE id = 1 LIMIT 100;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
+DELETE FROM test.rb_limit LIMIT 1;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
+DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
+CREATE TABLE test.plain_join (id INT PRIMARY KEY) ENGINE = NDB;
+INSERT INTO test.plain_join VALUES (1);
+DELETE test.rb_limit FROM test.rb_limit JOIN test.plain_join
+ON test.rb_limit.id = test.plain_join.id;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
+DROP TABLE test.plain_join;
+SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
+id	ring_idx	val
+1	1	x
+1	2	y
+2	1	z
+DELETE FROM test.rb_limit WHERE id = 1;
 SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
 id	ring_idx	val
 2	1	z
@@ -502,9 +519,9 @@ SET ndb_ring_buffer_show_meta = ON;
 SELECT id, ring_idx FROM test.rb_limit WHERE id = 1 AND ring_idx = 0;
 id	ring_idx
 SET ndb_ring_buffer_show_meta = OFF;
-INSERT INTO test.rb_limit (id, val) VALUES (1, 'after_limit');
+INSERT INTO test.rb_limit (id, val) VALUES (1, 'after_delete');
 SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
 id	ring_idx	val
-1	1	after_limit
+1	1	after_delete
 2	1	z
 DROP TABLE test.rb_limit;

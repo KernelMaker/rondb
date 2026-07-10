@@ -5987,14 +5987,28 @@ bool ha_ndbcluster::start_bulk_delete() {
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
     const Item *where = thd->lex->query_block->where_cond();
-    if (ndb_ring_buffer::delete_where_allowed(table, ring_idx_fi, where)) {
+    /* Check the statement shape first: a multi-table DELETE's join
+       condition lands in where_cond() and would otherwise trip the
+       WHERE walker with a misleading message. */
+    if (!ndb_ring_buffer::delete_statement_shape_allowed(thd)) {
+      if (!m_thd_ndb->get_applier()) {
+        my_error(ER_ILLEGAL_HA, MYF(0),
+                 "DELETE on ring-buffer table cannot use LIMIT, ORDER BY, "
+                 "or multi-table DELETE");
+        m_is_bulk_delete = false;
+        return 1;
+      }
+    } else if (!ndb_ring_buffer::delete_where_allowed(table, ring_idx_fi,
+                                                      where)) {
+      if (!m_thd_ndb->get_applier()) {
+        my_error(ER_ILLEGAL_HA, MYF(0),
+                 "DELETE WHERE on ring-buffer table may only reference "
+                 "PK-prefix columns (excluding ring_idx)");
+        m_is_bulk_delete = false;
+        return 1;
+      }
+    } else {
       m_ring_buffer_delete_allowed = true;
-    } else if (!m_thd_ndb->get_applier()) {
-      my_error(ER_ILLEGAL_HA, MYF(0),
-               "DELETE WHERE on ring-buffer table may only reference "
-               "PK-prefix columns (excluding ring_idx)");
-      m_is_bulk_delete = false;
-      return 1;
     }
   }
 
@@ -6113,7 +6127,8 @@ int ha_ndbcluster::ndb_delete_row(const uchar *record,
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
     const Item *where = thd->lex->query_block->where_cond();
-    if (ndb_ring_buffer::delete_where_allowed(table, ring_idx_fi, where)) {
+    if (ndb_ring_buffer::delete_where_allowed(table, ring_idx_fi, where) &&
+        ndb_ring_buffer::delete_statement_shape_allowed(thd)) {
       m_ring_buffer_delete_allowed = true;
     }
   }
@@ -6121,8 +6136,11 @@ int ha_ndbcluster::ndb_delete_row(const uchar *record,
       !m_ring_buffer_delete_allowed &&
       !m_thd_ndb->get_applier()) {
     my_error(ER_ILLEGAL_HA, MYF(0),
-             "DELETE WHERE on ring-buffer table may only reference "
-             "PK-prefix columns (excluding ring_idx)");
+             ndb_ring_buffer::delete_statement_shape_allowed(thd)
+                 ? "DELETE WHERE on ring-buffer table may only reference "
+                   "PK-prefix columns (excluding ring_idx)"
+                 : "DELETE on ring-buffer table cannot use LIMIT, ORDER BY, "
+                   "or multi-table DELETE");
     return HA_ERR_UNSUPPORTED;
   }
 

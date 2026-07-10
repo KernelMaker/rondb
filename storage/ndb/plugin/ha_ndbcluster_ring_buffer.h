@@ -106,6 +106,13 @@ bool delete_where_allowed(const TABLE *table, unsigned ring_idx_field_index,
                           const Item *cond);
 
 /**
+  Check the DELETE statement shape. The WHERE walker alone cannot see
+  LIMIT, ORDER BY, or the multi-table DELETE form — each of which can
+  remove a strict subset of a ring and corrupt or orphan the meta row.
+*/
+bool delete_statement_shape_allowed(const THD *thd);
+
+/**
   Decide whether a scan on a ring-buffer-capable table should surface the
   meta rows (ring_idx=0). True when the session flag is on, when a DELETE
   has been validated (start_bulk_delete/ndb_delete_row), or when ALTER TABLE
