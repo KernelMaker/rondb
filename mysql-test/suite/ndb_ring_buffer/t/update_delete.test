@@ -562,7 +562,7 @@ SELECT id, ring_idx, data FROM test.rb_cycle ORDER BY ring_idx;
 DROP TABLE test.rb_cycle;
 
 --echo #
---echo # Case 36: DELETE with LIMIT (high enough to cover all rows)
+--echo # Case 36: DELETE with LIMIT, ORDER BY, or multi-table form — blocked
 --echo #
 
 CREATE TABLE test.rb_limit (
@@ -578,18 +578,40 @@ INSERT INTO test.rb_limit (id, val) VALUES (1, 'x');
 INSERT INTO test.rb_limit (id, val) VALUES (1, 'y');
 INSERT INTO test.rb_limit (id, val) VALUES (2, 'z');
 
-# LIMIT large enough to cover all matching rows — same effect as no LIMIT
+# LIMIT can delete a strict subset of a ring; "large enough" cannot be
+# validated at statement level — all LIMIT forms are rejected
+--error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit WHERE id = 1 LIMIT 100;
+
+--error ER_ILLEGAL_HA
+DELETE FROM test.rb_limit LIMIT 1;
+
+# ORDER BY selects rows before the handler validates — rejected
+--error ER_ILLEGAL_HA
+DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
+
+# Multi-table DELETE restricts the deleted set via the join — rejected
+CREATE TABLE test.plain_join (id INT PRIMARY KEY) ENGINE = NDB;
+INSERT INTO test.plain_join VALUES (1);
+--error ER_ILLEGAL_HA
+DELETE test.rb_limit FROM test.rb_limit JOIN test.plain_join
+    ON test.rb_limit.id = test.plain_join.id;
+DROP TABLE test.plain_join;
+
+# Contents unchanged by the rejected statements
+SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
+
+# Plain prefix DELETE still works, meta row goes with it
+DELETE FROM test.rb_limit WHERE id = 1;
 
 SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
 
-# Verify meta row for id=1 is also gone
 SET ndb_ring_buffer_show_meta = ON;
 SELECT id, ring_idx FROM test.rb_limit WHERE id = 1 AND ring_idx = 0;
 SET ndb_ring_buffer_show_meta = OFF;
 
-# Re-INSERT after LIMIT delete works
-INSERT INTO test.rb_limit (id, val) VALUES (1, 'after_limit');
+# Re-INSERT after prefix delete works
+INSERT INTO test.rb_limit (id, val) VALUES (1, 'after_delete');
 
 SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
 
