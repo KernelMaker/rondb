@@ -367,8 +367,20 @@ class RingBufferWriter {
                     "Failed to read meta row for ring buffer table " + storeTable.getName());
         }
 
-        // Execute with AO_IgnoreError so 626 doesn't abort transaction
-        int rc = trans.executeNoCommitDirect(AbortOption.AO_IgnoreError);
+        // Execute the pending round. The meta read op itself carries
+        // AO_IgnoreError (readOpts), so a missing meta row (626) does not
+        // abort the transaction. Use DefaultAbortOption so every other
+        // queued operation keeps its own abort option — an execute-level
+        // AO_IgnoreError would silently swallow their real errors.
+        int rc = trans.executeNoCommitDirect(AbortOption.DefaultAbortOption);
+        if (rc != 0) {
+            // Another operation in this round failed (the meta read's own
+            // 626 is ignored per-op and cannot fail the execute).
+            throw new ClusterJDatastoreException(
+                    "Ring buffer meta read round failed for table "
+                    + storeTable.getName() + ", NDB error "
+                    + trans.getNdbTransaction().getNdbError().code());
+        }
 
         // Check operation-level error
         int errorCode = readOp.getNdbError().code();
@@ -380,13 +392,10 @@ class RingBufferWriter {
             batchMetaExisted = true;
         } else if (errorCode == ROW_NOT_FOUND) {
             // Meta row doesn't exist yet -- fresh ring.
-            // The 626 propagates to the NdbTransaction error/commit state.
-            // Reset it so subsequent write operations are not rejected.
-            // C++ NdbRingBufferWriter does: theCommitStatus=Started,
-            // theError.code=0, releaseCompletedOpsAndQueries().
-            // We achieve a similar reset by executing NoCommit with no
-            // pending ops — this clears the transaction error state.
-            trans.executeNoCommitDirect(AbortOption.AO_IgnoreError);
+            // The ignored 626 was recorded as the transaction error state;
+            // an empty execute (nothing pending) clears it so later
+            // executes start clean.
+            trans.executeNoCommitDirect(AbortOption.DefaultAbortOption);
             batchMeta.initFirstInsert();
             batchMetaExisted = false;
         } else {

@@ -193,6 +193,10 @@ public class RingBufferTest extends AbstractClusterJTest {
         testDynamicObjectDelete();
         testDynamicObjectQueryScan();
 
+        // Regression: an unrelated operation's error in the same transaction as
+        // a ring insert must not be swallowed by the meta-read execute round.
+        testUnrelatedErrorNotSwallowed();
+
         // Concurrent tests (SamePrefix runs last — its normalized state
         // is checked by the SQL diagnostic queries in the .test file)
         testConcurrentDifferentPrefixes();
@@ -2328,6 +2332,13 @@ public class RingBufferTest extends AbstractClusterJTest {
         @Override public String table() { return "ring_buffer_notnull"; }
     }
 
+    /** Plain (non-ring) table, used as the "unrelated" op in
+     *  testUnrelatedErrorNotSwallowed(). PK on id gives a deterministic 630
+     *  on a duplicate insert. */
+    public static class BasicDTO extends DynamicObject {
+        @Override public String table() { return "t_basic"; }
+    }
+
     // ring_idx and ring_meta are system-managed — leaving their mask bits
     // clear lets RingBufferWriter own them (same convention as the
     // annotation-interface tests, which never call setRingIdx()).
@@ -2358,6 +2369,18 @@ public class RingBufferTest extends AbstractClusterJTest {
             } else {
                 error("Unexpected column in ring_buffer_notnull: " + n);
             }
+        }
+    }
+
+    private void setBasicFields(DynamicObject e, int id, String name, int age, int magic) {
+        ColumnMetadata[] meta = e.columnMetadata();
+        for (int i = 0; i < meta.length; i++) {
+            String n = meta[i].name();
+            if (n.equals("id"))         e.set(i, id);
+            else if (n.equals("name"))  e.set(i, name);
+            else if (n.equals("age"))   e.set(i, age);
+            else if (n.equals("magic")) e.set(i, magic);
+            else error("Unexpected column in t_basic: " + n);
         }
     }
 
@@ -2821,6 +2844,94 @@ public class RingBufferTest extends AbstractClusterJTest {
             errorIfNotEqual("DO query: slot " + s + " found", true, slotFound[s]);
         }
         tx.commit();
+    }
+
+    /**
+     * Regression guard for the ClusterJ meta-read execute round swallowing an
+     * unrelated operation's error. RingBufferWriter.readMetaRow() executes the
+     * pending round; the fix runs it with DefaultAbortOption (so each queued op
+     * keeps its own abort option) and throws when the round fails. The old code
+     * forced AO_IgnoreError at the execute level, which silently swallowed the
+     * real error of any other operation batched into that round.
+     *
+     * One transaction: (1) a plain-table insert that duplicates a seeded PK
+     * (deterministic 630, left pending), then (2) a ring insert for a FRESH
+     * prefix, which forces the meta-read round. That round executes the pending
+     * duplicate too. Before the fix the 630 was swallowed, the commit succeeded,
+     * and the plain row was silently lost; after the fix a ClusterJ exception
+     * surfaces and nothing is committed.
+     */
+    private void testUnrelatedErrorNotSwallowed() {
+        cleanup();
+        // Reset the plain table and seed the row the duplicate will collide with.
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            stmt.execute("DELETE FROM t_basic");
+            stmt.execute("INSERT INTO t_basic (id, name, age, magic)"
+                    + " VALUES (7000, 'seed', 1, 1)");
+            stmt.close();
+        } catch (Exception ex) {
+            error("Unrelated-error test: seeding t_basic failed: " + ex.getMessage());
+            return;
+        }
+
+        boolean surfaced = false;
+        tx.begin();
+        try {
+            DynamicObject dup = session.newInstance(BasicDTO.class);
+            setBasicFields(dup, 7000, "dup", 2, 2);   // duplicate id=7000 -> 630
+            session.makePersistent(dup);              // pending, not yet executed
+
+            DynamicObject sensor = session.newInstance(RingSensorDTO.class);
+            setSensorFields(sensor, 7100, 71000L, 71.5);  // fresh prefix
+            session.makePersistent(sensor);           // forces the meta-read round
+
+            tx.commit();
+        } catch (ClusterJException ex) {
+            surfaced = true;
+            try {
+                tx.rollback();
+            } catch (ClusterJException ignore) {
+                // transaction already aborted by the failed round
+            }
+        }
+        // Transaction state may be invalid after the aborted round; reopen the
+        // session (same convention as testTransactionRollback).
+        session.close();
+        session = sessionFactory.getSession();
+        tx = session.currentTransaction();
+
+        // Post-conditions verified via SQL: the seeded row is unchanged and the
+        // aborted transaction committed no data row for the fresh ring prefix.
+        String seedName = null;
+        int abortedRingRows = -1;
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            ResultSet rs = stmt.executeQuery(
+                    "SELECT name FROM t_basic WHERE id = 7000");
+            if (rs.next()) seedName = rs.getString(1);
+            rs.close();
+            rs = stmt.executeQuery(
+                    "SELECT COUNT(*) FROM ring_buffer_sensor WHERE sensor_id = 7100");
+            if (rs.next()) abortedRingRows = rs.getInt(1);
+            rs.close();
+            stmt.execute("DELETE FROM t_basic");
+            stmt.close();
+        } catch (Exception ex) {
+            error("Unrelated-error test: post-check failed: " + ex.getMessage());
+        }
+
+        System.out.println("[SWALLOW-TEST] surfaced=" + surfaced
+                + " seedName=" + seedName
+                + " abortedRingRows=" + abortedRingRows);
+        errorIfNotEqual("Unrelated op error must surface, not be swallowed",
+                true, surfaced);
+        errorIfNotEqual("Seed row survives the aborted transaction",
+                "seed", seedName);
+        errorIfNotEqual("Aborted transaction committed no ring data row",
+                0, abortedRingRows);
     }
 
     // =======================================================================
