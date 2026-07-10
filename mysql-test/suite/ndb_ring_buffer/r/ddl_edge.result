@@ -276,7 +276,7 @@ Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	I
 rb_status	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#	#
 SELECT COUNT(*) AS visible_rows FROM test.rb_status;
 visible_rows
-4
+3
 DROP TABLE test.rb_status;
 #
 # Case 9: INFORMATION_SCHEMA.TABLES for ring-buffer table
