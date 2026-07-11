@@ -9896,6 +9896,19 @@ void Dbdict::alterTable_parse(Signal *signal, bool master, SchemaOpPtr op_ptr,
     setError(error, AlterTableRef::UnsupportedChange, __LINE__);
     return;
   }
+  if ((AlterTableReq::getAddFragFlag(impl_req->changeMask) ||
+       AlterTableReq::getReorgFragFlag(impl_req->changeMask)) &&
+      tablePtr.p->ringBufferSize != RNIL) {
+    jam();
+    // Adding fragments / reorganizing partitions is not supported on ring
+    // buffer tables: the reorg triggers and DBUTIL copy writes carry no
+    // ring-buffer flag (940 mid-schema-transaction) and the reorg scan
+    // hides the meta rows, so moved fragments would silently lose them.
+    // The MySQL handler already rejects this; the raw NDB API reaches
+    // DICT directly, so reject it here too.
+    setError(error, AlterTableRef::UnsupportedChange, __LINE__);
+    return;
+  }
   if (AlterTableReq::getAddFragFlag(impl_req->changeMask)) {
     if (newTablePtr.p->fragmentType != DictTabInfo::HashMapPartition) {
       jam();
