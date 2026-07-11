@@ -2714,6 +2714,11 @@ int NdbOptimizeTableHandleImpl::next() {
          */
         Uint32 options = 0 | AttributeHeader::OPTIMIZE_MOVE_VARPART;
         myUpdateOp->setOptimize(options);
+        /* A var-part move on a ring buffer table must carry the ring
+           flag or DBTUP rejects it with error 940. */
+        if (m_table_queue->table->m_ring_buffer_size != RNIL) {
+          myUpdateOp->set_ring_buffer_op();
+        }
         /**
          * nextResult(false) means that the records
          * cached in the NDBAPI are modified before
