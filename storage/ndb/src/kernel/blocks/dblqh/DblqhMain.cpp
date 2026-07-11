@@ -2680,6 +2680,20 @@ void Dblqh::execCREATE_TAB_REQ(Signal *signal) {
     jam();
     req->hashFunctionFlag = 0;
   }
+  if (signal->length() < CreateTabReq::NewSignalLengthLDMWithTTL)
+  {
+    jam();
+    /* RNIL = disabled, unlike the zero-fill of the legacy fields above. */
+    req->ttlSec = RNIL;
+    req->ttlColumnNo = RNIL;
+  }
+  if (signal->length() < CreateTabReq::NewSignalLengthLDMWithRingBuffer)
+  {
+    jam();
+    req->ringBufferSize = RNIL;
+    req->ringIdxColumnNo = RNIL;
+    req->ringMetaColumnNo = RNIL;
+  }
   /*
    * CreateTabReq is a local signal, no need to consider
    * the length compatibility.

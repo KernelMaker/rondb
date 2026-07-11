@@ -396,13 +396,14 @@ class TcKeyReq {
  A = Replica applier       - 1  Bit 25
  I = IgnoreTTL             - 1  Bit 26
  N = Interpreted Insert    - 1  Bit 27
+ E = TTL Only Expired      - 1  Bit 28
  G = Ring Buffer Op        - 1  Bit 29
  S = Ring Buffer Show Meta - 1  Bit 30
 
            1111111111222222222233
  01234567890123456789012345678901
  dnb cooop lsyyeiaaarkkkkkkkkkkkk  (Short TCKEYREQ)
- dnbvcooopqlsyyeixDfrRwBUQAINGS    (Long TCKEYREQ)
+ dnbvcooopqlsyyeixDfrRwBUQAINEGS   (Long TCKEYREQ)
 */
 
 #define TCKEY_NODISK_SHIFT (1)

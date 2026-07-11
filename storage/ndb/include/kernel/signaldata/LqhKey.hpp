@@ -207,11 +207,6 @@ class LqhKeyReq {
   static void setDisableFkConstraints(UintR &requestInfo, UintR val);
 
   /**
-   * Get mask of currently undefined bits
-   */
-  static UintR getLongClearBits(const UintR &requestInfo);
-
-  /**
    * Trigger flag ensuring that requests based on fully replicated triggers
    * doesn't trigger a new trigger itself.
    */
@@ -332,6 +327,8 @@ class LqhKeyReq {
  * R = Replica Applier        = 1 Bit (5)
  * L = TTL flag               = 1 Bit (6)
  * N = Interpreted Insert flag= 1 Bit (7)
+ * E = TTL Only Expired       = 1 Bit (8)
+ * G = Ring Buffer Op         = 1 Bit (9)
 
  * Short LQHKEYREQ :
  *             1111111111222222222233
@@ -342,7 +339,7 @@ class LqhKeyReq {
  * Long LQHKEYREQ :
  *             1111111111222222222233
  *   01234567890123456789012345678901
- *   FTUwSRLN  llgnqpdisooorrAPDcumxz
+ *   FTUwSRLNEGllgnqpdisooorrAPDcumxz
  *
  */
 
@@ -652,13 +649,6 @@ inline void LqhKeyReq::setDisableFkConstraints(UintR &requestInfo, UintR val) {
 
 inline UintR LqhKeyReq::getDisableFkConstraints(const UintR &requestInfo) {
   return (requestInfo >> RI_DISABLE_FK) & 1;
-}
-
-inline UintR LqhKeyReq::getLongClearBits(const UintR &requestInfo) {
-  const Uint32 mask = (1 << RI_RING_BUFFER_OP_SHIFT) |
-                      (1 << RI_RING_BUFFER_SHOW_META_SHIFT);
-
-  return (requestInfo & mask);
 }
 
 inline void LqhKeyReq::setNoTriggersFlag(UintR &requestInfo, UintR val) {

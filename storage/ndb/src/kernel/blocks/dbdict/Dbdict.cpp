@@ -1202,11 +1202,17 @@ void Dbdict::packTableIntoPages(SimpleProperties::Writer &w,
   DEB_HASH(("1: dict_tab(%u) HashFunctionFlag: %u",
             tablePtr.p->tableId,
             ((tablePtr.p->m_bits & TableRecord::TR_HashFunction) != 0)));
-  w.add(DictTabInfo::TTLSec, tablePtr.p->ttlSec);
-  w.add(DictTabInfo::TTLColumnNo, tablePtr.p->ttlColumnNo);
-  w.add(DictTabInfo::RingBufferSize, tablePtr.p->ringBufferSize);
-  w.add(DictTabInfo::RingIdxColumnNo, tablePtr.p->ringIdxColNo);
-  w.add(DictTabInfo::RingMetaColumnNo, tablePtr.p->ringMetaColNo);
+  /* Optional properties — the unpack side defaults them to RNIL, so only
+     pack them when set instead of adding 5 words to every table def. */
+  if (tablePtr.p->ttlSec != RNIL || tablePtr.p->ttlColumnNo != RNIL) {
+    w.add(DictTabInfo::TTLSec, tablePtr.p->ttlSec);
+    w.add(DictTabInfo::TTLColumnNo, tablePtr.p->ttlColumnNo);
+  }
+  if (tablePtr.p->ringBufferSize != RNIL) {
+    w.add(DictTabInfo::RingBufferSize, tablePtr.p->ringBufferSize);
+    w.add(DictTabInfo::RingIdxColumnNo, tablePtr.p->ringIdxColNo);
+    w.add(DictTabInfo::RingMetaColumnNo, tablePtr.p->ringMetaColNo);
+  }
 
   D("packTableIntoPages: tableId: "
     << tablePtr.p->tableId << " tablePtr.i = " << tablePtr.i
@@ -11537,6 +11543,9 @@ void Dbdict::alterTable_toCommitComplete(Signal *signal, SchemaOpPtr op_ptr,
   req->noOfNewAttr = impl_req->noOfNewAttr;
   req->newNoOfCharsets = impl_req->newNoOfCharsets;
   req->newNoOfKeyAttrs = impl_req->newNoOfKeyAttrs;
+  /* Inside SignalLength — don't send them uninitialized. */
+  req->ttlSec = impl_req->ttlSec;
+  req->ttlColumnNo = impl_req->ttlColumnNo;
   req->connectPtr = RNIL;
 
   Uint32 blockIndex = alterTabPtr.p->m_blockIndex;  // ref
@@ -12015,6 +12024,9 @@ void Dbdict::alterTable_abortToLocal(Signal *signal, SchemaOpPtr op_ptr) {
   req->noOfNewAttr = impl_req->noOfNewAttr;
   req->newNoOfCharsets = impl_req->newNoOfCharsets;
   req->newNoOfKeyAttrs = impl_req->newNoOfKeyAttrs;
+  /* Inside SignalLength — don't send them uninitialized. */
+  req->ttlSec = impl_req->ttlSec;
+  req->ttlColumnNo = impl_req->ttlColumnNo;
 
   Callback c = {safe_cast(&Dbdict::alterTable_abortFromLocal),
                 op_ptr.p->op_key};
