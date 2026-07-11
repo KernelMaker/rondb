@@ -57,9 +57,13 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: meta-read absorb preserves unrelated op error
 [Test 26] refreshTuple on ring buffer table blocked
   PASS: refreshTuple on ring buffer table blocked
+[Test 27] DICT validates ring metadata on create
+  PASS: DICT validates ring metadata on create
+[Test 28] DICT rejects TTL/fully-replicated + ring combos
+  PASS: DICT rejects TTL/fully-replicated + ring combos
 
 === Results ===
-Passed: 26
+Passed: 28
 Failed: 0
 #
 # Done
