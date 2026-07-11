@@ -580,3 +580,40 @@ SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
 id	ring_idx	val
 1	1	restart
 DROP TABLE test.rb_trig;
+#
+# Case 38: UPDATE of primary-key columns — blocked
+#
+CREATE TABLE test.rb_pkup (
+id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+val VARCHAR(50),
+PRIMARY KEY (id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_pkup (id, val) VALUES (1, 'a');
+INSERT INTO test.rb_pkup (id, val) VALUES (1, 'b');
+INSERT INTO test.rb_pkup (id, val) VALUES (2, 'c');
+UPDATE test.rb_pkup SET id = 2 WHERE id = 1;
+ERROR HY000: Table storage engine for 'Cannot update primary key columns on ring-buffer table' doesn't have this option
+UPDATE test.rb_pkup SET id = id + 10;
+ERROR HY000: Table storage engine for 'Cannot update primary key columns on ring-buffer table' doesn't have this option
+UPDATE test.rb_pkup SET ring_idx = 5 WHERE id = 1;
+ERROR HY000: Table storage engine for 'Cannot update ring_idx on ring-buffer table' doesn't have this option
+SELECT id, ring_idx, val FROM test.rb_pkup ORDER BY id, ring_idx;
+id	ring_idx	val
+1	1	a
+1	2	b
+2	1	c
+BEGIN;
+INSERT INTO test.rb_pkup (id, val) VALUES (3, 'txn_survivor');
+UPDATE test.rb_pkup SET id = 9 WHERE id = 1;
+ERROR HY000: Table storage engine for 'Cannot update primary key columns on ring-buffer table' doesn't have this option
+COMMIT;
+SELECT id, ring_idx, val FROM test.rb_pkup WHERE id = 3;
+id	ring_idx	val
+UPDATE test.rb_pkup SET val = 'updated' WHERE id = 2;
+SELECT id, ring_idx, val FROM test.rb_pkup WHERE id = 2;
+id	ring_idx	val
+2	1	updated
+DROP TABLE test.rb_pkup;
