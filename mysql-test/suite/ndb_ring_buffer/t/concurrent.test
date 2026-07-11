@@ -248,6 +248,39 @@ SELECT client_id, ring_idx, event_data FROM test.rb
     ORDER BY ring_idx;
 
 ###############################################################################
+# Case 9: Two transactions racing the FIRST insert for a fresh prefix
+###############################################################################
+
+--echo #
+--echo # Case 9: concurrent first-insert on a fresh prefix
+--echo #
+
+# con1 inserts the first row for prefix 9 and holds the transaction open —
+# its uncommitted meta-row insert holds the meta row lock. con2's insert
+# for the same prefix must wait on that lock and continue cleanly after
+# con1 commits (second slot, no duplicate-key error on the hidden meta row).
+
+--connection con1
+BEGIN;
+INSERT INTO test.rb (client_id, event_data) VALUES (9, 'racer1');
+
+--connection con2
+--send INSERT INTO test.rb (client_id, event_data) VALUES (9, 'racer2')
+
+--connection con1
+# give con2 time to reach the meta-row lock queue
+--sleep 1
+COMMIT;
+
+--connection con2
+--reap
+
+--connection default
+SELECT client_id, ring_idx, event_data FROM test.rb
+    WHERE client_id = 9
+    ORDER BY ring_idx;
+
+###############################################################################
 # Cleanup
 ###############################################################################
 
