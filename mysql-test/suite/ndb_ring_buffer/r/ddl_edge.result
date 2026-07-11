@@ -445,4 +445,34 @@ id	ring_idx	val
 1	1	test_A
 1	2	test_B
 DROP TABLE test.rb_alter_idx;
+#
+# Case 17: OPTIMIZE TABLE — reclaims var parts, no 940
+#
+CREATE TABLE test.rb_opt (
+id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+val VARCHAR(2000),
+PRIMARY KEY (id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=4@ring_idx@ring_meta";
+INSERT INTO test.rb_opt (id, val) VALUES (1, REPEAT('x', 2000));
+INSERT INTO test.rb_opt (id, val) VALUES (1, REPEAT('y', 2000));
+INSERT INTO test.rb_opt (id, val) VALUES (2, REPEAT('z', 2000));
+UPDATE test.rb_opt SET val = 'small' WHERE id = 1 AND ring_idx = 1;
+OPTIMIZE TABLE test.rb_opt;
+Table	Op	Msg_type	Msg_text
+test.rb_opt	optimize	status	OK
+SELECT id, ring_idx, LENGTH(val) AS len FROM test.rb_opt ORDER BY id, ring_idx;
+id	ring_idx	len
+1	1	5
+1	2	2000
+2	1	2000
+INSERT INTO test.rb_opt (id, val) VALUES (1, 'post_opt');
+SELECT id, ring_idx, LEFT(val, 8) AS v FROM test.rb_opt WHERE id = 1 ORDER BY ring_idx;
+id	ring_idx	v
+1	1	small
+1	2	yyyyyyyy
+1	3	post_opt
+DROP TABLE test.rb_opt;
 # Done.
