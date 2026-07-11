@@ -5681,6 +5681,19 @@ int ha_ndbcluster::ndb_update_row(const uchar *old_data, uchar *new_data,
     }
 
     /*
+     * Block updates to any primary-key column. A PK update takes the
+     * delete+insert path (ndb_pk_update_row): the delete half bypasses
+     * ring DELETE validation and the insert half is rejected by the ring
+     * write intercept, which aborts the whole transaction with a
+     * misleading "Cannot specify ring_idx column in INSERT" error.
+     */
+    if (bitmap_is_overlapping(table->write_set, m_pk_bitmap_p)) {
+      my_error(ER_ILLEGAL_HA, MYF(0),
+               "Cannot update primary key columns on ring-buffer table");
+      return HA_ERR_UNSUPPORTED;
+    }
+
+    /*
      * Block updates to meta row (ring_idx=0).
      *
      * We only check when ring_idx is in the read_set, meaning it was

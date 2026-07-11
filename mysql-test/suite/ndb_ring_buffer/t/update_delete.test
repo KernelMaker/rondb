@@ -676,3 +676,52 @@ SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
 
 DROP TABLE test.rb_trig;
 
+--echo #
+--echo # Case 38: UPDATE of primary-key columns — blocked
+--echo #
+
+CREATE TABLE test.rb_pkup (
+    id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    val VARCHAR(50),
+    PRIMARY KEY (id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_pkup (id, val) VALUES (1, 'a');
+INSERT INTO test.rb_pkup (id, val) VALUES (1, 'b');
+INSERT INTO test.rb_pkup (id, val) VALUES (2, 'c');
+
+# Changing the PK prefix would take the delete+insert path: the delete
+# half corrupts ring meta and the insert half is rejected anyway.
+# Blocked up-front with a clear message.
+--error ER_ILLEGAL_HA
+UPDATE test.rb_pkup SET id = 2 WHERE id = 1;
+
+--error ER_ILLEGAL_HA
+UPDATE test.rb_pkup SET id = id + 10;
+
+# ring_idx keeps its specific message (also a PK column)
+--error ER_ILLEGAL_HA
+UPDATE test.rb_pkup SET ring_idx = 5 WHERE id = 1;
+
+# Contents unchanged
+SELECT id, ring_idx, val FROM test.rb_pkup ORDER BY id, ring_idx;
+
+# NDB cannot roll back a single statement: the failed UPDATE marks the
+# whole transaction for rollback (see ndbcluster_rollback), so the
+# earlier INSERT is lost too. Generic NDB semantics, pinned here —
+# the SELECT returns no row.
+BEGIN;
+INSERT INTO test.rb_pkup (id, val) VALUES (3, 'txn_survivor');
+--error ER_ILLEGAL_HA
+UPDATE test.rb_pkup SET id = 9 WHERE id = 1;
+COMMIT;
+SELECT id, ring_idx, val FROM test.rb_pkup WHERE id = 3;
+
+# User-column UPDATE still works
+UPDATE test.rb_pkup SET val = 'updated' WHERE id = 2;
+SELECT id, ring_idx, val FROM test.rb_pkup WHERE id = 2;
+
+DROP TABLE test.rb_pkup;
