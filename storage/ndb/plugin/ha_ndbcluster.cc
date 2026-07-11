@@ -16632,6 +16632,13 @@ enum_alter_inplace_result ha_ndbcluster::check_inplace_alter_supported(
     }
 
     if (alter_flags & Alter_inplace_info::ALTER_TABLE_REORG) {
+      if (old_tab->isRingBuffer()) {
+        /* The reorg copy machinery carries no ring-buffer flag: moved
+           rows hit the 940 write guard mid-schema-transaction, and the
+           copy scan would drop hidden meta rows. */
+        return inplace_unsupported(
+            ha_alter_info, "Can't reorganize partitions of ring buffer table");
+      }
       const ulonglong curr_max_rows = table_share->max_rows;
       if (curr_max_rows != 0) {
         // No inplace REORGANIZE PARTITION for table with MAX_ROWS
@@ -16643,6 +16650,11 @@ enum_alter_inplace_result ha_ndbcluster::check_inplace_alter_supported(
       new_tab.setFragmentData(nullptr, 0);
     } else if (alter_flags & Alter_inplace_info::ADD_PARTITION) {
       DBUG_PRINT("info", ("Adding partition (%u)", part_info->num_parts));
+      if (old_tab->isRingBuffer()) {
+        // Same reorg copy machinery as ALTER_TABLE_REORG
+        return inplace_unsupported(
+            ha_alter_info, "Can't add partition to ring buffer table");
+      }
       new_tab.setFragmentCount(part_info->num_parts);
       new_tab.setPartitionBalance(
           NdbDictionary::Object::PartitionBalance_Specific);

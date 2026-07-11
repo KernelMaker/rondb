@@ -89,3 +89,88 @@ SELECT id, ring_idx, val, extra FROM test.rb_preserve
     WHERE id = 1 ORDER BY ring_idx;
 
 DROP TABLE test.rb_preserve;
+
+--echo #
+--echo # Case 6: REORGANIZE PARTITION / ADD PARTITION — blocked
+--echo #
+
+# The kernel reorg copy machinery carries no ring-buffer flag, so real
+# data movement aborts mid-schema-transaction with error 940, and the
+# reorg copy scan would drop hidden meta rows. Reject at DDL instead.
+
+CREATE TABLE test.rb_reorg (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta"
+  PARTITION BY KEY(client_id);
+
+INSERT INTO test.rb_reorg (client_id, val) VALUES (1, 'a');
+INSERT INTO test.rb_reorg (client_id, val) VALUES (1, 'b');
+INSERT INTO test.rb_reorg (client_id, val) VALUES (1, 'c');
+INSERT INTO test.rb_reorg (client_id, val) VALUES (2, 'x');
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_reorg ALGORITHM=INPLACE, ADD PARTITION PARTITIONS 2;
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_reorg ALGORITHM=INPLACE, REORGANIZE PARTITION;
+
+# Contents unchanged by the rejected statements
+SELECT client_id, ring_idx, val FROM test.rb_reorg ORDER BY client_id, ring_idx;
+
+# Without ALGORITHM the server falls back to COPY — a full rebuild that
+# copies data AND meta rows verbatim. That path is safe and stays allowed.
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb_reorg WHERE client_id = 1 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+ALTER TABLE test.rb_reorg ADD PARTITION PARTITIONS 2;
+
+# Meta rows survived the copy byte-for-byte
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb_reorg WHERE client_id = 1 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+SELECT client_id, ring_idx, val FROM test.rb_reorg ORDER BY client_id, ring_idx;
+
+# Ring state continues (4th insert wraps to slot 1, count stays 3)
+INSERT INTO test.rb_reorg (client_id, val) VALUES (1, 'wrap_d');
+SELECT client_id, ring_idx, val FROM test.rb_reorg
+    WHERE client_id = 1 ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb_reorg WHERE client_id = 1 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# Inplace partition management still rejected on the repartitioned table
+# (bare REORGANIZE now stops at the SQL layer: the partition count became
+# explicit after ADD PARTITION, so probe with ADD PARTITION instead)
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_reorg ALGORITHM=INPLACE, ADD PARTITION PARTITIONS 1;
+
+DROP TABLE test.rb_reorg;
+
+# Bare REORGANIZE PARTITION on an implicitly partitioned ring table is
+# rejected the same way (today a no-op, but after add-node scale-out it
+# would move data through the unflagged copy path)
+
+CREATE TABLE test.rb_reorg_i (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_reorg_i (client_id, val) VALUES (1, 'a');
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_reorg_i ALGORITHM=INPLACE, REORGANIZE PARTITION;
+
+INSERT INTO test.rb_reorg_i (client_id, val) VALUES (1, 'b');
+SELECT client_id, ring_idx, val FROM test.rb_reorg_i ORDER BY ring_idx;
+
+DROP TABLE test.rb_reorg_i;
