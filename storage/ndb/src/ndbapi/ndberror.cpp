@@ -429,7 +429,7 @@ ErrorBundle ErrorCodes[] = {
   { 937,  DMEC, AE, "Inconsistency in input parameters" },
   { 938,  DMEC, AE, "Too much input parameters" },
   { 939,  DMEC, AE, "Wrong column for input parameters" },
-  { 940,  DMEC, AE, "Direct write to ring-buffer table not allowed. Use MySQL handler INSERT/UPDATE/DELETE." },
+  { 940,  DMEC, AE, "Direct write to ring-buffer table not allowed. Use SQL, NdbRingBufferWriter or ClusterJ." },
   { 941,  DMEC, AE, "In-memory varsize part of row can at most be 32036 bytes" },
   { 942,  DMEC, AE, "Database name too long" },
   { 943,  DMEC, AE, "On-disk part of row can at most be 31080 bytes" },
