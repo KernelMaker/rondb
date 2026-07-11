@@ -210,6 +210,7 @@ public class RingBufferTest extends AbstractClusterJTest {
 
         // Blob rejection, auto-increment prefix, and flush-failure state
         testBlobColumnRejected();
+        testFlushBatchFailureThenCommit();
 
         // Concurrent tests (SamePrefix runs last — its normalized state
         // is checked by the SQL diagnostic queries in the .test file)
@@ -3050,6 +3051,93 @@ public class RingBufferTest extends AbstractClusterJTest {
             error("[BLOB-TEST] JDBC verification failed: " + e.getMessage());
         }
         System.out.println("[BLOB-TEST] rejected=" + threw);
+    }
+
+    /** A failed batch flush must clear the batch state. Pre-fix, the
+     *  commit-time flush re-executed the stale batch on the already-aborted
+     *  transaction, masking the real error with a secondary "ring buffer"
+     *  exception. */
+    private void testFlushBatchFailureThenCommit() {
+        cleanup();
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            stmt.execute("DELETE FROM t_basic");
+            stmt.execute("INSERT INTO t_basic (id, name, age, magic)"
+                    + " VALUES (7200, 'seed', 1, 1)");
+            stmt.close();
+        } catch (Exception ex) {
+            error("[FLUSH-TEST] seeding t_basic failed: " + ex.getMessage());
+            return;
+        }
+
+        tx.begin();
+        DynamicObject s1 = session.newInstance(RingSensorDTO.class);
+        setSensorFields(s1, 72, 72000L, 72.0);
+        session.makePersistent(s1);
+        DynamicObject s2 = session.newInstance(RingSensorDTO.class);
+        setSensorFields(s2, 72, 72001L, 72.1);
+        session.makePersistent(s2);
+
+        DynamicObject dup = session.newInstance(BasicDTO.class);
+        setBasicFields(dup, 7200, "dup", 2, 2);
+        session.makePersistent(dup);   // pending duplicate -> 630 at flush
+
+        boolean flushThrew = false;
+        try {
+            // prefix switch flushes the client 72 batch together with the
+            // pending duplicate -> the execute fails
+            DynamicObject s3 = session.newInstance(RingSensorDTO.class);
+            setSensorFields(s3, 73, 73000L, 73.0);
+            session.makePersistent(s3);
+        } catch (Exception e) {
+            flushThrew = true;
+        }
+        errorIfNotEqual("[FLUSH-TEST] flush failure surfaced", true,
+                flushThrew);
+
+        String commitMsg = "";
+        try {
+            tx.commit();
+        } catch (Exception e) {
+            commitMsg = e.getMessage() == null ? "" : e.getMessage();
+            if (tx.isActive()) {
+                tx.rollback();
+            }
+        }
+        errorIfNotEqual("[FLUSH-TEST] no stale ring flush at commit", false,
+                commitMsg.toLowerCase().contains("ring buffer"));
+
+        // the session must be cleanly usable afterwards
+        tx.begin();
+        DynamicObject s4 = session.newInstance(RingSensorDTO.class);
+        setSensorFields(s4, 72, 72002L, 72.2);
+        session.makePersistent(s4);
+        tx.commit();
+
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            ResultSet rs = stmt.executeQuery(
+                    "SELECT ring_idx, timestamp_val FROM ring_buffer_sensor"
+                    + " WHERE sensor_id = 72 ORDER BY ring_idx");
+            int rows = 0;
+            int slot = -1;
+            long ts = 0;
+            while (rs.next()) {
+                rows++;
+                if (rows == 1) { slot = rs.getInt(1); ts = rs.getLong(2); }
+            }
+            rs.close();
+            stmt.close();
+            errorIfNotEqual("[FLUSH-TEST] only the clean row present", 1,
+                    rows);
+            errorIfNotEqual("[FLUSH-TEST] clean row slot", 1, slot);
+            errorIfNotEqual("[FLUSH-TEST] clean row value", 72002L, ts);
+        } catch (SQLException e) {
+            error("[FLUSH-TEST] JDBC verification failed: " + e.getMessage());
+        }
+        System.out.println("[FLUSH-TEST] clean_after_failure=true");
     }
 
     private void cleanupViaSql() {

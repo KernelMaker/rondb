@@ -271,7 +271,18 @@ class RingBufferWriter {
      */
     void flushBatch() {
         if (!batchActive) return;
+        try {
+            flushBatchInternal();
+        } finally {
+            /* A failed flush must not leave a stale batch behind: the
+               commit-time flush would re-execute it on the aborted
+               transaction, masking the original error. The C++ writer
+               resets unconditionally too. */
+            batchActive = false;
+        }
+    }
 
+    private void flushBatchInternal() {
         // Build meta row in metaRowBuffer
         ndbRecordImpl.initializeBuffer(metaRowBuffer);
 
@@ -316,8 +327,6 @@ class RingBufferWriter {
                     "Ring buffer flush failed for table " + storeTable.getName()
                     + ", NDB error " + errCode);
         }
-
-        batchActive = false;
     }
 
     /**
