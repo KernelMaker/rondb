@@ -4873,6 +4873,31 @@ bool Dblqh::handleLCPSurfacing(Signal *signal) {
     jam();
     commit_reorg(tablePtr);
   }
+  /* The deferred commit must apply the staged TTL / ring buffer fields
+     exactly like the non-deferred path in execALTER_TAB_REQ does —
+     otherwise this LDM keeps the stale values until restart. */
+  if (AlterTableReq::getTTLSecFlag(req->changeMask) ||
+      AlterTableReq::getTTLColFlag(req->changeMask)) {
+    jam();
+    tablePtr.p->m_ttl_sec = tablePtr.p->tmp_ttl_sec;
+    tablePtr.p->m_ttl_col_no = tablePtr.p->tmp_ttl_col_no;
+    tablePtr.p->tmp_ttl_sec = RNIL;
+    tablePtr.p->tmp_ttl_col_no = RNIL;
+    g_eventLogger->info("[DBLQH], handleLCPSurfacing, update TTL on table "
+                        "%u, [%u, %u]",
+                        tablePtr.i,
+                        tablePtr.p->m_ttl_sec,
+                        tablePtr.p->m_ttl_col_no);
+  }
+  if (AlterTableReq::getRingBufferSizeFlag(req->changeMask)) {
+    jam();
+    tablePtr.p->m_ring_buffer_size = tablePtr.p->tmp_ring_buffer_size;
+    tablePtr.p->m_ring_idx_col_no = tablePtr.p->tmp_ring_idx_col_no;
+    tablePtr.p->m_ring_meta_col_no = tablePtr.p->tmp_ring_meta_col_no;
+    tablePtr.p->tmp_ring_buffer_size = RNIL;
+    tablePtr.p->tmp_ring_idx_col_no = RNIL;
+    tablePtr.p->tmp_ring_meta_col_no = RNIL;
+  }
   Uint32 len = c_keep_alter_tab_req_len;
   EXECUTE_DIRECT(getDBTUP(), GSN_ALTER_TAB_REQ, signal, len);
   jamEntry();
