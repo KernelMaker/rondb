@@ -525,3 +525,58 @@ id	ring_idx	val
 1	1	after_delete
 2	1	z
 DROP TABLE test.rb_limit;
+#
+# Case 37: DELETE on ring-buffer table with DELETE triggers — blocked
+#
+CREATE TABLE test.rb_trig (
+id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+val VARCHAR(50),
+PRIMARY KEY (id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_trig (id, val) VALUES (1, 'a');
+INSERT INTO test.rb_trig (id, val) VALUES (1, 'b');
+INSERT INTO test.rb_trig (id, val) VALUES (1, 'c');
+CREATE TRIGGER test.rb_trig_ad AFTER DELETE ON test.rb_trig
+FOR EACH ROW SET @del_cnt = IFNULL(@del_cnt, 0) + 1;
+SET @del_cnt = 0;
+DELETE FROM test.rb_trig WHERE id = 1;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table with DELETE triggers is not supported' doesn't have this option
+SELECT @del_cnt;
+@del_cnt
+0
+SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
+id	ring_idx	val
+1	1	a
+1	2	b
+1	3	c
+DROP TRIGGER test.rb_trig_ad;
+CREATE TRIGGER test.rb_trig_bd BEFORE DELETE ON test.rb_trig
+FOR EACH ROW SET @del_cnt = IFNULL(@del_cnt, 0) + 1;
+DELETE FROM test.rb_trig WHERE id = 1;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table with DELETE triggers is not supported' doesn't have this option
+SELECT @del_cnt;
+@del_cnt
+0
+SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
+id	ring_idx	val
+1	1	a
+1	2	b
+1	3	c
+DROP TRIGGER test.rb_trig_bd;
+DELETE FROM test.rb_trig WHERE id = 1;
+SELECT COUNT(*) AS remaining FROM test.rb_trig;
+remaining
+0
+SET ndb_ring_buffer_show_meta = ON;
+SELECT COUNT(*) AS meta_rows FROM test.rb_trig WHERE ring_idx = 0;
+meta_rows
+0
+SET ndb_ring_buffer_show_meta = OFF;
+INSERT INTO test.rb_trig (id, val) VALUES (1, 'restart');
+SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
+id	ring_idx	val
+1	1	restart
+DROP TABLE test.rb_trig;

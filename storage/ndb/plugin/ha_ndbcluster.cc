@@ -54,6 +54,7 @@
 #include "sql/sql_executor.h"  // QEP_TAB
 #include "sql/sql_lex.h"
 #include "sql/sql_plugin_var.h"  // SYS_VAR
+#include "sql/table_trigger_dispatcher.h"  // Table_trigger_dispatcher
 #include "sql/transaction.h"
 #ifndef NDEBUG
 #include "sql/sql_test.h"  // print_where
@@ -5996,10 +5997,23 @@ bool ha_ndbcluster::start_bulk_delete() {
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
     const Item *where = thd->lex->query_block->where_cond();
-    /* Check the statement shape first: a multi-table DELETE's join
-       condition lands in where_cond() and would otherwise trip the
-       WHERE walker with a misleading message. */
-    if (!ndb_ring_buffer::delete_statement_shape_allowed(thd)) {
+    /* DELETE triggers break the meta-row protocol: a BEFORE DELETE
+       trigger fires for the hidden meta row the show-meta scan surfaces,
+       and an AFTER DELETE trigger suppresses this bulk path entirely
+       (the scan then opens without show-meta and the meta row survives
+       the delete with stale count/next_pos). */
+    if (table->triggers != nullptr && table->triggers->has_delete_triggers()) {
+      if (!m_thd_ndb->get_applier()) {
+        my_error(ER_ILLEGAL_HA, MYF(0),
+                 "DELETE on ring-buffer table with DELETE triggers is not "
+                 "supported");
+        m_is_bulk_delete = false;
+        return 1;
+      }
+    } else if (!ndb_ring_buffer::delete_statement_shape_allowed(thd)) {
+      /* Check the statement shape before the WHERE walker: a multi-table
+         DELETE's join condition lands in where_cond() and would otherwise
+         trip the walker with a misleading message. */
       if (!m_thd_ndb->get_applier()) {
         my_error(ER_ILLEGAL_HA, MYF(0),
                  "DELETE on ring-buffer table cannot use LIMIT, ORDER BY, "
@@ -6133,6 +6147,15 @@ int ha_ndbcluster::ndb_delete_row(const uchar *record,
   if (m_table->isRingBuffer() &&
       !m_ring_buffer_delete_allowed &&
       !m_thd_ndb->get_applier()) {
+    /* An AFTER DELETE trigger suppresses start_bulk_delete(): the scan
+       has already opened without show-meta, so the hidden meta row would
+       survive the delete with stale count/next_pos. Reject. */
+    if (table->triggers != nullptr && table->triggers->has_delete_triggers()) {
+      my_error(ER_ILLEGAL_HA, MYF(0),
+               "DELETE on ring-buffer table with DELETE triggers is not "
+               "supported");
+      return HA_ERR_UNSUPPORTED;
+    }
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
     const Item *where = thd->lex->query_block->where_cond();
