@@ -28,6 +28,7 @@ package testsuite.clusterj;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -114,6 +115,16 @@ public class RingBufferTest extends AbstractClusterJTest {
                     + "PRIMARY KEY (client_id, ring_idx)"
                     + ") ENGINE=ndbcluster"
                     + " COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
+            stmt.execute("DROP TABLE IF EXISTS ring_buffer_blob");
+            stmt.execute("CREATE TABLE ring_buffer_blob ("
+                    + "client_id INT NOT NULL,"
+                    + "ring_idx INT NOT NULL DEFAULT 0,"
+                    + "ring_meta VARBINARY(64),"
+                    + "payload TEXT,"
+                    + "note VARCHAR(50),"
+                    + "PRIMARY KEY (client_id, ring_idx)"
+                    + ") ENGINE=ndbcluster"
+                    + " COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
             stmt.close();
         } catch (Exception ex) {
             throw new RuntimeException("Failed to create ring_buffer_sensor table", ex);
@@ -196,6 +207,9 @@ public class RingBufferTest extends AbstractClusterJTest {
         // Regression: an unrelated operation's error in the same transaction as
         // a ring insert must not be swallowed by the meta-read execute round.
         testUnrelatedErrorNotSwallowed();
+
+        // Blob rejection, auto-increment prefix, and flush-failure state
+        testBlobColumnRejected();
 
         // Concurrent tests (SamePrefix runs last — its normalized state
         // is checked by the SQL diagnostic queries in the .test file)
@@ -2339,6 +2353,11 @@ public class RingBufferTest extends AbstractClusterJTest {
         @Override public String table() { return "t_basic"; }
     }
 
+    /** Ring table with a nullable TEXT column (blob-backed). */
+    public static class RingBlobDTO extends DynamicObject {
+        @Override public String table() { return "ring_buffer_blob"; }
+    }
+
     // ring_idx and ring_meta are system-managed — leaving their mask bits
     // clear lets RingBufferWriter own them (same convention as the
     // annotation-interface tests, which never call setRingIdx()).
@@ -2381,6 +2400,22 @@ public class RingBufferTest extends AbstractClusterJTest {
             else if (n.equals("age"))   e.set(i, age);
             else if (n.equals("magic")) e.set(i, magic);
             else error("Unexpected column in t_basic: " + n);
+        }
+    }
+
+    private void setBlobFields(DynamicObject e, int clientId, String payload,
+            String note) {
+        ColumnMetadata[] meta = e.columnMetadata();
+        for (int i = 0; i < meta.length; i++) {
+            String n = meta[i].name();
+            if (n.equals("client_id"))    e.set(i, clientId);
+            else if (n.equals("payload")) { if (payload != null) e.set(i, payload); }
+            else if (n.equals("note"))    { if (note != null) e.set(i, note); }
+            else if (n.equals("ring_idx") || n.equals("ring_meta")) {
+                // system-managed
+            } else {
+                error("Unexpected column in ring_buffer_blob: " + n);
+            }
         }
     }
 
@@ -2951,6 +2986,70 @@ public class RingBufferTest extends AbstractClusterJTest {
     /** Clean up ring buffer table via SQL (NDB API delete needs OO_RING_BUFFER_OP). */
     private void cleanup() {
         cleanupViaSql();
+    }
+
+    /** A SET blob/TEXT column on a ring buffer insert must fail loudly with
+     *  a clear message — the ring write path cannot drive blob handles, so
+     *  the value would otherwise be silently dropped (or fail with a raw NDB
+     *  error). An UNSET blob column must keep working. */
+    private void testBlobColumnRejected() {
+        boolean threw = false;
+        String exMsg = "";
+        tx.begin();
+        try {
+            DynamicObject d = session.newInstance(RingBlobDTO.class);
+            setBlobFields(d, 70, "payload_v1", "note_a");
+            session.makePersistent(d);
+            tx.commit();
+        } catch (Exception e) {
+            threw = true;
+            exMsg = e.getMessage() == null ? "" : e.getMessage();
+            if (tx.isActive()) {
+                tx.rollback();
+            }
+        }
+        errorIfNotEqual("[BLOB-TEST] blob set on ring insert throws", true,
+                threw);
+        errorIfNotEqual("[BLOB-TEST] clear rejection message", true,
+                exMsg.contains("BLOB/TEXT columns cannot be written"));
+
+        // control: leaving the blob column unset works
+        tx.begin();
+        DynamicObject d2 = session.newInstance(RingBlobDTO.class);
+        setBlobFields(d2, 70, null, "note_b");
+        session.makePersistent(d2);
+        tx.commit();
+
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            ResultSet rs = stmt.executeQuery(
+                    "SELECT ring_idx, payload, note FROM ring_buffer_blob"
+                    + " WHERE client_id = 70 ORDER BY ring_idx");
+            int rows = 0;
+            int slot = -1;
+            String payload = "not-null-sentinel";
+            String note = "";
+            while (rs.next()) {
+                rows++;
+                if (rows == 1) {
+                    slot = rs.getInt(1);
+                    payload = rs.getString(2);
+                    note = rs.getString(3);
+                }
+            }
+            rs.close();
+            stmt.close();
+            errorIfNotEqual("[BLOB-TEST] only the control row inserted", 1,
+                    rows);
+            errorIfNotEqual("[BLOB-TEST] control row slot", 1, slot);
+            errorIfNotEqual("[BLOB-TEST] control payload is NULL", true,
+                    payload == null);
+            errorIfNotEqual("[BLOB-TEST] control note", "note_b", note);
+        } catch (SQLException e) {
+            error("[BLOB-TEST] JDBC verification failed: " + e.getMessage());
+        }
+        System.out.println("[BLOB-TEST] rejected=" + threw);
     }
 
     private void cleanupViaSql() {
