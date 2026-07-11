@@ -23,6 +23,7 @@ Successfully initialized schema.
 [DO-META]   [4] sensor_value
 [SWALLOW-TEST] surfaced=true seedName=seed abortedRingRows=0
 [BLOB-TEST] rejected=true
+[AI-TEST] distinct_prefixes=true
 [FLUSH-TEST] clean_after_failure=true
 [CONCURRENT-META] ClusterJ find(ring_idx=0) = NOT FOUND (expected)
 [CONCURRENT-META] RingBufferWriter probe: meta row EXISTS (insert at next slot succeeded)
@@ -79,6 +80,7 @@ SET ndb_ring_buffer_show_meta = OFF;
 DROP TABLE IF EXISTS ring_buffer_sensor;
 DROP TABLE IF EXISTS ring_buffer_notnull;
 DROP TABLE IF EXISTS ring_buffer_blob;
+DROP TABLE IF EXISTS ring_buffer_autoinc;
 DROP TABLE IF EXISTS a;
 DROP TABLE IF EXISTS allprimitives;
 DROP TABLE IF EXISTS autopkint;

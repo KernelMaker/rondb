@@ -125,6 +125,15 @@ public class RingBufferTest extends AbstractClusterJTest {
                     + "PRIMARY KEY (client_id, ring_idx)"
                     + ") ENGINE=ndbcluster"
                     + " COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
+            stmt.execute("DROP TABLE IF EXISTS ring_buffer_autoinc");
+            stmt.execute("CREATE TABLE ring_buffer_autoinc ("
+                    + "id INT NOT NULL AUTO_INCREMENT,"
+                    + "ring_idx INT NOT NULL DEFAULT 0,"
+                    + "ring_meta VARBINARY(64),"
+                    + "val VARCHAR(50),"
+                    + "PRIMARY KEY (id, ring_idx)"
+                    + ") ENGINE=ndbcluster"
+                    + " COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
             stmt.close();
         } catch (Exception ex) {
             throw new RuntimeException("Failed to create ring_buffer_sensor table", ex);
@@ -210,6 +219,7 @@ public class RingBufferTest extends AbstractClusterJTest {
 
         // Blob rejection, auto-increment prefix, and flush-failure state
         testBlobColumnRejected();
+        testAutoIncrementPrefix();
         testFlushBatchFailureThenCommit();
 
         // Concurrent tests (SamePrefix runs last — its normalized state
@@ -2359,6 +2369,11 @@ public class RingBufferTest extends AbstractClusterJTest {
         @Override public String table() { return "ring_buffer_blob"; }
     }
 
+    /** Ring table whose PK prefix is AUTO_INCREMENT. */
+    public static class RingAutoIncDTO extends DynamicObject {
+        @Override public String table() { return "ring_buffer_autoinc"; }
+    }
+
     // ring_idx and ring_meta are system-managed — leaving their mask bits
     // clear lets RingBufferWriter own them (same convention as the
     // annotation-interface tests, which never call setRingIdx()).
@@ -2416,6 +2431,20 @@ public class RingBufferTest extends AbstractClusterJTest {
                 // system-managed
             } else {
                 error("Unexpected column in ring_buffer_blob: " + n);
+            }
+        }
+    }
+
+    private void setAutoIncFields(DynamicObject e, String val) {
+        ColumnMetadata[] meta = e.columnMetadata();
+        for (int i = 0; i < meta.length; i++) {
+            String n = meta[i].name();
+            if (n.equals("val"))          e.set(i, val);
+            else if (n.equals("id") || n.equals("ring_idx")
+                    || n.equals("ring_meta")) {
+                // id: allocated by auto-increment; ring cols system-managed
+            } else {
+                error("Unexpected column in ring_buffer_autoinc: " + n);
             }
         }
     }
@@ -3051,6 +3080,48 @@ public class RingBufferTest extends AbstractClusterJTest {
             error("[BLOB-TEST] JDBC verification failed: " + e.getMessage());
         }
         System.out.println("[BLOB-TEST] rejected=" + threw);
+    }
+
+    /** AUTO_INCREMENT PK-prefix works on the default (SmartValueHandler)
+     *  path: the auto-increment block in NdbRecordOperationImpl.insert()
+     *  runs before the ring branch, so each unset-id persist gets its own
+     *  prefix. (The generic getInsertOperation/endDefinition path has no
+     *  auto-increment support for ANY table — plain or ring — so there is
+     *  no ring-specific gap there.) */
+    private void testAutoIncrementPrefix() {
+        tx.begin();
+        DynamicObject a = session.newInstance(RingAutoIncDTO.class);
+        setAutoIncFields(a, "ai_1");
+        session.makePersistent(a);
+        DynamicObject b = session.newInstance(RingAutoIncDTO.class);
+        setAutoIncFields(b, "ai_2");
+        session.makePersistent(b);
+        tx.commit();
+
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            ResultSet rs = stmt.executeQuery(
+                    "SELECT id, ring_idx, val FROM ring_buffer_autoinc"
+                    + " ORDER BY id");
+            int rows = 0;
+            int id1 = 0, id2 = 0, slot1 = -1, slot2 = -1;
+            while (rs.next()) {
+                rows++;
+                if (rows == 1) { id1 = rs.getInt(1); slot1 = rs.getInt(2); }
+                if (rows == 2) { id2 = rs.getInt(1); slot2 = rs.getInt(2); }
+            }
+            rs.close();
+            stmt.close();
+            errorIfNotEqual("[AI-TEST] two rows", 2, rows);
+            errorIfNotEqual("[AI-TEST] first id allocated", true, id1 > 0);
+            errorIfNotEqual("[AI-TEST] distinct prefixes", true, id2 > id1);
+            errorIfNotEqual("[AI-TEST] first slot", 1, slot1);
+            errorIfNotEqual("[AI-TEST] second slot", 1, slot2);
+        } catch (SQLException e) {
+            error("[AI-TEST] JDBC verification failed: " + e.getMessage());
+        }
+        System.out.println("[AI-TEST] distinct_prefixes=true");
     }
 
     /** A failed batch flush must clear the batch state. Pre-fix, the
