@@ -6204,6 +6204,35 @@ void Dbdict::handleTabInfoInit(Signal *signal, SchemaTransPtr &trans_ptr,
   tablePtr.p->ringIdxColNo = c_tableDesc.RingIdxColumnNo;
   tablePtr.p->ringMetaColNo = c_tableDesc.RingMetaColumnNo;
 
+  /**
+   * Ring buffer metadata is validated here (and per-column in
+   * handleTabInfo) because the raw NDB API bypasses the MySQL-layer
+   * checks. The write guard, meta-row filter and meta-row detection in
+   * TUP all depend on these invariants.
+   */
+  if (c_tableDesc.RingBufferSize != RNIL) {
+    jam();
+    tabRequire(c_tableDesc.RingBufferSize >= 1 &&
+                   c_tableDesc.RingBufferSize <= 0x7FFFFFFF,
+               CreateTableRef::InvalidFormat);
+    tabRequire(c_tableDesc.RingIdxColumnNo != RNIL &&
+                   c_tableDesc.RingMetaColumnNo != RNIL,
+               CreateTableRef::InvalidFormat);
+    /* TTL and ring buffer are mutually exclusive: the meta row's TTL
+       column would read as 0 = expired and be filtered/purged. */
+    tabRequire(!(c_tableDesc.TTLSec != RNIL &&
+                 c_tableDesc.TTLColumnNo != RNIL),
+               CreateTableRef::InvalidFormat);
+    /* Fully-replicated copy triggers carry no ring-buffer flag. */
+    tabRequire((tablePtr.p->m_bits & TableRecord::TR_FullyReplicated) == 0,
+               CreateTableRef::InvalidFormat);
+  } else {
+    /* No half-configured ring tables. */
+    tabRequire(c_tableDesc.RingIdxColumnNo == RNIL &&
+                   c_tableDesc.RingMetaColumnNo == RNIL,
+               CreateTableRef::InvalidFormat);
+  }
+
   g_eventLogger->info("[DICT]s< parsed c_tableDesc , table_id: %u, "
                       "TTL sec: %u, TTL column no: %u",
                       tablePtr.p->tableId,
@@ -6424,6 +6453,11 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader &it,
 
   Uint32 counts[] = {0, 0, 0, 0, 0};
 
+  /* Ring buffer column validation state (checked after the loop). */
+  Uint32 ringIdxMatches = 0;
+  Uint32 ringMetaMatches = 0;
+  Uint32 lastKeyAttrId = RNIL;
+
   bool disk_based = false;
   for (Uint32 i = 0; i < attrCount; i++) {
     /**
@@ -6559,6 +6593,35 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader &it,
                           "attrId: %u",
                           attrPtr.p->attributeId);
     }
+    if (tableDesc.RingIdxColumnNo != RNIL &&
+        attrPtr.p->attributeId == tableDesc.RingIdxColumnNo) {
+      jam();
+      /* ring_idx must be a 4-byte integer primary key column. */
+      tabRequire(attrDesc.AttributeExtType == DictTabInfo::ExtInt ||
+                     attrDesc.AttributeExtType == DictTabInfo::ExtUnsigned,
+                 CreateTableRef::InvalidFormat);
+      tabRequire(attrDesc.AttributeKeyFlag, CreateTableRef::InvalidFormat);
+      ringIdxMatches++;
+    }
+    if (tableDesc.RingMetaColumnNo != RNIL &&
+        attrPtr.p->attributeId == tableDesc.RingMetaColumnNo) {
+      jam();
+      /* ring_meta must be a nullable VARBINARY(>= 32) non-key column
+         (32 = the packed ring management state size). */
+      tabRequire(attrDesc.AttributeExtType == DictTabInfo::ExtVarbinary ||
+                     attrDesc.AttributeExtType ==
+                         DictTabInfo::ExtLongvarbinary,
+                 CreateTableRef::InvalidFormat);
+      tabRequire(attrDesc.AttributeNullableFlag,
+                 CreateTableRef::InvalidFormat);
+      tabRequire(!attrDesc.AttributeKeyFlag, CreateTableRef::InvalidFormat);
+      tabRequire(attrDesc.AttributeExtLength >= 32,
+                 CreateTableRef::InvalidFormat);
+      ringMetaMatches++;
+    }
+    if (attrDesc.AttributeKeyFlag) {
+      lastKeyAttrId = attrPtr.p->attributeId;
+    }
     attrPtr.p->autoIncrement = attrDesc.AttributeAutoIncrement;
     {
       char defaultValueBuf[MAX_ATTR_DEFAULT_VALUE_SIZE];
@@ -6665,6 +6728,19 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader &it,
   tabRequire(keyLength > 0, CreateTableRef::InvalidPrimaryKeySize);
   tabRequire(keyCount <= MAX_ATTRIBUTES_IN_INDEX,
              CreateTableRef::InvalidPrimaryKeySize);
+
+  if (tableDesc.RingIdxColumnNo != RNIL ||
+      tableDesc.RingMetaColumnNo != RNIL) {
+    jam();
+    /* Both ring columns must reference existing columns (an out-of-range
+       column number would make TUP's meta-row detection read an arbitrary
+       word of every row), and ring_idx must be the last primary key
+       column — the meta-row key layout depends on it. */
+    tabRequire(ringIdxMatches == 1, CreateTableRef::InvalidFormat);
+    tabRequire(ringMetaMatches == 1, CreateTableRef::InvalidFormat);
+    tabRequire(tableDesc.RingIdxColumnNo == lastKeyAttrId,
+               CreateTableRef::InvalidFormat);
+  }
 
   if (tablePtr.p->m_tablespace_id != RNIL || counts[3] || counts[4]) {
     FilegroupPtr tablespacePtr;

@@ -2517,6 +2517,235 @@ static bool test_refresh_tuple_blocked(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Helper for Tests 27/28: attempt createTable of a deliberately-broken ring
+ * buffer definition and require DICT to reject it. Before the fix DICT
+ * accepts any ring metadata (col numbers/types/size unvalidated), so the
+ * create SUCCEEDS — we then drop the table immediately (NEVER insert into a
+ * table with corrupt ring metadata) and report the sub-case as failed.
+ * Variable diagnostics go to stderr (the MTR wrapper discards it).
+ */
+static bool expect_create_rejected(NdbDictionary::Dictionary *dict,
+                                   const NdbDictionary::Table &bad,
+                                   const char *what, int expected_code) {
+  int rc = dict->createTable(bad);
+  if (rc == 0) {
+    std::cerr << "  SUB-FAIL(" << what
+              << "): createTable accepted invalid ring metadata" << std::endl;
+    dict->dropTable(bad.getName());
+    return false;
+  }
+  int code = dict->getNdbError().code;
+  std::cerr << "  sub-ok(" << what << "): rejected with " << code << " "
+            << dict->getNdbError().message << std::endl;
+  if (expected_code != 0 && code != expected_code) {
+    std::cerr << "  SUB-FAIL(" << what << "): expected error " << expected_code
+              << ", got " << code << std::endl;
+    return false;
+  }
+  return true;
+}
+
+/*
+ * Test 27 (B14a): DICT must validate ring buffer metadata at create time.
+ * The MySQL layer enforces: ring_idx is an INT and the last PK column;
+ * ring_meta is a nullable VARBINARY(>=32) non-key column; ring size is
+ * 1..2^31-1. The raw NDB API bypasses all of that — before the fix DICT
+ * copies the three fields unvalidated, so e.g. an out-of-range
+ * ring_idx_col_no makes isRingBufferMetaRow() read an arbitrary word of
+ * every row. Each sub-case corrupts ONE field of a valid definition and
+ * requires createTable to fail with error 703 (InvalidFormat).
+ */
+static bool test_dict_validates_ring_metadata(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 27] DICT validates ring metadata on create" << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t27");
+  mysql_exec(mysql,
+             "CREATE TABLE test.rb_t27 ("
+             "  client_id INT NOT NULL,"
+             "  ring_idx INT NOT NULL DEFAULT 0,"
+             "  ring_meta VARBINARY(64),"
+             "  event_data VARCHAR(100),"
+             "  small_vb VARBINARY(8),"
+             "  vb_nn VARBINARY(64) NOT NULL,"
+             "  PRIMARY KEY (client_id, ring_idx)"
+             ") ENGINE=NDB,"
+             "  COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=5@ring_idx@ring_meta'");
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t27");
+  const NdbDictionary::Table *tab = dict->getTable("rb_t27");
+  TEST_ASSERT(tab != nullptr, "getTable");
+  TEST_ASSERT(tab->isRingBuffer(), "should be ring buffer");
+
+  const int cid_no = tab->getColumn("client_id")->getColumnNo();
+  const int data_no = tab->getColumn("event_data")->getColumnNo();
+  const int small_no = tab->getColumn("small_vb")->getColumnNo();
+  const int vbnn_no = tab->getColumn("vb_nn")->getColumnNo();
+
+  int failed = 0;
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingBufferSize(0);
+    if (!expect_create_rejected(dict, bad, "size=0", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingBufferSize(0x80000000u);  // 2^31, above the 2^31-1 max
+    if (!expect_create_rejected(dict, bad, "size=2^31", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingIdxColumnNo(99);  // out of range
+    if (!expect_create_rejected(dict, bad, "idx-out-of-range", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingIdxColumnNo(data_no);  // VARCHAR, not INT, not a key col
+    if (!expect_create_rejected(dict, bad, "idx=varchar-col", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingIdxColumnNo(cid_no);  // INT key col, but NOT the last PK col
+    if (!expect_create_rejected(dict, bad, "idx=non-last-pk", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingMetaColumnNo(99);  // out of range
+    if (!expect_create_rejected(dict, bad, "meta-out-of-range", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingMetaColumnNo(cid_no);  // INT NOT NULL key col
+    if (!expect_create_rejected(dict, bad, "meta=int-key-col", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingMetaColumnNo(data_no);  // VARCHAR, not VARBINARY
+    if (!expect_create_rejected(dict, bad, "meta=varchar-col", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingMetaColumnNo(small_no);  // VARBINARY(8) < 32
+    if (!expect_create_rejected(dict, bad, "meta=varbinary(8)", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t27_bad");
+    bad.setRingMetaColumnNo(vbnn_no);  // NOT NULL
+    if (!expect_create_rejected(dict, bad, "meta=not-null", 703)) failed++;
+  }
+  TEST_ASSERT(failed == 0, std::to_string(failed) +
+                               " invalid ring definitions were accepted");
+
+  // Control: an unmodified copy must still be creatable.
+  {
+    NdbDictionary::Table ok(*tab);
+    ok.setName("rb_t27_ok");
+    int rc = dict->createTable(ok);
+    TEST_ASSERT(rc == 0, std::string("control copy create failed: ") +
+                             dict->getNdbError().message);
+    const NdbDictionary::Table *chk = dict->getTable("rb_t27_ok");
+    TEST_ASSERT(chk != nullptr && chk->isRingBuffer(),
+                "control copy is a ring buffer");
+    TEST_ASSERT(dict->dropTable("rb_t27_ok") == 0, "drop control copy");
+  }
+
+  mysql_exec(mysql, "DROP TABLE test.rb_t27");
+  TEST_PASS("DICT validates ring metadata on create");
+  return true;
+}
+
+/*
+ * Test 28 (B14a): DICT must reject a ring buffer combined with TTL or with
+ * fully-replicated. Both exclusions exist only in the MySQL handler; via the
+ * raw NDB API a TTL+ring table would filter its own meta row (TTL col = 0 =>
+ * "expired") and a fully-replicated ring table would fire copy triggers that
+ * carry no ring-buffer flag. The ALTER sub-case covers the other entry:
+ * adding TTL to an existing ring table (alterTable re-parses the new
+ * definition, so the same DICT check must fire).
+ */
+static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 28] DICT rejects TTL/fully-replicated + ring combos"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t28");
+  mysql_exec(mysql,
+             "CREATE TABLE test.rb_t28 ("
+             "  client_id INT NOT NULL,"
+             "  ring_idx INT NOT NULL DEFAULT 0,"
+             "  ring_meta VARBINARY(64),"
+             "  ts DATETIME,"
+             "  PRIMARY KEY (client_id, ring_idx)"
+             ") ENGINE=NDB,"
+             "  COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=5@ring_idx@ring_meta'");
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t28");
+  const NdbDictionary::Table *tab = dict->getTable("rb_t28");
+  TEST_ASSERT(tab != nullptr, "getTable");
+  TEST_ASSERT(tab->isRingBuffer(), "should be ring buffer");
+  const int ts_no = tab->getColumn("ts")->getColumnNo();
+
+  int failed = 0;
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t28_bad");
+    bad.setTTLSec(60);
+    bad.setTTLColumnNo(ts_no);
+    if (!expect_create_rejected(dict, bad, "ttl+ring create", 703)) failed++;
+  }
+  {
+    NdbDictionary::Table bad(*tab);
+    bad.setName("rb_t28_bad");
+    bad.setFullyReplicated(true);
+    if (!expect_create_rejected(dict, bad, "fully-replicated+ring create",
+                                703))
+      failed++;
+  }
+
+  // ALTER adding TTL to an existing ring buffer table must be rejected too
+  // (alterTable re-parses the new definition through the same DICT checks).
+  // Counted like the create sub-cases so one red run shows every outcome.
+  {
+    NdbDictionary::Table newTab(*tab);
+    newTab.setTTLSec(60);
+    newTab.setTTLColumnNo(ts_no);
+    int rc = dict->alterTable(*tab, newTab);
+    std::cerr << "  (alter ttl+ring: rc=" << rc << " err="
+              << dict->getNdbError().code << " "
+              << dict->getNdbError().message << ")" << std::endl;
+    if (rc == 0) {
+      std::cerr << "  SUB-FAIL(alter ttl+ring): alterTable accepted TTL on "
+                   "ring table" << std::endl;
+      failed++;
+    } else {
+      dict->invalidateTable("rb_t28");
+      const NdbDictionary::Table *chk = dict->getTable("rb_t28");
+      if (chk == nullptr || chk->isTTLEnabled()) {
+        std::cerr << "  SUB-FAIL(alter ttl+ring): TTL enabled after rejected "
+                     "alter" << std::endl;
+        failed++;
+      }
+    }
+  }
+  TEST_ASSERT(failed == 0, std::to_string(failed) +
+                               " invalid ring combinations were accepted");
+
+  mysql_exec(mysql, "DROP TABLE test.rb_t28");
+  TEST_PASS("DICT rejects TTL/fully-replicated + ring combos");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2595,6 +2824,9 @@ int main(int argc, char **argv) {
     test_alter_ring_size_rejected(&ndb, &mysql);
     test_meta_absorb_preserves_unrelated_op(&ndb, &mysql);
     test_refresh_tuple_blocked(&ndb, &mysql);
+
+    test_dict_validates_ring_metadata(&ndb, &mysql);
+    test_dict_rejects_ttl_and_fr_combo(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;
