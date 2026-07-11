@@ -553,6 +553,13 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
              "ring-buffer tables");
     return HA_ERR_UNSUPPORTED;
   }
+  /* Catches LOAD DATA ... REPLACE, which carries REPLACE semantics
+     without SQLCOM_REPLACE. */
+  if (thd->lex->duplicates == DUP_REPLACE) {
+    my_error(ER_ILLEGAL_HA, MYF(0),
+             "LOAD DATA REPLACE is not allowed on ring-buffer tables");
+    return HA_ERR_UNSUPPORTED;
+  }
 
   /*
    * Block user-specified ring_idx or ring_meta in INSERT.
