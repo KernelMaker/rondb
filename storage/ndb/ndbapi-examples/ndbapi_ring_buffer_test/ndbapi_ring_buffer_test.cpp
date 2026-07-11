@@ -2746,6 +2746,75 @@ static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Test 29 (B18 DICT backstop): add-fragment / reorganize ALTER on a ring
+ * buffer table must be rejected in DICT. The SQL layer already rejects
+ * inplace REORGANIZE/ADD PARTITION, but the raw NDB API (setFragmentCount +
+ * alterTable) reaches DICT directly; reorg copy writes and reorg triggers
+ * carry no ring-buffer flag (940 mid-schema-transaction) and the reorg scan
+ * would silently drop meta rows. The table is kept EMPTY so that before the
+ * fix the alter deterministically SUCCEEDS (nothing to move — with data the
+ * outcome depends on which prefixes hash to moved fragments).
+ */
+static bool test_dict_rejects_add_fragment(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 29] add-fragment ALTER on ring buffer table rejected"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t29");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t29", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t29");
+  const NdbDictionary::Table *tab = dict->getTable("rb_t29");
+  TEST_ASSERT(tab != nullptr, "getTable");
+  TEST_ASSERT(tab->isRingBuffer(), "should be ring buffer");
+  const Uint32 old_frags = tab->getFragmentCount();
+
+  // Mimic exactly what mysqld's inplace ADD PARTITION sends (explicit
+  // fragment count + PartitionBalance_Specific) — a fragment-count change
+  // alone is stopped earlier by generic hashmap/balance checks. This is the
+  // vector that reached the unguarded reorg machinery in the SQL-layer red
+  // (error 940 mid-schema-transaction with enough prefixes to force
+  // movement) before the SQL-layer reject was added.
+  NdbDictionary::Table newTab(*tab);
+  newTab.setFragmentCount(old_frags + 1);
+  newTab.setPartitionBalance(
+      NdbDictionary::Object::PartitionBalance_Specific);
+  int rc = dict->alterTable(*tab, newTab);
+  std::cerr << "  (add-fragment alter: rc=" << rc << " err="
+            << dict->getNdbError().code << " " << dict->getNdbError().message
+            << ")" << std::endl;
+  TEST_ASSERT(rc != 0, "add-fragment alterTable must be rejected");
+  TEST_ASSERT(dict->getNdbError().code == 741,
+              "expected error 741, got " +
+                  std::to_string(dict->getNdbError().code));
+
+  // Fragment count unchanged and the ring still works.
+  dict->invalidateTable("rb_t29");
+  const NdbDictionary::Table *check = dict->getTable("rb_t29");
+  TEST_ASSERT(check != nullptr, "re-getTable");
+  TEST_ASSERT(check->getFragmentCount() == old_frags,
+              "fragment count unchanged after rejected alter");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(check), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(check);
+  TEST_ASSERT(insertN(ndb, check, h, rowbuf, mask, 1, "row", 1),
+              "insert after rejected alter");
+  auto rows = readDataRows(mysql, "rb_t29", 1);
+  TEST_ASSERT(rows.size() == 1, "expected 1 row after rejected alter, got " +
+                                    std::to_string(rows.size()));
+
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t29");
+  TEST_PASS("add-fragment ALTER on ring buffer table rejected");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2827,6 +2896,7 @@ int main(int argc, char **argv) {
 
     test_dict_validates_ring_metadata(&ndb, &mysql);
     test_dict_rejects_ttl_and_fr_combo(&ndb, &mysql);
+    test_dict_rejects_add_fragment(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;
