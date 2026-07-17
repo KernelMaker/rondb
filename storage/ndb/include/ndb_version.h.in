@@ -1241,4 +1241,28 @@ ndbd_support_drop_table_notification(Uint32 x) {
   }
   return false;
 }
+
+/**
+ * Support for NDB_TABLE=MAX_ROWS_PER_PK=... (ring buffer tables).
+ *
+ * Ring buffer operations carry flag bits in TCKEYREQ/LQHKEYREQ
+ * requestInfo and rely on DBTUP's write guard and meta-row filter;
+ * older data nodes know none of that — they would treat ring buffer
+ * tables as plain tables and drop the flag bits, so writes routed
+ * through an old TC would fail with error 940 (or bypass the ring
+ * bookkeeping entirely). Ring buffer DDL is therefore only allowed
+ * once EVERY data node runs a version with the feature.
+ *
+ * The feature first ships in 26.05.0 and has no backports, so a plain
+ * version comparison is sufficient.
+ */
+#define NDBD_SUPPORT_RING_BUFFER NDB_MAKE_VERSION(26,5,0)
+
+static
+inline
+int
+ndbd_support_ring_buffer(Uint32 x)
+{
+  return x >= NDBD_SUPPORT_RING_BUFFER;
+}
 #endif

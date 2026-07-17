@@ -10219,6 +10219,17 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
         "FULLY_REPLICATED not supported by current data node versions");
   }
 
+  /* Verify EVERY data node supports ring buffer tables if requested —
+     an old data node would treat the table as plain and drop the ring
+     flag bits, so writes routed through it would fail with error 940
+     or bypass the ring bookkeeping. Covers CREATE and, via the copy
+     path, ALTER. */
+  if (found_ring_buffer &&
+      ndbd_support_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
+    return create.failed_illegal_create_option(
+        "MAX_ROWS_PER_PK not supported by current data node versions");
+  }
+
   // Read mysql.ndb_replication settings for this table, if any
   uint32 binlog_flags;
   const st_conflict_fn_def *conflict_fn = nullptr;
@@ -16957,6 +16968,14 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
       (new_tab->getFullyReplicated() ||
        (mod_fully_replicated->m_found && mod_fully_replicated->m_val_bool))) {
     *reason = "A table cannot be both fully replicated and MAX_ROWS_PER_PK";
+    return true;
+  }
+
+  /* Ring buffer DDL requires EVERY data node to support the feature
+     (mirrors the CREATE-side gate; the copy fallback re-checks there). */
+  if (new_tab->isRingBuffer() &&
+      ndbd_support_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
+    *reason = "MAX_ROWS_PER_PK not supported by current data node versions";
     return true;
   }
 
