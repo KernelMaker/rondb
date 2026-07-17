@@ -10144,6 +10144,23 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
         "A table cannot be both TTL and MAX_ROWS_PER_PK");
   }
 
+  /*
+   * Ring buffer requires NDB-native partitioning: with user-defined
+   * partitioning (HASH by expression, RANGE, LIST, or subpartitioning)
+   * every operation must carry an explicit partition id, which the ring
+   * buffer write paths do not provide — every INSERT on such a table
+   * fails with error 4544 "Wrong partitionInfo type for table". Implicit
+   * partitioning and explicit [LINEAR] KEY work and stay allowed. Also
+   * covers ALTER ... PARTITION BY, which re-enters here via copy-create.
+   */
+  if (found_ring_buffer && table->part_info != nullptr &&
+      !(table->part_info->part_type == partition_type::HASH &&
+        table->part_info->list_of_part_fields &&
+        !table->part_info->is_sub_partitioned())) {
+    return create.failed_illegal_create_option(
+        "MAX_ROWS_PER_PK supports only KEY partitioning");
+  }
+
   NdbDictionary::Object::PartitionBalance part_bal =
       g_default_partition_balance;
   if (parsePartitionBalance(thd, mod_frags, &part_bal) == false) {
