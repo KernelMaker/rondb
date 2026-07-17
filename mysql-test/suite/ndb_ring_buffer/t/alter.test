@@ -215,3 +215,50 @@ INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'b');
 SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
 
 DROP TABLE test.rb_ttl;
+
+--echo #
+--echo # Case 8: repartition via ALTER ... PARTITION BY
+--echo #
+
+# Repartitioning to a user-defined scheme is rejected (the COPY alter
+# re-enters CREATE, where non-KEY partitioning on a ring buffer table is
+# refused — without the guard the copy succeeded but the table became
+# write-dead: every INSERT failed with NDB 4544). Repartitioning to KEY
+# is allowed and preserves ring state through the copy.
+
+CREATE TABLE test.rb_repart (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'a');
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'b');
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'c');
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'd');
+
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE test.rb_repart PARTITION BY RANGE (client_id) (
+    PARTITION p0 VALUES LESS THAN (100),
+    PARTITION p1 VALUES LESS THAN MAXVALUE
+  );
+
+# Table unchanged and still writable after the rejected repartition
+SELECT client_id, ring_idx, val FROM test.rb_repart ORDER BY ring_idx;
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'e');
+SELECT client_id, ring_idx, val FROM test.rb_repart ORDER BY ring_idx;
+
+# Repartition to KEY: allowed, ring state preserved through the copy
+ALTER TABLE test.rb_repart PARTITION BY KEY(client_id) PARTITIONS 2;
+SELECT client_id, ring_idx, val FROM test.rb_repart ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb_repart WHERE client_id = 1 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+INSERT INTO test.rb_repart (client_id, val) VALUES (1, 'f');
+SELECT client_id, ring_idx, val FROM test.rb_repart ORDER BY ring_idx;
+
+DROP TABLE test.rb_repart;
+
