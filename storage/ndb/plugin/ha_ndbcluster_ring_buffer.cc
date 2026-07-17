@@ -208,9 +208,23 @@ bool delete_statement_shape_allowed(const THD *thd) {
 }
 
 bool show_meta_active(THD *thd, bool is_ring_buffer, bool delete_allowed) {
-  if (thdvar_show_meta(thd)) return true;
   if (delete_allowed) return true;
   if (is_ring_buffer && thd_sql_command(thd) == SQLCOM_ALTER_TABLE) return true;
+  if (thdvar_show_meta(thd)) {
+    /*
+     * The session variable is a read-only diagnostic: a data-changing
+     * statement's scan must not surface meta rows — an UPDATE reaching
+     * the meta row would error the whole statement ("Cannot update meta
+     * row on ring-buffer table") and a DELETE outside the validated
+     * prefix-delete walker (which uses delete_allowed above) must never
+     * remove meta rows.
+     */
+    const int sqlcom = thd_sql_command(thd);
+    if (sqlcom == SQLCOM_UPDATE || sqlcom == SQLCOM_UPDATE_MULTI ||
+        sqlcom == SQLCOM_DELETE || sqlcom == SQLCOM_DELETE_MULTI)
+      return false;
+    return true;
+  }
   return false;
 }
 
