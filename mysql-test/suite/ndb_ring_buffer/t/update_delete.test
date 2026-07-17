@@ -590,6 +590,10 @@ DELETE FROM test.rb_limit LIMIT 1;
 --error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
 
+# ORDER BY without LIMIT is conservatively rejected too
+--error ER_ILLEGAL_HA
+DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val;
+
 # Multi-table DELETE restricts the deleted set via the join — rejected
 CREATE TABLE test.plain_join (id INT PRIMARY KEY) ENGINE = NDB;
 INSERT INTO test.plain_join VALUES (1);

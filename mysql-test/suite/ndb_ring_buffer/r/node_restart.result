@@ -112,6 +112,41 @@ rb	CREATE TABLE `rb` (
   PRIMARY KEY (`client_id`,`ring_idx`)
 ) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=4@ring_idx@ring_meta'
 #
+# Case 5: writes while node 1 down, reads from recovered node 1
+#
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_A');
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_B');
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_C');
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_D');
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_E');
+SELECT client_id, ring_idx, event_data FROM test.rb
+WHERE client_id = 3 ORDER BY ring_idx;
+client_id	ring_idx	event_data
+3	1	w_E
+3	2	w_B
+3	3	w_C
+3	4	w_D
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb WHERE client_id = 3 AND ring_idx = 0;
+HEX(ring_meta)
+0100000002000000040000000000000005000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+INSERT INTO test.rb (client_id, event_data) VALUES (3, 'w_F');
+SELECT client_id, ring_idx, event_data FROM test.rb
+WHERE client_id = 3 ORDER BY ring_idx;
+client_id	ring_idx	event_data
+3	1	w_E
+3	2	w_F
+3	3	w_C
+3	4	w_D
+SELECT client_id, ring_idx, event_data FROM test.rb
+WHERE client_id = 3 ORDER BY ring_idx;
+client_id	ring_idx	event_data
+3	1	w_E
+3	2	w_F
+3	3	w_C
+3	4	w_D
+#
 # Cleanup
 #
 DROP TABLE test.rb;

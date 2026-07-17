@@ -156,6 +156,25 @@ with_meta
 10
 SET ndb_ring_buffer_show_meta = OFF;
 #
+# Case 12: locking reads (FOR UPDATE / FOR SHARE) keep meta hidden
+#
+BEGIN;
+SELECT COUNT(*) AS for_update_count FROM test.rb FOR UPDATE;
+for_update_count
+7
+SELECT client_id, ring_idx FROM test.rb
+WHERE client_id = 1 AND ring_idx = 0 FOR UPDATE;
+client_id	ring_idx
+COMMIT;
+BEGIN;
+SELECT COUNT(*) AS for_share_count FROM test.rb LOCK IN SHARE MODE;
+for_share_count
+7
+SELECT client_id, ring_idx FROM test.rb
+WHERE client_id = 1 AND ring_idx = 0 LOCK IN SHARE MODE;
+client_id	ring_idx
+COMMIT;
+#
 # Cleanup
 #
 DROP TABLE test.rb;
