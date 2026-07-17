@@ -458,6 +458,7 @@ ErrorBundle ErrorCodes[] = {
   { 4354, DMEC, AE, "Incorrect combination of OperationOptions optionsPresent, inputParams ptr and numInputParams" },
   { 4355, DMEC, AE, "Column is NULL in inputParams structure" },
   { 4356, DMEC, AE, "Input parameter without interpreted code" },
+  { 4357, DMEC, IE, "Corrupt ring_meta value in ring buffer meta row" },
   { 281,  HA_ERR_NO_CONNECTION, AE, "Operation not allowed due to cluster shutdown in progress" },
   { 299,  DMEC, AE, "Operation not allowed or aborted due to single user mode" },
   { 261,  DMEC, AE,

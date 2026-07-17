@@ -733,7 +733,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
     }
 
     Ring_meta meta;
-    Uint32 data_slot;
+    Uint32 data_slot = 0;
     bool ring_full = false;
 
     if (meta_not_found) {
@@ -745,24 +745,42 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
       ptrdiff_t row_offset = meta_result - table->record[0];
       meta_field_in_result->move_field_offset(row_offset);
 
+      /*
+       * A meta row whose ring_meta is NULL, too short, or of an unknown
+       * version is corrupt — fail instead of silently re-initializing.
+       * Re-init would reset count/total_inserts and turn every existing
+       * data row into a phantom the ring no longer tracks. Mirrors
+       * NdbRingBufferWriter (error 4357) and the ClusterJ writer.
+       */
+      bool meta_corrupt = false;
       if (meta_field_in_result->is_null()) {
-        meta.init_first_insert(ring_buffer_size);
-        data_slot = 1;
+        meta_corrupt = true;
       } else {
         String meta_str;
         meta_field_in_result->val_str(&meta_str);
         if (meta_str.length() < RING_META_SIZE) {
-          meta.init_first_insert(ring_buffer_size);
-          data_slot = 1;
+          meta_corrupt = true;
         } else {
           meta.unpack((const uchar *)meta_str.ptr());
-          ring_full = (meta.count >= ring_buffer_size);
-          data_slot = meta.next_pos;
-          meta.advance(ring_buffer_size);
+          if (meta.version != RING_META_VERSION) {
+            meta_corrupt = true;
+          } else {
+            ring_full = (meta.count >= ring_buffer_size);
+            data_slot = meta.next_pos;
+            meta.advance(ring_buffer_size);
+          }
         }
       }
 
       meta_field_in_result->move_field_offset(-row_offset);
+
+      if (meta_corrupt) {
+        my_error(ER_GET_ERRMSG, MYF(0), 4357,
+                 "Corrupt ring_meta value in ring buffer meta row",
+                 "NDBCLUSTER");
+        ret = HA_ERR_INTERNAL_ERROR;
+        goto cleanup;
+      }
     }
 
     /*

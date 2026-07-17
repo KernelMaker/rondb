@@ -501,33 +501,45 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
            (1 << m_ring_meta_info.nullbit_bit_in_byte)) != 0;
     }
 
+    /*
+     * A meta row whose ring_meta is NULL, too short, or of an unknown
+     * version is corrupt — fail instead of silently re-initializing.
+     * Re-init would reset count/total_inserts and turn every existing
+     * data row into a phantom the ring no longer tracks.
+     */
     if (meta_is_null) {
-      // Meta row exists but ring_meta is null — re-init
-      m_batch_meta.init_first_insert();
+      setError(4357, "Corrupt ring_meta value in ring buffer meta row "
+                     "(NULL)");
+      return -1;
+    }
+
+    // Read the packed meta value
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(
+        m_meta_row_buffer + m_ring_meta_info.offset);
+    Uint32 data_len = 0;
+    const unsigned char *data_ptr = nullptr;
+
+    if (m_ring_meta_info.flags & NdbRecord::IsVar1ByteLen) {
+      data_len = p[0];
+      data_ptr = p + 1;
+    } else if (m_ring_meta_info.flags & NdbRecord::IsVar2ByteLen) {
+      data_len = uint2korr(p);
+      data_ptr = p + 2;
     } else {
-      // Read the packed meta value
-      const unsigned char *p = reinterpret_cast<const unsigned char *>(
-          m_meta_row_buffer + m_ring_meta_info.offset);
-      Uint32 data_len = 0;
-      const unsigned char *data_ptr = nullptr;
+      data_len = m_ring_meta_info.max_size;
+      data_ptr = p;
+    }
 
-      if (m_ring_meta_info.flags & NdbRecord::IsVar1ByteLen) {
-        data_len = p[0];
-        data_ptr = p + 1;
-      } else if (m_ring_meta_info.flags & NdbRecord::IsVar2ByteLen) {
-        data_len = uint2korr(p);
-        data_ptr = p + 2;
-      } else {
-        data_len = m_ring_meta_info.max_size;
-        data_ptr = p;
-      }
-
-      if (data_len < RING_META_SIZE) {
-        // Corrupted — re-init
-        m_batch_meta.init_first_insert();
-      } else {
-        m_batch_meta.unpack(data_ptr);
-      }
+    if (data_len < RING_META_SIZE) {
+      setError(4357, "Corrupt ring_meta value in ring buffer meta row "
+                     "(too short)");
+      return -1;
+    }
+    m_batch_meta.unpack(data_ptr);
+    if (m_batch_meta.version != RING_META_VERSION) {
+      setError(4357, "Corrupt ring_meta value in ring buffer meta row "
+                     "(unknown version)");
+      return -1;
     }
   } else if (read_err.code == 626) {
     // Meta row not found — first insert for this PK prefix. The read op carries
