@@ -102,16 +102,21 @@ class RingBufferWriter {
             return buf;
         }
 
-        void unpack(byte[] data) {
+        /** Unpack an existing meta value. Returns false if the value is
+         *  corrupt (NULL, too short, or unknown version) — the caller must
+         *  fail rather than silently re-initialize, which would reset
+         *  count/totalInserts and orphan every existing data row. Mirrors
+         *  NdbRingBufferWriter and the SQL handler (NDB error 4357). */
+        boolean unpack(byte[] data) {
             if (data == null || data.length < SIZE) {
-                initFirstInsert();
-                return;
+                return false;
             }
             ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
             version = bb.getShort(0);
             nextPos = bb.getInt(4);
             count = bb.getInt(8);
             totalInserts = bb.getLong(16);
+            return version == VERSION;
         }
     }
 
@@ -395,9 +400,14 @@ class RingBufferWriter {
         int errorCode = readOp.getNdbError().code();
 
         if (errorCode == 0) {
-            // Meta row exists -- unpack
+            // Meta row exists -- unpack; a corrupt value must fail, not
+            // silently re-initialize (NDB error 4357, see RingMeta.unpack)
             byte[] metaBytes = ndbRecordImpl.getBytes(metaRowBuffer, ringMetaColumnId);
-            batchMeta.unpack(metaBytes);
+            if (!batchMeta.unpack(metaBytes)) {
+                throw new ClusterJDatastoreException(
+                        "Corrupt ring_meta value in ring buffer meta row for table "
+                        + storeTable.getName() + ", NDB error 4357");
+            }
             batchMetaExisted = true;
         } else if (errorCode == ROW_NOT_FOUND) {
             // Meta row doesn't exist yet -- fresh ring.
