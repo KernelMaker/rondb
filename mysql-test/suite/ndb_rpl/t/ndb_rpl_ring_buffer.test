@@ -198,19 +198,23 @@ SELECT client_id, ring_idx, event_data FROM test.rb
 
 --connection master
 
-# Check meta rows on master
+# Check meta rows on master — including the packed meta bytes
 SET ndb_ring_buffer_show_meta = ON;
 SELECT client_id, ring_idx FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
+SELECT HEX(ring_meta) FROM test.rb
+    WHERE client_id = 1 AND ring_idx = 0;
 SET ndb_ring_buffer_show_meta = OFF;
 
 --sync_slave_with_master
 --connection slave
 
-# Meta rows should also be present on slave
+# Meta rows should also be present on slave, byte-identical to the master
 SET ndb_ring_buffer_show_meta = ON;
 SELECT client_id, ring_idx FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
+SELECT HEX(ring_meta) FROM test.rb
+    WHERE client_id = 1 AND ring_idx = 0;
 SET ndb_ring_buffer_show_meta = OFF;
 
 ###############################################################################
@@ -393,6 +397,130 @@ SELECT id, ring_idx, code FROM test.rb_nn_uniq ORDER BY id, ring_idx;
 SELECT id, ring_idx, code FROM test.rb_nn_uniq ORDER BY id, ring_idx;
 
 ###############################################################################
+# Case 15: Promote-to-source — replica ring continues from replicated state
+###############################################################################
+
+--echo #
+--echo # Case 15: replica promoted to source continues the ring
+--echo #
+
+--connection master
+CREATE TABLE test.rb_promote (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    event_data VARCHAR(100),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_promote (client_id, event_data) VALUES (1, 'p_A');
+INSERT INTO test.rb_promote (client_id, event_data) VALUES (1, 'p_B');
+
+--sync_slave_with_master
+--connection slave
+
+# Promote: stop replication, write on the former replica. The inserts must
+# continue from the REPLICATED meta position (slot 3, then wrap to 1) —
+# not restart the ring.
+--source include/rpl/stop_replica.inc
+
+INSERT INTO test.rb_promote (client_id, event_data) VALUES (1, 'p_C');
+INSERT INTO test.rb_promote (client_id, event_data) VALUES (1, 'p_D');
+
+SELECT client_id, ring_idx, event_data FROM test.rb_promote
+    WHERE client_id = 1 ORDER BY ring_idx;
+
+# version=1, next_pos=2, count=3, total_inserts=4 (byte-exact)
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb_promote
+    WHERE client_id = 1 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+--source include/rpl/start_replica.inc
+
+###############################################################################
+# Case 16: PITR pin — mysqlbinlog | mysql replay of ring buffer row events
+# fails loudly (B17/C12). The replayed Write_rows events apply through a
+# regular client session (no applier) in REPLACE/idempotent row-apply mode,
+# so the ring-buffer write intercept rejects them ("REPLACE is not allowed
+# on ring-buffer tables"): ring buffer binlogs are NOT SQL-replayable.
+# Backup/restore of ring buffer tables must use ndb_restore (mysqldump SQL
+# restore is equally impossible — INSERT listing ring_idx is rejected).
+# The replay session runs with sql_log_bin=0 (standard PITR practice):
+# without it the server re-logs the replayed row event into its own binlog
+# and a downstream replica breaks on the same intercept rejection.
+###############################################################################
+
+--echo #
+--echo # Case 16: binlog replay of ring buffer events fails loudly
+--echo #
+
+--connection master
+
+# The replay failure below is reported in the master's error log with the
+# "Replica SQL:" prefix (BINLOG statement application reuses the applier
+# machinery, "source log FIRST") — expected, suppress for the log check.
+--disable_query_log
+call mtr.add_suppression("Could not execute Write_rows event on table pitr.rb_pitr");
+--enable_query_log
+
+# Rotate so the events land in a fresh, known binlog file.
+FLUSH BINARY LOGS;
+--let $pitr_binlog_file = query_get_value(SHOW BINARY LOG STATUS, File, 1)
+
+CREATE DATABASE pitr;
+CREATE TABLE pitr.rb_pitr (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    event_data VARCHAR(100),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO pitr.rb_pitr (client_id, event_data) VALUES (1, 'binlogged_A');
+INSERT INTO pitr.rb_pitr (client_id, event_data) VALUES (1, 'binlogged_B');
+
+# The slave having applied the rows proves they reached the master binlog.
+--sync_slave_with_master
+--connection slave
+SELECT client_id, ring_idx, event_data FROM pitr.rb_pitr
+    WHERE client_id = 1 ORDER BY ring_idx;
+--connection master
+
+# Seal the events into $pitr_binlog_file, then remove the objects so the
+# replay can re-create them.
+FLUSH BINARY LOGS;
+DROP DATABASE pitr;
+--sync_slave_with_master
+--connection master
+
+--let $MYSQLD_DATADIR = `SELECT @@datadir`
+
+# Replay with sql_log_bin=0: CREATE DATABASE + CREATE TABLE succeed
+# (master-local), the first ring buffer Write_rows event is rejected by
+# the write intercept -> mysql exits 1.
+--error 1
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/$pitr_binlog_file | $MYSQL --init-command="SET sql_log_bin=0" 2> $MYSQL_TMP_DIR/pitr_replay.err
+
+--let SEARCH_FILE = $MYSQL_TMP_DIR/pitr_replay.err
+--let SEARCH_PATTERN = REPLACE is not allowed on ring-buffer tables
+--source include/search_pattern.inc
+
+--remove_file $MYSQL_TMP_DIR/pitr_replay.err
+
+# The failed replay stopped after the DDL: table re-created, but EMPTY.
+SELECT COUNT(*) AS replayed_rows FROM pitr.rb_pitr;
+
+# The replay was not binlogged, so the re-created pitr db exists only on
+# the master — drop it master-locally too.
+SET sql_log_bin = 0;
+DROP DATABASE pitr;
+SET sql_log_bin = 1;
+--sync_slave_with_master
+--connection master
+
+###############################################################################
 # Cleanup
 ###############################################################################
 
@@ -404,6 +532,7 @@ SELECT id, ring_idx, code FROM test.rb_nn_uniq ORDER BY id, ring_idx;
 DROP TABLE test.rb;
 DROP TABLE test.rb_bulk;
 DROP TABLE test.rb_nn_uniq;
+DROP TABLE test.rb_promote;
 --sync_slave_with_master
 
 --source include/rpl/deinit.inc
