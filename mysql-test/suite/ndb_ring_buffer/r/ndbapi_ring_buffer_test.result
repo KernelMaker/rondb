@@ -64,9 +64,11 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: DICT rejects TTL/fully-replicated + ring combos
 [Test 29] add-fragment ALTER on ring buffer table rejected
   PASS: add-fragment ALTER on ring buffer table rejected
+[Test 30] corrupt ring_meta rejected
+  PASS: corrupt ring_meta rejected
 
 === Results ===
-Passed: 29
+Passed: 30
 Failed: 0
 #
 # Done

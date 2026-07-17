@@ -109,6 +109,20 @@ static void setVarchar(char *buf, const NdbRecord::Attr *attr,
   }
 }
 
+static void setVarbinary(char *buf, const NdbRecord::Attr *attr,
+                         const unsigned char *data, Uint32 len) {
+  unsigned char *p = reinterpret_cast<unsigned char *>(buf + attr->offset);
+  if (attr->flags & NdbRecord::IsVar1ByteLen) {
+    p[0] = (unsigned char)len;
+    memcpy(p + 1, data, len);
+  } else if (attr->flags & NdbRecord::IsVar2ByteLen) {
+    int2store(p, len);
+    memcpy(p + 2, data, len);
+  } else {
+    memcpy(p, data, len);
+  }
+}
+
 static void setNull(char *buf, const NdbRecord::Attr *attr) {
   if (attr->flags & NdbRecord::IsNullable) {
     buf[attr->nullbit_byte_offset] |= (1 << attr->nullbit_bit_in_byte);
@@ -2900,6 +2914,152 @@ static bool test_dict_rejects_add_fragment(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Test 30 (B17): corrupt ring_meta must surface an error, not silently
+ * re-initialize. Before the fix, a meta row whose ring_meta was NULL, too
+ * short, or carried an unknown version was silently treated as "first
+ * insert" (init_first_insert): count/total_inserts reset and every
+ * existing data row turned into a phantom the ring no longer tracks.
+ * After the fix, addRow/deleteOldest fail with error 4357.
+ *
+ * The corrupt states are created with a raw flagged updateTuple
+ * (OO_RING_BUFFER_OP bypasses the DBTUP write guard exactly like the
+ * writer's own ops) — the only way such states can arise in practice.
+ *
+ * Before the fix: addRow succeeds after corruption -> this test FAILS.
+ * After the fix:  addRow/deleteOldest fail with 4357 -> this test PASSES.
+ */
+static bool test_corrupt_meta_rejected(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 30] corrupt ring_meta rejected" << std::endl;
+  const int ERR_CORRUPT_RING_META = 4357;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t30");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t30", 3);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t30");
+  const NdbDictionary::Table *table = dict->getTable("rb_t30");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(table);
+
+  // Fill the size-3 ring: meta = (version=1, next_pos=1, count=3, total=3).
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 3),
+              "insert 3 rows");
+
+  // Mask covering only ring_meta, for the raw corrupting updates.
+  unsigned char *meta_only_mask = new unsigned char[h.mask_size];
+  const char *meta_cols[] = {"ring_meta"};
+  buildMask(table, meta_only_mask, h.mask_size, meta_cols, 1);
+
+  // Raw flagged update of the meta row's ring_meta column.
+  auto writeRawMeta = [&](const unsigned char *val, Uint32 len,
+                          bool set_null) -> bool {
+    NdbTransaction *t = ndb->startTransaction(table);
+    if (!t) return false;
+    h.fillRow(rowbuf, 1, "");  // client_id=1, ring_idx=0 (memset)
+    if (set_null) {
+      setNull(rowbuf, h.rmeta_attr);
+    } else {
+      clearNull(rowbuf, h.rmeta_attr);
+      setVarbinary(rowbuf, h.rmeta_attr, val, len);
+    }
+    NdbOperation::OperationOptions opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.optionsPresent = NdbOperation::OperationOptions::OO_RING_BUFFER_OP;
+    const NdbOperation *op =
+        t->updateTuple(h.record, rowbuf, h.record, rowbuf, meta_only_mask,
+                       &opts, sizeof(opts));
+    if (!op) {
+      ndb->closeTransaction(t);
+      return false;
+    }
+    int rc = t->execute(NdbTransaction::Commit);
+    ndb->closeTransaction(t);
+    return rc == 0;
+  };
+
+  // addRow on the corrupted table must fail with 4357.
+  auto addRowMustFail = [&](const char *tag) -> bool {
+    NdbTransaction *t = ndb->startTransaction(table);
+    if (!t) return false;
+    NdbRingBufferWriter writer(table, h.record, t);
+    if (writer.getErrorCode() != 0) {
+      ndb->closeTransaction(t);
+      return false;
+    }
+    h.fillRow(rowbuf, 1, tag);
+    const NdbOperation *op = writer.addRow(rowbuf, mask);
+    int code = writer.getErrorCode();
+    std::cerr << "  (" << tag << ": op=" << (op ? "non-null" : "null")
+              << " code=" << code << " " << writer.getErrorMessage() << ")"
+              << std::endl;
+    ndb->closeTransaction(t);  // never commit — abort whatever was queued
+    return op == nullptr && code == ERR_CORRUPT_RING_META;
+  };
+
+  // (a) Unknown version: well-formed 32 bytes, version=99.
+  unsigned char bad_version[32];
+  memset(bad_version, 0, sizeof(bad_version));
+  int2store(bad_version + 0, 99);  // version
+  int4store(bad_version + 4, 1);   // next_pos
+  int4store(bad_version + 8, 3);   // count
+  int8store(bad_version + 16, 3);  // total_inserts
+  TEST_ASSERT(writeRawMeta(bad_version, sizeof(bad_version), false),
+              "corrupt meta (version=99)");
+  TEST_ASSERT(addRowMustFail("bad_ver"),
+              "addRow on version-corrupt meta must fail with 4357");
+
+  // deleteOldest goes through the same meta read — must fail identically.
+  {
+    NdbTransaction *t = ndb->startTransaction(table);
+    TEST_ASSERT(t != nullptr, "startTransaction (deleteOldest)");
+    NdbRingBufferWriter writer(table, h.record, t);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init (deleteOldest)");
+    h.fillRow(rowbuf, 1, "");
+    Uint32 actual = 0xdeadbeef;
+    int rc = writer.deleteOldest(rowbuf, 2, &actual);
+    std::cerr << "  (deleteOldest: rc=" << rc << " code="
+              << writer.getErrorCode() << ")" << std::endl;
+    TEST_ASSERT(rc != 0 && writer.getErrorCode() == ERR_CORRUPT_RING_META,
+                "deleteOldest on corrupt meta must fail with 4357");
+    ndb->closeTransaction(t);
+  }
+
+  // (b) Too-short value (4 bytes).
+  unsigned char bad_short[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+  TEST_ASSERT(writeRawMeta(bad_short, sizeof(bad_short), false),
+              "corrupt meta (short)");
+  TEST_ASSERT(addRowMustFail("bad_short"),
+              "addRow on short meta must fail with 4357");
+
+  // (c) NULL ring_meta on an existing meta row.
+  TEST_ASSERT(writeRawMeta(nullptr, 0, true), "corrupt meta (NULL)");
+  TEST_ASSERT(addRowMustFail("bad_null"),
+              "addRow on NULL meta must fail with 4357");
+
+  // The data rows themselves must be untouched by all of the above.
+  auto rows = readDataRows(mysql, "rb_t30", 1);
+  TEST_ASSERT(rows.size() == 3,
+              "expected 3 untouched data rows, got " +
+                  std::to_string(rows.size()));
+  TEST_ASSERT(rows[0].data == "row_0" && rows[1].data == "row_1" &&
+                  rows[2].data == "row_2",
+              "data rows unchanged");
+
+  delete[] rowbuf;
+  delete[] mask;
+  delete[] meta_only_mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t30");
+  TEST_PASS("corrupt ring_meta rejected");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -2982,6 +3142,8 @@ int main(int argc, char **argv) {
     test_dict_validates_ring_metadata(&ndb, &mysql);
     test_dict_rejects_ttl_and_fr_combo(&ndb, &mysql);
     test_dict_rejects_add_fragment(&ndb, &mysql);
+
+    test_corrupt_meta_rejected(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;
