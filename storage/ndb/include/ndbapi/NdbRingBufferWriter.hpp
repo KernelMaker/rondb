@@ -68,6 +68,15 @@ class NdbOperation;
  *
  * For tables with BLOB/TEXT columns, addRow() returns the NdbOperation*
  * so the caller can obtain blob handles via op->getBlobHandle(attrId).
+ *
+ * Error handling: when any method fails (addRow() returns nullptr,
+ * flush()/deleteOldest() return -1), inspect getErrorCode()/
+ * getErrorMessage() and ROLL BACK the transaction — queued ring
+ * operations and the meta update may otherwise commit partially applied
+ * (e.g. deletes without the matching meta count decrement).  A writer
+ * that has reported an error is permanently failed (it is bound to the
+ * one transaction passed at construction); construct a new writer on a
+ * new transaction to continue.
  */
 class NdbRingBufferWriter {
  public:
@@ -129,12 +138,16 @@ class NdbRingBufferWriter {
    * @param maxN         Maximum rows to delete.  If the ring contains
    *                     fewer rows, deletes what's available.  Empty
    *                     ring is not an error — outActual is set to 0.
+   *                     maxN == 0 is a no-op success that does not touch
+   *                     the meta row.
    * @param outActual    Output: number of rows actually deleted.
-   * @return 0 on success, -1 on error.
+   * @return 0 on success, -1 on error.  On -1 the transaction must be
+   *         rolled back: deletes may already be queued without the
+   *         matching meta update, and committing would leave the meta
+   *         row overcounting.
    *
-   * Cannot be mixed with an active addRow batch on the same Writer
-   * instance — caller must call flush() before deleteOldest() if rows
-   * have been added.
+   * A pending addRow() batch on this writer is flushed automatically
+   * before the meta row is read — no explicit flush() call is needed.
    *
    * Internally calls execute(NoCommit).  Caller is responsible for
    * committing the transaction.
