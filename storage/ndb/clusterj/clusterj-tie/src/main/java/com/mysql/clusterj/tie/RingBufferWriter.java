@@ -80,9 +80,10 @@ class RingBufferWriter {
             totalInserts = 0;
         }
 
-        // Online ring-buffer resize is disabled (rejected upstream by
-        // ha_ndbcluster's parse_comment validator), so post-grow stale-meta
-        // states cannot arise here and the formula needs no grow-adjustment.
+        // Online ring-buffer resize is disabled (rejected authoritatively
+        // in DBDICT, with ha_ndbcluster's parse_comment validator as a
+        // front-end check), so post-grow stale-meta states cannot arise
+        // here and the formula needs no grow-adjustment.
         void advance(int ringSize) {
             nextPos = (nextPos % ringSize) + 1;
             if (count < ringSize) count++;
