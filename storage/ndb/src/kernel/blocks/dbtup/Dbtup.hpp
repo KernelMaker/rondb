@@ -5162,6 +5162,14 @@ private:
    * which includes Dbtup.hpp; pulling that symbol in here would create a
    * circular header dependency.
    */
+  /**
+   * Invariant note: the replica-applier flag is only carried by the
+   * primary-replica operation; LQH does not forward it to backup
+   * replicas. Applier writes still pass the guard on backups because
+   * ha_ndbcluster couples the applier bypass with OO_RING_BUFFER_OP
+   * (ring_buffer_op below), which IS forwarded. Keep that coupling if
+   * the handler's applier path is ever changed.
+   */
   bool is_ring_buffer_write_blocked(Tablerec *regTabPtr,
                                     Uint32 Roptype,
                                     const Operationrec *regOperPtr,
