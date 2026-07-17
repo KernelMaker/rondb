@@ -62,6 +62,15 @@ SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
 --error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 
+--echo #
+--echo # Case 4c: INSERT after the rejected ALTERs — ring intact at size 3
+--echo #
+
+# The wrap to slot 1 proves the original ring size survived every
+# rejected ALTER above.
+INSERT INTO test.rb_alter (id, data) VALUES (1, 'd');
+SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
+
 DROP TABLE test.rb_alter;
 
 --echo #
@@ -174,3 +183,35 @@ INSERT INTO test.rb_reorg_i (client_id, val) VALUES (1, 'b');
 SELECT client_id, ring_idx, val FROM test.rb_reorg_i ORDER BY ring_idx;
 
 DROP TABLE test.rb_reorg_i;
+
+--echo #
+--echo # Case 7: ALTER adding TTL to a ring buffer table — rejected
+--echo #
+
+CREATE TABLE test.rb_ttl (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'a');
+
+# TTL added alongside the ring comment
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta,TTL=3600@created_at";
+
+# TTL replacing the ring comment (comment re-injection keeps the ring
+# modifier alive, so this is still TTL+ring)
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=TTL=3600@created_at";
+
+# Comment unchanged, table still writable
+SHOW CREATE TABLE test.rb_ttl;
+INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'b');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+
+DROP TABLE test.rb_ttl;

@@ -500,6 +500,8 @@ DELETE FROM test.rb_limit LIMIT 1;
 ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
 DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
 ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
+DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val;
+ERROR HY000: Table storage engine for 'DELETE on ring-buffer table cannot use LIMIT, ORDER BY, or multi-table DELETE' doesn't have this option
 CREATE TABLE test.plain_join (id INT PRIMARY KEY) ENGINE = NDB;
 INSERT INTO test.plain_join VALUES (1);
 DELETE test.rb_limit FROM test.rb_limit JOIN test.plain_join

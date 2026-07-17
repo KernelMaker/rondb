@@ -175,6 +175,26 @@ client_id	ring_idx	event_data
 9	1	racer1
 9	2	racer2
 #
+# Case 10: overlapping transactions on one prefix, meta byte-exact
+#
+BEGIN;
+INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn1_a');
+INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn2_x');
+INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn1_b');
+COMMIT;
+SELECT client_id, ring_idx, event_data FROM test.rb
+WHERE client_id = 20
+ORDER BY ring_idx;
+client_id	ring_idx	event_data
+20	1	txn1_a
+20	2	txn1_b
+20	3	txn2_x
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb WHERE client_id = 20 AND ring_idx = 0;
+HEX(ring_meta)
+0100000004000000030000000000000003000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+#
 # Cleanup
 #
 DROP TABLE test.rb;
