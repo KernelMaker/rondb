@@ -3060,6 +3060,294 @@ static bool test_corrupt_meta_rejected(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+/*
+ * Test 31: deleteOldest edge coverage — maxN==0 no-op, auto-flush of a
+ * pending addRow batch, and a ring_size=1 table.
+ */
+static bool test_delete_oldest_edges(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 31] deleteOldest — maxN=0, auto-flush, ring_size=1"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t31");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t31", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t31");
+  const NdbDictionary::Table *table = dict->getTable("rb_t31");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(table);
+
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 3),
+              "insert 3 rows");
+
+  // (a) maxN == 0 is a no-op success: rc=0, outActual=0, nothing deleted.
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, h.record, trans);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+    h.fillRow(rowbuf, 1, "");
+    Uint32 actual = 0xdeadbeef;
+    int rc = writer.deleteOldest(rowbuf, 0, &actual);
+    TEST_ASSERT(rc == 0,
+                std::string("deleteOldest(0): ") + writer.getErrorMessage());
+    TEST_ASSERT(actual == 0, "outActual must be 0 for maxN=0");
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+  {
+    auto rows = readDataRows(mysql, "rb_t31", 1);
+    TEST_ASSERT(rows.size() == 3, "maxN=0 must not delete anything");
+  }
+
+  // (b) deleteOldest auto-flushes a pending addRow batch on the same
+  // writer: the pending row lands at slot 4, then the 2 oldest
+  // (slots 1,2) are deleted in the same transaction.
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, h.record, trans);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+
+    h.fillRow(rowbuf, 1, "pend_0");
+    TEST_ASSERT(writer.addRow(rowbuf, mask) != nullptr,
+                std::string("addRow: ") + writer.getErrorMessage());
+
+    // NO explicit flush — deleteOldest must flush the batch itself.
+    h.fillRow(rowbuf, 1, "");
+    Uint32 actual = 0;
+    int rc = writer.deleteOldest(rowbuf, 2, &actual);
+    TEST_ASSERT(rc == 0,
+                std::string("deleteOldest(2): ") + writer.getErrorMessage());
+    TEST_ASSERT(actual == 2, "expected 2 deleted, got " +
+                                 std::to_string(actual));
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+  {
+    auto rows = readDataRows(mysql, "rb_t31", 1);
+    TEST_ASSERT(rows.size() == 2,
+                "expected 2 rows, got " + std::to_string(rows.size()));
+    TEST_ASSERT(rows[0].ring_idx == 3 && rows[0].data == "row_2",
+                "slot 3 = row_2 (survivor)");
+    TEST_ASSERT(rows[1].ring_idx == 4 && rows[1].data == "pend_0",
+                "slot 4 = pend_0 (auto-flushed pending row)");
+  }
+  mysql_exec(mysql, "DROP TABLE test.rb_t31");
+
+  // (c) ring_size=1: wrap, drain via deleteOldest, refill.
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t31b");
+  snprintf(ddl, sizeof(ddl), CREATE_BASIC, "rb_t31b", 1);
+  mysql_exec(mysql, ddl);
+  dict->invalidateTable("rb_t31b");
+  const NdbDictionary::Table *t1 = dict->getTable("rb_t31b");
+  TEST_ASSERT(t1 != nullptr, "getTable rb_t31b");
+
+  BasicRecordHelper h1;
+  TEST_ASSERT(h1.init(t1), "init record helper (size 1)");
+  char *rowbuf1 = h1.newRow();
+  unsigned char *mask1 = h1.newUserMask(t1);
+
+  TEST_ASSERT(insertN(ndb, t1, h1, rowbuf1, mask1, 1, "row", 3),
+              "insert 3 rows into size-1 ring");
+  {
+    auto rows = readDataRows(mysql, "rb_t31b", 1);
+    TEST_ASSERT(rows.size() == 1 && rows[0].ring_idx == 1 &&
+                    rows[0].data == "row_2",
+                "size-1 ring holds only the last row");
+  }
+  {
+    NdbTransaction *trans = ndb->startTransaction(t1);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(t1, h1.record, trans);
+    h1.fillRow(rowbuf1, 1, "");
+    Uint32 actual = 0;
+    int rc = writer.deleteOldest(rowbuf1, 10, &actual);
+    TEST_ASSERT(rc == 0,
+                std::string("deleteOldest: ") + writer.getErrorMessage());
+    TEST_ASSERT(actual == 1, "expected 1 deleted from size-1 ring");
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+  {
+    auto rows = readDataRows(mysql, "rb_t31b", 1);
+    TEST_ASSERT(rows.size() == 0, "size-1 ring drained");
+  }
+  TEST_ASSERT(insertN(ndb, t1, h1, rowbuf1, mask1, 1, "re", 1),
+              "refill size-1 ring");
+  {
+    auto rows = readDataRows(mysql, "rb_t31b", 1);
+    TEST_ASSERT(rows.size() == 1 && rows[0].ring_idx == 1 &&
+                    rows[0].data == "re_0",
+                "size-1 ring refilled at slot 1");
+  }
+
+  // SQL INSERT into a ring that deleteOldest has operated on — the two
+  // writers share the same meta formulas; pin that they compose.
+  mysql_exec(mysql,
+             "INSERT INTO test.rb_t31b (client_id, event_data) "
+             "VALUES (1, 'sql_after')");
+  {
+    auto rows = readDataRows(mysql, "rb_t31b", 1);
+    TEST_ASSERT(rows.size() == 1 && rows[0].ring_idx == 1 &&
+                    rows[0].data == "sql_after",
+                "SQL INSERT overwrote slot 1 of the size-1 ring");
+  }
+
+  delete[] rowbuf;
+  delete[] mask;
+  delete[] rowbuf1;
+  delete[] mask1;
+  mysql_exec(mysql, "DROP TABLE test.rb_t31b");
+  TEST_PASS("deleteOldest — maxN=0, auto-flush, ring_size=1");
+  return true;
+}
+
+/*
+ * Test 32: deleteOldest on a table with a TEXT column. NdbRecord
+ * deleteTuple links blob handles automatically (NdbTransaction.cpp,
+ * RecTableHasBlob), so blob parts are deleted with the row — this pins
+ * that the writer's delete path composes with that machinery.
+ */
+static bool test_delete_oldest_blob(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 32] deleteOldest — blob table" << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t32");
+  mysql_exec(mysql,
+             "CREATE TABLE test.rb_t32 ("
+             "  client_id INT NOT NULL,"
+             "  ring_idx INT NOT NULL DEFAULT 0,"
+             "  ring_meta VARBINARY(64),"
+             "  content TEXT,"
+             "  PRIMARY KEY (client_id, ring_idx)"
+             ") ENGINE=NDB,"
+             "  COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t32");
+  const NdbDictionary::Table *table = dict->getTable("rb_t32");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  const NdbRecord *record = table->getDefaultRecord();
+  TEST_ASSERT(record != nullptr, "getDefaultRecord");
+  const NdbRecord::Attr *cid_attr = findAttr(record, table, "client_id");
+  const NdbRecord::Attr *rmeta_attr = findAttr(record, table, "ring_meta");
+  TEST_ASSERT(cid_attr && rmeta_attr, "find attrs");
+
+  Uint32 row_size = record->m_row_size;
+  char *rowbuf = new char[row_size];
+  Uint32 max_attr = 0;
+  for (Uint32 i = 0; i < record->noOfColumns; i++)
+    if (record->columns[i].attrId > max_attr)
+      max_attr = record->columns[i].attrId;
+  Uint32 mask_size = (max_attr / 8) + 1;
+  unsigned char *mask = new unsigned char[mask_size];
+  const char *cols[] = {"client_id", "content"};
+  buildMask(table, mask, mask_size, cols, 2);
+
+  // Insert 3 rows with TEXT payloads (use a payload > 256 bytes so it
+  // spills into the blob parts table, not just the inline head).
+  std::string big(500, 'x');
+  const std::string texts[] = {"small_a", big, "small_c"};
+
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, record, trans);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+    for (int i = 0; i < 3; i++) {
+      memset(rowbuf, 0, row_size);
+      setInt32(rowbuf, cid_attr, 1);
+      setNull(rowbuf, rmeta_attr);
+      const NdbOperation *op = writer.addRow(rowbuf, mask);
+      TEST_ASSERT(op != nullptr,
+                  std::string("addRow ") + std::to_string(i) + ": " +
+                      writer.getErrorMessage());
+      NdbBlob *blob = op->getBlobHandle("content");
+      TEST_ASSERT(blob != nullptr, "getBlobHandle");
+      TEST_ASSERT(blob->setValue(texts[i].c_str(), texts[i].size()) == 0,
+                  "blob setValue");
+    }
+    TEST_ASSERT(writer.flush() == 0,
+                std::string("flush: ") + writer.getErrorMessage());
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+
+  // Delete the 2 oldest (slots 1,2 — including the 500-byte blob row).
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, record, trans);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+    memset(rowbuf, 0, row_size);
+    setInt32(rowbuf, cid_attr, 1);
+    Uint32 actual = 0;
+    int rc = writer.deleteOldest(rowbuf, 2, &actual);
+    TEST_ASSERT(rc == 0,
+                std::string("deleteOldest: ") + writer.getErrorMessage());
+    TEST_ASSERT(actual == 2, "expected 2 deleted, got " +
+                                 std::to_string(actual));
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+
+  // Survivor: slot 3 = small_c. The deleted blob row must be fully gone.
+  mysql_exec(mysql,
+             "SELECT ring_idx, content FROM test.rb_t32 "
+             "WHERE client_id=1 AND ring_idx>0 ORDER BY ring_idx");
+  MYSQL_RES *res = mysql_store_result(mysql);
+  int nrows = (int)mysql_num_rows(res);
+  TEST_ASSERT(nrows == 1, "expected 1 row, got " + std::to_string(nrows));
+  MYSQL_ROW r = mysql_fetch_row(res);
+  TEST_ASSERT(r && atoi(r[0]) == 3 && r[1] && std::string(r[1]) == "small_c",
+              "survivor is slot 3 / small_c");
+  mysql_free_result(res);
+
+  // Refill works and lands in the freed slots.
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, record, trans);
+    memset(rowbuf, 0, row_size);
+    setInt32(rowbuf, cid_attr, 1);
+    setNull(rowbuf, rmeta_attr);
+    const NdbOperation *op = writer.addRow(rowbuf, mask);
+    TEST_ASSERT(op != nullptr,
+                std::string("addRow refill: ") + writer.getErrorMessage());
+    NdbBlob *blob = op->getBlobHandle("content");
+    TEST_ASSERT(blob != nullptr, "getBlobHandle refill");
+    TEST_ASSERT(blob->setValue("refill", 6) == 0, "blob setValue refill");
+    TEST_ASSERT(writer.flush() == 0,
+                std::string("flush: ") + writer.getErrorMessage());
+    TEST_ASSERT(trans->execute(NdbTransaction::Commit) == 0, "commit");
+    ndb->closeTransaction(trans);
+  }
+  mysql_exec(mysql,
+             "SELECT ring_idx, content FROM test.rb_t32 "
+             "WHERE client_id=1 AND ring_idx>0 ORDER BY ring_idx");
+  res = mysql_store_result(mysql);
+  nrows = (int)mysql_num_rows(res);
+  TEST_ASSERT(nrows == 2, "expected 2 rows after refill, got " +
+                              std::to_string(nrows));
+  r = mysql_fetch_row(res);
+  TEST_ASSERT(r && atoi(r[0]) == 1 && r[1] && std::string(r[1]) == "refill",
+              "refill landed at slot 1");
+  mysql_free_result(res);
+
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t32");
+  TEST_PASS("deleteOldest — blob table");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -3144,6 +3432,8 @@ int main(int argc, char **argv) {
     test_dict_rejects_add_fragment(&ndb, &mysql);
 
     test_corrupt_meta_rejected(&ndb, &mysql);
+    test_delete_oldest_edges(&ndb, &mysql);
+    test_delete_oldest_blob(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;

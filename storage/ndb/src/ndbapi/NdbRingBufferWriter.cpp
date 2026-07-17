@@ -66,9 +66,10 @@ void NdbRingBufferWriter::Ring_meta::init_first_insert() {
   reserved_2 = 0;
 }
 
-// Online ring-buffer resize is disabled (rejected upstream by ha_ndbcluster's
-// parse_comment validator), so post-grow stale-meta states cannot arise here
-// and the formula needs no grow-adjustment.
+// Online ring-buffer resize is disabled (rejected authoritatively in DBDICT,
+// with the SQL layer's parse_comment validator as a front-end check), so
+// post-grow stale-meta states cannot arise here and the formula needs no
+// grow-adjustment.
 void NdbRingBufferWriter::Ring_meta::advance(Uint32 ring_size) {
   next_pos = (next_pos % ring_size) + 1;
   if (count < ring_size) count++;
@@ -482,11 +483,10 @@ int NdbRingBufferWriter::readMetaRow(const char *rowBuffer) {
                    NdbOperation::DefaultAbortOption);
 
   /*
-   * Check the operation-level error, not the transaction error.
-   * With AO_IgnoreError, the transaction may report the 626 as a
-   * transaction-level error, but the operation still carries the
-   * per-operation status.  Error 626 means "tuple not found" which
-   * is the expected case for the first insert on a PK prefix.
+   * Check the operation-level error: with m_noErrorPropagation set above,
+   * the meta read's error never reaches the transaction at all — only the
+   * operation carries it.  Error 626 means "tuple not found", which is
+   * the expected case for the first insert on a PK prefix.
    */
   const NdbError &read_err = read_op->getNdbError();
   if (read_err.code == 0) {
@@ -660,17 +660,16 @@ int NdbRingBufferWriter::writeMetaRow() {
 const NdbOperation *NdbRingBufferWriter::addRow(
     const char *rowBuffer, const unsigned char *userMask) {
   if (m_error_code != 0) {
-    return nullptr;  // constructor failed
+    // Constructor or an earlier operation failed. The writer is bound to
+    // one NdbTransaction, so there is no meaningful recovery: the caller
+    // must roll back the transaction and construct a new writer.
+    return nullptr;
   }
 
   if (!rowBuffer || !userMask) {
     setError(4000, "NdbRingBufferWriter::addRow: null argument");
     return nullptr;
   }
-
-  // Debug: clear any stale error from previous operations
-  m_error_code = 0;
-  m_error_message[0] = '\0';
 
   // Path A: batch hit — same PK prefix as current batch
   if (m_batch_active) {
@@ -751,7 +750,9 @@ Uint32 NdbRingBufferWriter::computeOldestSlot(const Ring_meta &meta,
 int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
                                       Uint32 maxN, Uint32 *outActual) {
   if (m_error_code != 0) {
-    return -1;  // constructor or earlier op failed
+    // Constructor or an earlier operation failed — see addRow(): the
+    // caller must roll back the transaction and construct a new writer.
+    return -1;
   }
 
   if (!pkPrefixRow || !outActual) {
@@ -760,11 +761,15 @@ int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
   }
 
   *outActual = 0;
-  m_error_code = 0;
-  m_error_message[0] = '\0';
 
-  // Auto-flush any pending insert batch — its meta write must commit
-  // before we read the meta row here, or we'd see stale state.
+  // maxN == 0 is a pure no-op: don't take the exclusive meta lock (or
+  // even flush) for a call that cannot delete anything.
+  if (maxN == 0) {
+    return 0;
+  }
+
+  // Auto-flush any pending insert batch — its meta write must be applied
+  // (executed) before we read the meta row here, or we'd see stale state.
   if (m_batch_active) {
     if (flush() != 0) return -1;
   }
@@ -775,10 +780,6 @@ int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
 
   // Empty ring (no meta row, or meta exists with count=0): no-op success.
   if (!m_batch_meta_existed || m_batch_meta.count == 0) {
-    return 0;
-  }
-
-  if (maxN == 0) {
     return 0;
   }
 

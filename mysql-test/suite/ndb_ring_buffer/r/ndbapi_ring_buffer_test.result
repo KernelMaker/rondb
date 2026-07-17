@@ -66,9 +66,13 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: add-fragment ALTER on ring buffer table rejected
 [Test 30] corrupt ring_meta rejected
   PASS: corrupt ring_meta rejected
+[Test 31] deleteOldest — maxN=0, auto-flush, ring_size=1
+  PASS: deleteOldest — maxN=0, auto-flush, ring_size=1
+[Test 32] deleteOldest — blob table
+  PASS: deleteOldest — blob table
 
 === Results ===
-Passed: 30
+Passed: 32
 Failed: 0
 #
 # Done
