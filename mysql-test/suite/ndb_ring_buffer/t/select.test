@@ -172,6 +172,28 @@ SELECT client_id, ring_idx FROM test.rb
 COMMIT;
 
 --echo #
+--echo # Case 13: show_meta is read-only — data-changing scans skip meta
+--echo #
+
+SET ndb_ring_buffer_show_meta = ON;
+
+# Scan-based UPDATE whose WHERE matches the (diagnostically visible) meta
+# row too: the update scan must keep meta hidden. Before the fix the meta
+# row reached the update path and errored the whole statement with
+# "Cannot update meta row on ring-buffer table".
+UPDATE test.rb SET event_data = CONCAT(event_data, '_u') WHERE client_id = 1;
+
+SELECT client_id, ring_idx, event_data FROM test.rb
+    WHERE client_id = 1 ORDER BY ring_idx;
+
+# Prefix DELETE with show_meta ON still removes data + meta (the delete
+# walker uses its own internal flag, not the session variable).
+DELETE FROM test.rb WHERE client_id = 3;
+SELECT client_id, ring_idx FROM test.rb WHERE client_id = 3 AND ring_idx = 0;
+
+SET ndb_ring_buffer_show_meta = OFF;
+
+--echo #
 --echo # Cleanup
 --echo #
 
