@@ -38,6 +38,7 @@ CREATE DATABASE IF NOT EXISTS test;
 [Test 17] Concurrent same-prefix inserts
   Data rows: 5
   Total rows (with meta): 6
+  Meta: count=5 total_inserts=40
   PASS: Concurrent same-prefix inserts
 [Test 18] deleteOldest — basic partial ring
   PASS: deleteOldest — basic partial ring

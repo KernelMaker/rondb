@@ -159,6 +159,47 @@ region	client_id	ring_idx	event_data
 1	200	1	r1c200_A
 DROP TABLE test.rb_multi;
 #
+# Case 13: INSERT IGNORE with a unique-index duplicate — pinned
+#
+CREATE TABLE test.rb_ignore (
+id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+code INT NOT NULL,
+PRIMARY KEY (id, ring_idx),
+UNIQUE INDEX idx_code (code)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_ignore (id, code) VALUES (1, 100);
+INSERT INTO test.rb_ignore (id, code) VALUES (1, 200);
+INSERT INTO test.rb_ignore (id, code) VALUES (1, 300);
+INSERT INTO test.rb_ignore (id, code) VALUES (1, 200);
+ERROR 23000: Duplicate entry '200' for key 'rb_ignore.idx_code'
+SELECT id, ring_idx, code FROM test.rb_ignore ORDER BY id, ring_idx;
+id	ring_idx	code
+1	1	100
+1	2	200
+1	3	300
+INSERT IGNORE INTO test.rb_ignore (id, code) VALUES (1, 200);
+ERROR HY000: Got error 125 - 'Transaction has been rolled back' during COMMIT
+SELECT id, ring_idx, code FROM test.rb_ignore ORDER BY id, ring_idx;
+id	ring_idx	code
+1	1	100
+1	2	200
+1	3	300
+INSERT IGNORE INTO test.rb_ignore (id, code) VALUES (1, 400);
+SELECT id, ring_idx, code FROM test.rb_ignore ORDER BY id, ring_idx;
+id	ring_idx	code
+1	1	400
+1	2	200
+1	3	300
+SET ndb_ring_buffer_show_meta = ON;
+SELECT id, ring_idx, HEX(ring_meta) FROM test.rb_ignore WHERE ring_idx = 0;
+id	ring_idx	HEX(ring_meta)
+1	0	0100000002000000030000000000000004000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+DROP TABLE test.rb_ignore;
+#
 # Cleanup
 #
 DROP TABLE test.rb;

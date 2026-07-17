@@ -239,6 +239,46 @@ static int countAllRows(MYSQL *mysql, const char *tbl, int cid = -1) {
   return count;
 }
 
+/*
+ * SQL helper: read HEX(ring_meta) of the meta row for one PK prefix.
+ * Returns empty string if the meta row is missing or ring_meta is NULL.
+ */
+static std::string readMetaHex(MYSQL *mysql, const char *tbl, int cid) {
+  mysql_exec(mysql, "SET ndb_ring_buffer_show_meta=1");
+  char sql[256];
+  snprintf(sql, sizeof(sql),
+           "SELECT HEX(ring_meta) FROM test.%s "
+           "WHERE client_id=%d AND ring_idx=0",
+           tbl, cid);
+  mysql_exec(mysql, sql);
+  MYSQL_RES *res = mysql_store_result(mysql);
+  std::string hex;
+  if (res) {
+    MYSQL_ROW r = mysql_fetch_row(res);
+    if (r && r[0]) hex = r[0];
+    mysql_free_result(res);
+  }
+  mysql_exec(mysql, "SET ndb_ring_buffer_show_meta=0");
+  return hex;
+}
+
+/*
+ * Parse a little-endian unsigned field out of a HEX(ring_meta) string.
+ * byte_off/nbytes follow the packed Ring_meta layout (version @0/2,
+ * next_pos @4/4, count @8/4, total_inserts @16/8).
+ */
+static Uint64 metaFieldLE(const std::string &hex, int byte_off, int nbytes) {
+  Uint64 val = 0;
+  for (int j = 0; j < nbytes; j++) {
+    int pos = (byte_off + j) * 2;
+    if (pos + 1 >= (int)hex.size()) break;
+    unsigned int byte = 0;
+    sscanf(hex.c_str() + pos, "%2x", &byte);
+    val |= ((Uint64)byte) << (8 * j);
+  }
+  return val;
+}
+
 static const char *CREATE_BASIC =
     "CREATE TABLE test.%s ("
     "  client_id INT NOT NULL,"
@@ -1868,6 +1908,31 @@ static bool test_concurrent_same_prefix(Ndb_cluster_connection *conn,
   std::cout << "  Total rows (with meta): " << total << std::endl;
   TEST_ASSERT(total == 6, "expected 6 total (5 data + 1 meta)");
 
+  // Meta invariant: no concurrent meta update may be lost. With
+  // NUM_THREADS x INSERTS_PER_THREAD successful commits the packed meta
+  // must show exactly that many total_inserts, a full ring (count =
+  // ring_size) and the correspondingly advanced next_pos.
+  {
+    const Uint64 expected_total = NUM_THREADS * INSERTS_PER_THREAD;  // 40
+    std::string hex = readMetaHex(mysql, "rb_t17", CLIENT_ID);
+    TEST_ASSERT(!hex.empty(), "meta row readable");
+    Uint64 total_inserts = metaFieldLE(hex, 16, 8);
+    Uint64 count = metaFieldLE(hex, 8, 4);
+    Uint64 next_pos = metaFieldLE(hex, 4, 4);
+    std::cout << "  Meta: count=" << count << " total_inserts="
+              << total_inserts << std::endl;
+    TEST_ASSERT(total_inserts == expected_total,
+                "lost meta update: total_inserts=" +
+                    std::to_string(total_inserts) + " expected " +
+                    std::to_string(expected_total));
+    TEST_ASSERT(count == 5, "count should equal ring_size (5)");
+    // next_pos: starts at 1, advanced expected_total times in a size-5 ring
+    Uint64 expected_next = ((1 - 1 + expected_total) % 5) + 1;
+    TEST_ASSERT(next_pos == expected_next,
+                "next_pos=" + std::to_string(next_pos) + " expected " +
+                    std::to_string(expected_next));
+  }
+
   mysql_exec(mysql, "DROP TABLE test.rb_t17");
   TEST_PASS("Concurrent same-prefix inserts");
   return true;
@@ -2343,6 +2408,9 @@ static bool test_alter_ring_size_rejected(Ndb *ndb, MYSQL *mysql) {
   newTab.setRingBufferSize(oldTab->getRingBufferSize() + 1);
   int rc = dict->alterTable(*oldTab, newTab);
   TEST_ASSERT(rc != 0, "alterTable resize must be rejected by DICT");
+  TEST_ASSERT(dict->getNdbError().code == 741,
+              "expected error 741, got " +
+                  std::to_string(dict->getNdbError().code));
   // Diagnostic to stderr (discarded by the MTR wrapper) — keep stdout, which
   // is compared against the .result, free of the variable error code/message.
   std::cerr << "  (rejected as expected: " << dict->getNdbError().code << " "
@@ -2508,6 +2576,23 @@ static bool test_refresh_tuple_blocked(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(rc != 0, "refreshTuple on ring buffer table must be rejected");
   TEST_ASSERT(err == 940,
               "expected error 940, got " + std::to_string(err));
+  ndb->closeTransaction(trans);
+
+  // The meta row (ring_idx=0) must be rejected the same way — the guard is
+  // op-based, so this pins that no row-kind special case sneaks in.
+  h.fillRow(rowbuf, 1, "");
+  setInt32(rowbuf, ridx, 0);  // ring_idx = 0 (meta row)
+  trans = ndb->startTransaction(table);
+  TEST_ASSERT(trans != nullptr, "startTransaction (meta)");
+  op = trans->refreshTuple(h.record, rowbuf);
+  TEST_ASSERT(op != nullptr, "refreshTuple define (meta)");
+  rc = trans->execute(NdbTransaction::Commit);
+  err = trans->getNdbError().code;
+  std::cerr << "  (meta refresh rc=" << rc << " err=" << err << ")"
+            << std::endl;
+  TEST_ASSERT(rc != 0, "refreshTuple on meta row must be rejected");
+  TEST_ASSERT(err == 940,
+              "expected error 940 on meta row, got " + std::to_string(err));
   ndb->closeTransaction(trans);
 
   delete[] rowbuf;

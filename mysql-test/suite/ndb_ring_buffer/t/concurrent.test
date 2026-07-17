@@ -281,6 +281,47 @@ SELECT client_id, ring_idx, event_data FROM test.rb
     ORDER BY ring_idx;
 
 ###############################################################################
+# Case 10: Overlapping explicit transactions on ONE prefix — meta totals
+###############################################################################
+
+--echo #
+--echo # Case 10: overlapping transactions on one prefix, meta byte-exact
+--echo #
+
+# con1 opens a transaction and inserts the first row for fresh prefix 20 —
+# the uncommitted meta row insert holds the meta lock. con2's autocommit
+# insert for the same prefix queues on that lock. con1 adds a second row in
+# the same transaction and commits; con2 then proceeds. Slot order is
+# deterministic: con1's rows take slots 1,2 and con2's row slot 3.
+
+--connection con1
+BEGIN;
+INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn1_a');
+
+--connection con2
+--send INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn2_x')
+
+--connection con1
+# give con2 time to reach the meta-row lock queue
+--sleep 1
+INSERT INTO test.rb (client_id, event_data) VALUES (20, 'txn1_b');
+COMMIT;
+
+--connection con2
+--reap
+
+--connection default
+SELECT client_id, ring_idx, event_data FROM test.rb
+    WHERE client_id = 20
+    ORDER BY ring_idx;
+
+# The packed meta must account for every commit: version=1, next_pos=4,
+# count=3, total_inserts=3 (little-endian fields, byte-exact).
+SET ndb_ring_buffer_show_meta = ON;
+SELECT HEX(ring_meta) FROM test.rb WHERE client_id = 20 AND ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+###############################################################################
 # Cleanup
 ###############################################################################
 

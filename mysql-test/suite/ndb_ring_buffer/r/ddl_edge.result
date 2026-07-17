@@ -475,4 +475,42 @@ id	ring_idx	v
 1	2	yyyyyyyy
 1	3	post_opt
 DROP TABLE test.rb_opt;
+#
+# Case 18: STORAGE DISK user column — ring works end-to-end
+#
+CREATE LOGFILE GROUP lg_rb ADD UNDOFILE 'lg_rb_undo.dat'
+    INITIAL_SIZE 16M UNDO_BUFFER_SIZE 1M ENGINE NDB;
+CREATE TABLESPACE ts_rb ADD DATAFILE 'ts_rb_data.dat'
+    USE LOGFILE GROUP lg_rb INITIAL_SIZE 32M ENGINE NDB;
+CREATE TABLE test.rb_disk (
+id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+payload VARCHAR(200) STORAGE DISK,
+PRIMARY KEY (id, ring_idx)
+) ENGINE = NDB
+TABLESPACE ts_rb
+COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_disk (id, payload) VALUES (1, 'a');
+INSERT INTO test.rb_disk (id, payload) VALUES (1, 'b');
+INSERT INTO test.rb_disk (id, payload) VALUES (1, 'c');
+INSERT INTO test.rb_disk (id, payload) VALUES (1, 'd');
+SELECT id, ring_idx, payload FROM test.rb_disk ORDER BY id, ring_idx;
+id	ring_idx	payload
+1	1	d
+1	2	b
+1	3	c
+SET ndb_ring_buffer_show_meta = ON;
+SELECT id, ring_idx, HEX(ring_meta) FROM test.rb_disk WHERE ring_idx = 0;
+id	ring_idx	HEX(ring_meta)
+1	0	0100000002000000030000000000000004000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+DELETE FROM test.rb_disk WHERE id = 1;
+SELECT COUNT(*) FROM test.rb_disk;
+COUNT(*)
+0
+DROP TABLE test.rb_disk;
+ALTER TABLESPACE ts_rb DROP DATAFILE 'ts_rb_data.dat';
+DROP TABLESPACE ts_rb;
+DROP LOGFILE GROUP lg_rb ENGINE NDB;
 # Done.

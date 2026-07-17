@@ -2085,6 +2085,36 @@ public class RingBufferTest extends AbstractClusterJTest {
                 null, metaDirect);
         tx.commit();
 
+        // Meta invariant: no concurrent meta update may be lost. With
+        // NUM_THREADS x INSERTS_PER_THREAD successful commits the packed
+        // meta must show exactly that many total_inserts, a full ring
+        // (count == RING_SIZE) and the correspondingly advanced next_pos.
+        // Read via JDBC BEFORE anything else writes to this prefix.
+        try {
+            getConnection();
+            Statement mstmt = connection.createStatement();
+            mstmt.execute("SET ndb_ring_buffer_show_meta = 1");
+            ResultSet mrs = mstmt.executeQuery(
+                    "SELECT HEX(ring_meta) AS h FROM ring_buffer_sensor"
+                    + " WHERE sensor_id = " + sensorId + " AND ring_idx = 0");
+            errorIfNotEqual("Concurrent same prefix: meta row present via SQL",
+                    true, mrs.next());
+            String metaHex = mrs.getString("h");
+            mrs.close();
+            mstmt.execute("SET ndb_ring_buffer_show_meta = 0");
+            mstmt.close();
+            long expectedTotal = (long) NUM_THREADS * INSERTS_PER_THREAD;
+            errorIfNotEqual("Concurrent same prefix: total_inserts"
+                    + " (lost meta update?)",
+                    expectedTotal, metaFieldLE(metaHex, 16, 8));
+            errorIfNotEqual("Concurrent same prefix: meta count",
+                    (long) RING_SIZE, metaFieldLE(metaHex, 8, 4));
+            errorIfNotEqual("Concurrent same prefix: meta next_pos",
+                    (expectedTotal % RING_SIZE) + 1, metaFieldLE(metaHex, 4, 4));
+        } catch (SQLException e) {
+            error("Concurrent same prefix meta check: " + e.getMessage());
+        }
+
         // Use RingBufferWriter's readMetaRow (has OO_RING_BUFFER_OP + LM_Exclusive)
         // to check if meta row exists at NDB level
         {
@@ -3220,5 +3250,18 @@ public class RingBufferTest extends AbstractClusterJTest {
         } catch (Throwable t) {
             // ignore - table might be empty
         }
+    }
+
+    /** Parse a little-endian unsigned field out of a HEX(ring_meta) string.
+     *  byte_off/nbytes follow the packed Ring_meta layout (version @0/2,
+     *  next_pos @4/4, count @8/4, total_inserts @16/8). */
+    private static long metaFieldLE(String hex, int byteOff, int nBytes) {
+        long val = 0;
+        for (int j = 0; j < nBytes; j++) {
+            int pos = (byteOff + j) * 2;
+            if (hex == null || pos + 2 > hex.length()) break;
+            val |= Long.parseLong(hex.substring(pos, pos + 2), 16) << (8 * j);
+        }
+        return val;
     }
 }

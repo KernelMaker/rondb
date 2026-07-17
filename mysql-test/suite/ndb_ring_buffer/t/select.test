@@ -155,6 +155,23 @@ SELECT COUNT(*) AS with_meta FROM test.rb;
 SET ndb_ring_buffer_show_meta = OFF;
 
 --echo #
+--echo # Case 12: locking reads (FOR UPDATE / FOR SHARE) keep meta hidden
+--echo #
+
+# The meta-row filter must apply to locking scans and locking PK probes
+# exactly as it does to plain reads.
+BEGIN;
+SELECT COUNT(*) AS for_update_count FROM test.rb FOR UPDATE;
+SELECT client_id, ring_idx FROM test.rb
+    WHERE client_id = 1 AND ring_idx = 0 FOR UPDATE;
+COMMIT;
+BEGIN;
+SELECT COUNT(*) AS for_share_count FROM test.rb LOCK IN SHARE MODE;
+SELECT client_id, ring_idx FROM test.rb
+    WHERE client_id = 1 AND ring_idx = 0 LOCK IN SHARE MODE;
+COMMIT;
+
+--echo #
 --echo # Cleanup
 --echo #
 
