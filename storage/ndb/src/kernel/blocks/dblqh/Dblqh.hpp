@@ -33,6 +33,7 @@
 #include <DL64HashTable.hpp>
 #include <NdbCondition.h>
 #include <NdbTick.h>
+#include <NodeStartLog.hpp>
 #include <ndb_limits.h>
 #include <ndb_version.h>
 #include <DLHashTable.hpp>
@@ -349,6 +350,7 @@ class FsReadWriteReq;
  */
 #define ZDELAY_NEXT_COPY_ROW 45
 #endif
+#define ZNSL_REPORT 46
 
 /* ------------------------------------------------------------------------- */
 /*        NODE STATE DURING SYSTEM RESTART, VARIABLES CNODES_SR_STATE        */
@@ -3151,6 +3153,24 @@ private:
   Uint32 m_startup_report_frequency;
   NDB_TICKS m_last_report_time;
 
+  /**
+   * [NODE-START] logging of the LQH-owned steps (redo-init,
+   * redo-prepare, redo-exec, index-rebuild), see vm/NodeStartLog.hpp.
+   * One step is active at a time per LDM instance; a ZNSL_REPORT
+   * CONTINUEB chain prints periodic progress while a step is active.
+   * Node-level boundary lines are emitted by one instance only
+   * (nsl_is_reporter()), per-LDM lines by every instance.
+   */
+  NodeStartLogTimer c_nsl_timer;
+  Uint32 c_nsl_active_step;
+  Uint32 c_nsl_indexes_total;
+  Uint32 c_nsl_indexes_done;
+  Uint32 c_nsl_frags_restored;
+  void nsl_start_step(Signal *signal, Uint32 step);
+  void nsl_stop_step();
+  bool nsl_is_reporter() const;
+  void nsl_report_progress(Signal *signal);
+
   struct LocalSysfileStruct {
     LocalSysfileStruct() {}
     Uint32 m_node_restorable_on_its_own;
@@ -4979,9 +4999,8 @@ public:
   void TRACE_OP_DUMP(const TcConnectionrec *regTcPtr, const char *pos);
 #endif
 
-#ifdef ERROR_INSERT
+  /* Master node id from READ_NODESCONF, kept current by NODE_FAILREP. */
   Uint32 c_master_node_id;
-#endif
 
   Uint32 get_node_status(Uint32 nodeId) const;
   bool check_ndb_versions() const;

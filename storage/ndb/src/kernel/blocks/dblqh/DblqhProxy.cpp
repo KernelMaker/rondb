@@ -54,6 +54,9 @@ DblqhProxy::DblqhProxy(Block_context &ctx)
   m_lcp_started = false;
   m_outstanding_wait_lcp = 0;
   m_outstanding_start_node_lcp_req = 0;
+  c_nsl_start_type = NodeState::ST_ILLEGAL_TYPE;
+  NdbTick_Invalidate(&c_nsl_redo_init_start);
+  for (Uint32 i = 0; i < 4; i++) NdbTick_Invalidate(&c_nsl_rec_start[i]);
 
   // GSN_CREATE_TAB_REQ
   addRecSignal(GSN_CREATE_TAB_REQ, &DblqhProxy::execCREATE_TAB_REQ);
@@ -196,6 +199,17 @@ void DblqhProxy::callNDB_STTOR(Signal *signal) {
   ndbrequire(ss.m_gsn == 0);
 
   const Uint32 startPhase = signal->theData[2];
+  c_nsl_start_type = signal->theData[3];
+  if (startPhase == 1 &&
+      (c_nsl_start_type == NodeState::ST_INITIAL_START ||
+       c_nsl_start_type == NodeState::ST_INITIAL_NODE_RESTART)) {
+    jam();
+    /* [NODE-START] step 4: the workers initialise the REDO log in phase 1
+       and reply NDB_STTORRY when done; the fan-in is the node-wide end. */
+    c_nsl_redo_init_start = NdbTick_getCurrentTicks();
+    Ss_NDB_STTOR &nss = ssFind<Ss_NDB_STTOR>(1);
+    nss.m_sendCONF = (SsFUNCREP)&DblqhProxy::sendNDB_STTORRY_nsl;
+  }
   switch (startPhase) {
     case 3:
       jam();
@@ -207,6 +221,56 @@ void DblqhProxy::callNDB_STTOR(Signal *signal) {
       backNDB_STTOR(signal);
       break;
   }
+}
+
+void DblqhProxy::sendNDB_STTORRY_nsl(Signal *signal, Uint32 ssId) {
+  jam();
+  Ss_NDB_STTOR &ss = ssFind<Ss_NDB_STTOR>(ssId);
+  if (lastReply(ss)) {
+    jam();
+    nsl_node_completed(NodeStartLog::NSL_REDO_INIT, c_nsl_redo_init_start);
+  }
+  LocalProxy::sendNDB_STTORRY(signal, ssId);
+}
+
+/**
+ * One node-wide 'completed' line per LQH step at its fan-in. The step
+ * runs on the workers only for the start types below; otherwise the
+ * workers printed 'skipped' and the fan-in passes trivially.
+ */
+void DblqhProxy::nsl_node_completed(Uint32 step, const NDB_TICKS &since) {
+  const Uint32 t = c_nsl_start_type;
+  bool runs = false;
+  switch (step) {
+    case NodeStartLog::NSL_REDO_INIT:
+      runs = (t == NodeState::ST_INITIAL_START ||
+              t == NodeState::ST_INITIAL_NODE_RESTART);
+      break;
+    case NodeStartLog::NSL_RESTORE:
+    case NodeStartLog::NSL_UNDO_DD:
+    case NodeStartLog::NSL_REDO_EXEC:
+      runs = (t == NodeState::ST_NODE_RESTART ||
+              t == NodeState::ST_SYSTEM_RESTART);
+      break;
+    case NodeStartLog::NSL_INDEX_REBUILD:
+      runs = (t == NodeState::ST_NODE_RESTART ||
+              t == NodeState::ST_SYSTEM_RESTART ||
+              t == NodeState::ST_INITIAL_NODE_RESTART);
+      break;
+    default:
+      break;
+  }
+  if (!runs) {
+    jam();
+    return;
+  }
+  const Int64 elapsed =
+      NdbTick_IsValid(since)
+          ? (Int64)NdbTick_Elapsed(since, NdbTick_getCurrentTicks()).seconds()
+          : -1;
+  char buf[NodeStartLog::BUF_SIZE];
+  infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t, "completed",
+                                     elapsed, "all %u LDMs", c_workers));
 }
 
 // GSN_READ_CONFIG_REQ
@@ -1137,6 +1201,11 @@ void DblqhProxy::sendALTER_TAB_CONF(Signal *signal, Uint32 ssId) {
 
 void DblqhProxy::execSTART_FRAGREQ(Signal *signal) {
   jam();
+  if (!NdbTick_IsValid(c_nsl_rec_start[0])) {
+    jam();
+    /* [NODE-START] step 8 begins on a worker at its first START_FRAGREQ. */
+    c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
+  }
   StartFragReq *req = (StartFragReq *)signal->getDataPtrSend();
   Uint32 instanceNo = getInstance(req->tableId, req->fragId);
 
@@ -1177,6 +1246,10 @@ void DblqhProxy::execSTART_RECREQ(Signal *signal) {
   ss.undoDDCompletedCount = 0;
   ss.execREDOLogCompletedCount = 0;
   ss.phaseToSend = 0;
+  if (!NdbTick_IsValid(c_nsl_rec_start[0])) {
+    jam();
+    c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
+  }
 
   // seize records for sub-ops
   Uint32 i;
@@ -1212,28 +1285,43 @@ void DblqhProxy::execLOCAL_RECOVERY_COMP_REP(Signal *signal) {
     case LocalRecoveryCompleteRep::RESTORE_FRAG_COMPLETED: {
       jam();
       ss.restoreFragCompletedCount++;
+      if (ss.restoreFragCompletedCount == 1) {
+        jam();
+        c_nsl_rec_start[1] = NdbTick_getCurrentTicks(); /* first LDM: undo */
+      }
       if (ss.restoreFragCompletedCount < c_workers) {
         jam();
         return;
       }
+      nsl_node_completed(NodeStartLog::NSL_RESTORE, c_nsl_rec_start[0]);
       break;
     }
     case LocalRecoveryCompleteRep::UNDO_DD_COMPLETED: {
       jam();
       ss.undoDDCompletedCount++;
+      if (ss.undoDDCompletedCount == 1) {
+        jam();
+        c_nsl_rec_start[2] = NdbTick_getCurrentTicks(); /* first LDM: redo */
+      }
       if (ss.undoDDCompletedCount < c_workers) {
         jam();
         return;
       }
+      nsl_node_completed(NodeStartLog::NSL_UNDO_DD, c_nsl_rec_start[1]);
       break;
     }
     case LocalRecoveryCompleteRep::EXECUTE_REDO_LOG_COMPLETED: {
       jam();
       ss.execREDOLogCompletedCount++;
+      if (ss.execREDOLogCompletedCount == 1) {
+        jam();
+        c_nsl_rec_start[3] = NdbTick_getCurrentTicks(); /* first LDM: index */
+      }
       if (ss.execREDOLogCompletedCount < c_workers) {
         jam();
         return;
       }
+      nsl_node_completed(NodeStartLog::NSL_REDO_EXEC, c_nsl_rec_start[2]);
       break;
     }
     default:
@@ -1297,6 +1385,8 @@ void DblqhProxy::sendSTART_RECCONF(Signal *signal, Uint32 ssId) {
 
   if (ss.m_error == 0) {
     jam();
+    nsl_node_completed(NodeStartLog::NSL_INDEX_REBUILD, c_nsl_rec_start[3]);
+    for (Uint32 i = 0; i < 4; i++) NdbTick_Invalidate(&c_nsl_rec_start[i]);
 
     /**
      * There should be no disk-ops in flight here...check it

@@ -28,6 +28,7 @@
 #define SUMA_H
 
 #include <ndb_limits.h>
+#include <NodeStartLog.hpp>
 #include <SimulatedBlock.hpp>
 
 #include <NodeBitmask.hpp>
@@ -624,6 +625,13 @@ class Suma : public SimulatedBlock {
     Uint32 m_restart_server_node_id;
     NdbNodeBitmask m_handover_nodes;
   } c_startup;
+
+  /**
+   * [NODE-START] step 15 (handover) timing and waiting reports, see
+   * vm/NodeStartLog.hpp. Active while this node waits for subscribers
+   * and takes over subscription buckets in start phase 101.
+   */
+  NodeStartLogTimer c_nsl_handover_timer;
 
   /**
    * for graceful shutdown

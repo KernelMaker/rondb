@@ -39,6 +39,9 @@ void Ndbcntr::initData() {
   c_recoveredNodeSet.clear();
   m_restart_barrier_waiting = false;
   c_restart_barrier_timeout_ms = 0;
+  c_nsl_waiting_admission = false;
+  c_nsl_park = NSL_PARK_NONE;
+  c_nsl_park_sp = 0;
   c_start.reset();
   cmasterNodeId = 0;
   cnoStartNodes = 0;

@@ -524,6 +524,13 @@ Suma::execSTTOR(Signal* signal) {
       /**
        * Handover code here
        */
+      c_nsl_handover_timer.start_step();
+      {
+        char buf[NodeStartLog::BUF_SIZE];
+        infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                           NodeStartLog::NSL_HANDOVER, 0,
+                                           m_typeOfStart, "started", -1));
+      }
       c_startup.m_wait_handover = true;
       check_start_handover(signal);
       if (c_startup.m_wait_handover) {
@@ -553,6 +560,12 @@ Suma::execSTTOR(Signal* signal) {
         check_wait_handover_timeout(signal);
       }
       DBUG_VOID_RETURN;
+    }
+    {
+      char buf[NodeStartLog::BUF_SIZE];
+      infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
+                                            NodeStartLog::NSL_HANDOVER,
+                                            m_typeOfStart));
     }
   }
   sendSTTORRY(signal);
@@ -994,6 +1007,20 @@ void Suma::check_wait_handover_timeout(Signal *signal) {
     signal->theData[0] = SumaContinueB::HANDOVER_WAIT_TIMEOUT;
     sendSignalWithDelay(reference(), GSN_CONTINUEB, signal, 1000, 1);
 
+    if (c_nsl_handover_timer.report_due(
+            globalData.theNodeStartLogReportFrequency)) {
+      jam();
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 1,
+                         m_typeOfStart, "waiting",
+                         (Int64)c_nsl_handover_timer.elapsed_sec(),
+                         "waiting for subscribers to connect");
+      if (c_nsl_handover_timer.escalate_due()) {
+        jam();
+        infoEvent("%s", buf);
+      }
+    }
+
     /* Now check whether we should do something more */
     NDB_TICKS now = NdbTick_getCurrentTicks();
     if (NdbTick_IsValid(c_startup.m_wait_handover_expire)) {
@@ -1153,6 +1180,16 @@ void Suma::send_handover_req(Signal *signal, Uint32 type) {
 }
 
 void Suma::sendSTTORRY(Signal *signal) {
+  if (m_startphase == 101 && c_nsl_handover_timer.is_active()) {
+    jam();
+    char buf[NodeStartLog::BUF_SIZE];
+    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                       NodeStartLog::NSL_HANDOVER, 0,
+                                       m_typeOfStart, "completed",
+                                       (Int64)c_nsl_handover_timer
+                                           .elapsed_sec()));
+    c_nsl_handover_timer.stop_step();
+  }
   signal->theData[0] = 0;
   signal->theData[3] = 1;
   signal->theData[4] = 3;

@@ -29,6 +29,7 @@
 
 #include <ndb_limits.h>
 #include <ndb_version.h>
+#include <ndbd_malloc.hpp>
 #include <SimpleProperties.hpp>
 #include <cstring>
 #include <signaldata/AbortAll.hpp>
@@ -237,6 +238,20 @@ void Ndbcntr::execCONTINUEB(Signal *signal) {
          * budget; keep moving the start time forward while parked.
          */
         c_start.m_startTime = NdbTick_getCurrentTicks();
+        if (c_nsl_barrier_timer.report_due(
+                globalData.theNodeStartLogReportFrequency)) {
+          jam();
+          char buf[NodeStartLog::BUF_SIZE];
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_BARRIER, 1,
+                             ctypeOfStart, "waiting",
+                             (Int64)c_nsl_barrier_timer.elapsed_sec(),
+                             "other restarting nodes have not completed"
+                             " their recovery");
+          if (c_nsl_barrier_timer.escalate_due()) {
+            jam();
+            infoEvent("%s", buf);
+          }
+        }
         if (c_restart_barrier_timeout_ms > 0) {
           const Uint64 waited =
               NdbTick_Elapsed(m_restart_barrier_entry_time,
@@ -257,6 +272,51 @@ void Ndbcntr::execCONTINUEB(Signal *signal) {
             leave_restart_barrier(signal, "RestartBarrierTimeout exceeded");
           }
         }
+      }
+
+      if (c_nsl_waiting_admission &&
+          c_nsl_admission_timer.report_due(
+              globalData.theNodeStartLogReportFrequency)) {
+        jam();
+        char buf[NodeStartLog::BUF_SIZE];
+        if (cmasterNodeId == getOwnNodeId()) {
+          jam();
+          /**
+           * We are the master of a cluster start: it is granted only
+           * when every cluster member has requested its start.
+           */
+          NdbNodeBitmask missing = c_clusterNodes;
+          missing.bitANDC(c_start.m_waiting);
+          NdbNodeBitmask absent = c_allDefinedNodes;
+          absent.bitANDC(c_clusterNodes);
+          char m[NdbNodeBitmask::TextLength + 1];
+          char a[NdbNodeBitmask::TextLength + 1];
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ADMISSION, 1,
+                             ctypeOfStart, "waiting",
+                             (Int64)c_nsl_admission_timer.elapsed_sec(),
+                             "this node is the master, waiting for nodes %s"
+                             " to request a start, data nodes not in the"
+                             " cluster: %s",
+                             missing.getText(m), absent.getText(a));
+        } else {
+          jam();
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ADMISSION, 1,
+                             ctypeOfStart, "waiting",
+                             (Int64)c_nsl_admission_timer.elapsed_sec(),
+                             "master node %u has not yet granted our start",
+                             cmasterNodeId);
+        }
+        if (c_nsl_admission_timer.escalate_due()) {
+          jam();
+          infoEvent("%s", buf);
+        }
+      }
+
+      if (c_nsl_park != NSL_PARK_NONE &&
+          c_nsl_park_timer.report_due(
+              globalData.theNodeStartLogReportFrequency)) {
+        jam();
+        nsl_report_park();
       }
 
       const Uint64 elapsed =
@@ -2068,6 +2128,18 @@ void Ndbcntr::execCM_ADD_REP(Signal *signal) {
 void Ndbcntr::sendCntrStartReq(Signal *signal) {
   jamEntry();
 
+  if (!c_nsl_admission_timer.is_active()) {
+    jam();
+    c_nsl_admission_timer.start_step();
+    c_nsl_waiting_admission = true;
+    char buf[NodeStartLog::BUF_SIZE];
+    infoEvent("%s", NodeStartLog::line(
+                        buf, sizeof(buf), NodeStartLog::NSL_ADMISSION, 0,
+                        ctypeOfStart, "started",
+                        -1, "asking master node %u to accept our start",
+                        cmasterNodeId));
+  }
+
   if (getOwnNodeId() == cmasterNodeId) {
     jam();
     g_eventLogger->info(
@@ -2219,6 +2291,20 @@ void Ndbcntr::execCNTR_START_CONF(Signal *signal) {
     default: {
       ndbabort();
     }
+  }
+
+  c_nsl_waiting_admission = false;
+  {
+    char buf[NodeStartLog::BUF_SIZE];
+    infoEvent("%s",
+              NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ADMISSION,
+                                 0, ctypeOfStart, "completed",
+                                 (Int64)c_nsl_admission_timer.elapsed_sec(),
+                                 "start type: %s, master node %u",
+                                 NodeStartLog::startTypeName(ctypeOfStart),
+                                 cmasterNodeId));
+    c_nsl_admission_timer.stop_step();
+    infoEvent("%s", NodeStartLog::plan(buf, sizeof(buf), ctypeOfStart));
   }
   ph2GLab(signal);
 }
@@ -2987,6 +3073,7 @@ void Ndbcntr::waitpoint41Lab(Signal *signal) {
     signal->theData[1] = CntrWaitRep::ZWAITPOINT_4_1;
     sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal, 2,
                JBB);
+    nsl_park(NSL_PARK_WP_4_1);
   }  // if
   return;
 }  // Ndbcntr::waitpoint41Lab()
@@ -3215,6 +3302,7 @@ void Ndbcntr::ph5ALab(Signal *signal) {
       signal->theData[1] = CntrWaitRep::ZWAITPOINT_5_2;
       sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal,
                  2, JBB);
+      nsl_park(NSL_PARK_WP_5_2);
       return;
     default:
       ndbabort();
@@ -3223,6 +3311,10 @@ void Ndbcntr::ph5ALab(Signal *signal) {
 
 void Ndbcntr::waitpoint52Lab(Signal *signal) {
   cnoWaitrep = cnoWaitrep + 1;
+  if (cnoWaitrep < cnoStartNodes && c_nsl_park != NSL_PARK_MASTER_5_2) {
+    jam();
+    nsl_park(NSL_PARK_MASTER_5_2);
+  }
   /*---------------------------------------------------------------------------*/
   // THIS WAITING POINT IS ONLY USED BY A MASTER NODE. WE WILL EXECUTE NDB START
   // PHASE 5 FOR DIH IN THE
@@ -3238,6 +3330,7 @@ void Ndbcntr::waitpoint52Lab(Signal *signal) {
   if (cnoWaitrep == cnoStartNodes) {
     jam();
     cnoWaitrep = 0;
+    nsl_unpark();
 
     g_eventLogger->info("Start NDB start phase 5 (only to DBDIH)");
     NdbSttor *const req = (NdbSttor *)signal->getDataPtrSend();
@@ -3314,12 +3407,16 @@ void Ndbcntr::waitpoint61Lab(Signal *signal) {
     cnoWaitrep6++;
     if (cnoWaitrep6 == cnoStartNodes) {
       jam();
+      nsl_unpark();
       NodeReceiverGroup rg(NDBCNTR, c_start.m_starting);
       rg.m_nodes.clear(getOwnNodeId());
       signal->theData[0] = getOwnNodeId();
       signal->theData[1] = CntrWaitRep::ZWAITPOINT_6_2;
       sendSignal(rg, GSN_CNTR_WAITREP, signal, 2, JBB);
       sendSttorry(signal);
+    } else if (c_nsl_park != NSL_PARK_MASTER_6_1) {
+      jam();
+      nsl_park(NSL_PARK_MASTER_6_1);
     }
   } else {
     jam();
@@ -3327,6 +3424,7 @@ void Ndbcntr::waitpoint61Lab(Signal *signal) {
     signal->theData[1] = CntrWaitRep::ZWAITPOINT_6_1;
     sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal, 2,
                JBB);
+    nsl_park(NSL_PARK_WP_6_1);
   }
 }
 
@@ -3360,12 +3458,16 @@ void Ndbcntr::waitpoint71Lab(Signal *signal) {
     cnoWaitrep7++;
     if (cnoWaitrep7 == cnoStartNodes) {
       jam();
+      nsl_unpark();
       NodeReceiverGroup rg(NDBCNTR, c_start.m_starting);
       rg.m_nodes.clear(getOwnNodeId());
       signal->theData[0] = getOwnNodeId();
       signal->theData[1] = CntrWaitRep::ZWAITPOINT_7_2;
       sendSignal(rg, GSN_CNTR_WAITREP, signal, 2, JBB);
       sendSttorry(signal);
+    } else if (c_nsl_park != NSL_PARK_MASTER_7_1) {
+      jam();
+      nsl_park(NSL_PARK_MASTER_7_1);
     }
   } else {
     jam();
@@ -3373,6 +3475,7 @@ void Ndbcntr::waitpoint71Lab(Signal *signal) {
     signal->theData[1] = CntrWaitRep::ZWAITPOINT_7_1;
     sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal, 2,
                JBB);
+    nsl_park(NSL_PARK_WP_7_1);
   }
 }
 
@@ -3412,6 +3515,7 @@ bool Ndbcntr::wait_sp(Signal *signal, Uint32 sp) {
   sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal,
              CntrWaitRep::SignalLength, JBB);
 
+  nsl_park(NSL_PARK_WAIT_SP, sp);
   return true;  // wait
 }
 
@@ -3427,6 +3531,7 @@ void Ndbcntr::wait_sp_rep(Signal *signal) {
       /**
        * We're allowed to proceed
        */
+      nsl_unpark();
       c_missra.sendNextSTTOR(signal);
       return;
   }
@@ -3572,6 +3677,12 @@ void Ndbcntr::handle_start_phase_110(Signal *signal) {
        * System restart and initial start are already synchronized
        * between the nodes through wait_sp, no barrier is needed.
        */
+      {
+        char buf[NodeStartLog::BUF_SIZE];
+        infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
+                                              NodeStartLog::NSL_BARRIER,
+                                              ctypeOfStart));
+      }
       sendSttorry(signal);
       return;
   }
@@ -3622,6 +3733,14 @@ void Ndbcntr::handle_start_phase_110(Signal *signal) {
       "Fully recovered, waiting at restart barrier (start phase 110)"
       " until all restarting nodes have completed their recovery");
   infoEvent("Waiting at restart barrier for all restarting nodes");
+
+  c_nsl_barrier_timer.start_step();
+  {
+    char buf[NodeStartLog::BUF_SIZE];
+    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                       NodeStartLog::NSL_BARRIER, 0,
+                                       ctypeOfStart, "started", -1));
+  }
 
   /**
    * The barrier-entry report goes to the barrier-capable members
@@ -3752,7 +3871,95 @@ void Ndbcntr::leave_restart_barrier(Signal *signal, const char *reason) {
   m_restart_barrier_waiting = false;
   g_eventLogger->info("Restart barrier released: %s", reason);
   infoEvent("Restart barrier released: %s", reason);
+  if (c_nsl_barrier_timer.is_active()) {
+    jam();
+    char buf[NodeStartLog::BUF_SIZE];
+    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                       NodeStartLog::NSL_BARRIER, 0,
+                                       ctypeOfStart, "completed",
+                                       (Int64)c_nsl_barrier_timer
+                                           .elapsed_sec(),
+                                       "%s", reason));
+    c_nsl_barrier_timer.stop_step();
+  }
   sendSttorry(signal);
+}
+
+void Ndbcntr::nsl_park(Uint32 park, Uint32 sp) {
+  c_nsl_park = park;
+  c_nsl_park_sp = sp;
+  c_nsl_park_timer.start_step();
+}
+
+void Ndbcntr::nsl_unpark() {
+  c_nsl_park = NSL_PARK_NONE;
+  c_nsl_park_sp = 0;
+  c_nsl_park_timer.stop_step();
+}
+
+void Ndbcntr::nsl_report_park() {
+  char buf[NodeStartLog::BUF_SIZE];
+  const Int64 elapsed = (Int64)c_nsl_park_timer.elapsed_sec();
+  switch (c_nsl_park) {
+    case NSL_PARK_WAIT_SP:
+      NodeStartLog::wait_line(buf, sizeof(buf), elapsed,
+                              "start phase %u barrier, master node %u grants"
+                              " it once every node has completed start"
+                              " phase %u",
+                              c_nsl_park_sp, cmasterNodeId,
+                              c_nsl_park_sp - 1);
+      break;
+    case NSL_PARK_WP_4_1:
+      NodeStartLog::wait_line(buf, sizeof(buf), elapsed,
+                              "NDB start phase 4 wait point, master node %u"
+                              " releases it once every node has completed"
+                              " its local recovery (steps 7-11)",
+                              cmasterNodeId);
+      break;
+    case NSL_PARK_WP_5_2:
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 1,
+                         ctypeOfStart, "waiting", elapsed,
+                         "waiting for master node %u to complete the first"
+                         " local checkpoint",
+                         cmasterNodeId);
+      break;
+    case NSL_PARK_WP_6_1:
+    case NSL_PARK_WP_7_1:
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ACTIVATE, 0,
+                         ctypeOfStart, "waiting", elapsed,
+                         "waiting for every node to complete NDB start"
+                         " phase %u, master node %u releases the wait point",
+                         (c_nsl_park == NSL_PARK_WP_6_1) ? 6 : 7,
+                         cmasterNodeId);
+      break;
+    case NSL_PARK_MASTER_5_2:
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 0,
+                         ctypeOfStart, "waiting", elapsed,
+                         "this node is the master, %u of %u nodes have not"
+                         " yet reported NDB start phase 4 completion",
+                         cnoStartNodes - cnoWaitrep, cnoStartNodes);
+      break;
+    case NSL_PARK_MASTER_6_1:
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ACTIVATE, 0,
+                         ctypeOfStart, "waiting", elapsed,
+                         "this node is the master, %u of %u nodes have not"
+                         " yet completed NDB start phase 6",
+                         cnoStartNodes - cnoWaitrep6, cnoStartNodes);
+      break;
+    case NSL_PARK_MASTER_7_1:
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ACTIVATE, 0,
+                         ctypeOfStart, "waiting", elapsed,
+                         "this node is the master, %u of %u nodes have not"
+                         " yet completed NDB start phase 7",
+                         cnoStartNodes - cnoWaitrep7, cnoStartNodes);
+      break;
+    default:
+      return;
+  }
+  if (c_nsl_park_timer.escalate_due()) {
+    jam();
+    infoEvent("%s", buf);
+  }
 }
 
 /*******************************/
@@ -3770,6 +3977,7 @@ void Ndbcntr::execCNTR_WAITREP(Signal *signal) {
       break;
     case CntrWaitRep::ZWAITPOINT_4_2:
       jam();
+      nsl_unpark();
       c_start.m_starting.clear();
       if (signal->getNoOfSections() >= 1) {
         SectionHandle handle(this, signal);
@@ -3785,6 +3993,7 @@ void Ndbcntr::execCNTR_WAITREP(Signal *signal) {
       break;
     case CntrWaitRep::ZWAITPOINT_5_1:
       jam();
+      nsl_unpark();
       g_eventLogger->info(
           "Master node %u have reached completion of NDB start"
           " phase 5",
@@ -3805,6 +4014,7 @@ void Ndbcntr::execCNTR_WAITREP(Signal *signal) {
       break;
     case CntrWaitRep::ZWAITPOINT_6_2:
       jam();
+      nsl_unpark();
       sendSttorry(signal);
       break;
     case CntrWaitRep::ZWAITPOINT_7_1:
@@ -3813,10 +4023,12 @@ void Ndbcntr::execCNTR_WAITREP(Signal *signal) {
       break;
     case CntrWaitRep::ZWAITPOINT_7_2:
       jam();
+      nsl_unpark();
       sendSttorry(signal);
       break;
     case CntrWaitRep::ZWAITPOINT_4_2_TO:
       jam();
+      nsl_unpark();
       waitpoint42To(signal);
       break;
     case CntrWaitRep::ZWAITPOINT_RESTART_BARRIER:
@@ -5509,6 +5721,23 @@ void Ndbcntr::execFSREMOVECONF(Signal *signal) {
 }
 
 void Ndbcntr::Missra::execSTART_ORD(Signal *signal) {
+  /**
+   * Anchor all [NODE-START] total-elapsed values at the top of
+   * ndbd_run when available, so the pre-block process startup is
+   * included in the reported times.
+   */
+  cntr.c_nsl_start_ticks = NdbTick_IsValid(globalData.theNodeStartTicks)
+                               ? globalData.theNodeStartTicks
+                               : NdbTick_getCurrentTicks();
+  {
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 4,
+                       NodeState::ST_ILLEGAL_TYPE, "started",
+                       (Int64)NdbTick_Elapsed(cntr.c_nsl_start_ticks,
+                                              NdbTick_getCurrentTicks())
+                           .seconds());
+  }
+
   signal->theData[0] = NDB_LE_NDBStartStarted;
   signal->theData[1] = NDB_VERSION;
   signal->theData[2] = NDB_MYSQL_VERSION_D;
@@ -5564,6 +5793,16 @@ void Ndbcntr::Missra::sendNextREAD_CONFIG_REQ(Signal *signal) {
       " used to read configuration and to calculate"
       " various sizes and allocate almost all memory"
       " needed by the data node in its lifetime");
+  {
+    char buf[NodeStartLog::BUF_SIZE];
+    cntr.infoEvent(
+        "%s", NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 0,
+                                 NodeState::ST_ILLEGAL_TYPE, "completed",
+                                 (Int64)NdbTick_Elapsed(
+                                     cntr.c_nsl_start_ticks,
+                                     NdbTick_getCurrentTicks())
+                                     .seconds()));
+  }
   /**
    * Finished...
    */
@@ -5840,6 +6079,28 @@ void Ndbcntr::Missra::sendNextSTTOR(Signal *signal) {
 #endif
 
   g_eventLogger->info("Node started");
+
+  /* Disarm the touch-memory progress reports of runtime allocation. */
+  ndbd_malloc_set_touch_report_frequency(0);
+
+  {
+    /* Claim the end of the narrative; a thread that failed first has
+       claimed NSL_FAILED and printed the 'failed' line instead. */
+    Uint32 expected = GlobalData::NSL_STARTING;
+    if (globalData.theNodeStartLogState.compare_exchange_strong(
+            expected, GlobalData::NSL_DONE, std::memory_order_acq_rel)) {
+      char buf[NodeStartLog::BUF_SIZE];
+      BaseString::snprintf(buf, sizeof(buf),
+                           "[NODE-START] completed: %s finished, total"
+                           " elapsed=%llus",
+                           NodeStartLog::startTypeName(cntr.ctypeOfStart),
+                           NdbTick_Elapsed(cntr.c_nsl_start_ticks,
+                                           NdbTick_getCurrentTicks())
+                               .seconds());
+      g_eventLogger->info("%s", buf);
+      cntr.infoEvent("%s", buf);
+    }
+  }
 
   signal->theData[0] = NDB_LE_NDBStartCompleted;
   signal->theData[1] = NDB_VERSION;

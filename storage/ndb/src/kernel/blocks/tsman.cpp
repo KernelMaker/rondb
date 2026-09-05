@@ -112,6 +112,8 @@ Tsman::Tsman(Block_context &ctx)
       m_tup(0) {
   BLOCK_CONSTRUCTOR(Tsman);
 
+  m_nsl_datafiles_scanned = 0;
+
   Uint32 SZ = File_formats::Datafile::EXTENT_HEADER_BITMASK_BITS_PER_PAGE;
   ndbrequire((COMMITTED_MASK & UNCOMMITTED_MASK) == 0);
   ndbrequire((COMMITTED_MASK | UNCOMMITTED_MASK) == ((1 << SZ) - 1));
@@ -1545,6 +1547,9 @@ void Tsman::execSTART_RECREQ(Signal *signal) {
   Ptr<Tablespace> ts_ptr;
   m_tablespace_list.first(ts_ptr);
 
+  m_nsl_timer.start_step();
+  m_nsl_datafiles_scanned = 0;
+
   signal->theData[0] = TsmanContinueB::SCAN_TABLESPACE_EXTENT_HEADERS;
   signal->theData[1] = ts_ptr.i;
   sendSignal(reference(), GSN_CONTINUEB, signal, 2, JBB);
@@ -1554,6 +1559,19 @@ void Tsman::scan_tablespace(Signal *signal, Uint32 ptrI) {
   Ptr<Tablespace> ts_ptr;
   if (ptrI == RNIL) {
     jam();
+    /**
+     * Report only when something was scanned: an initial node restart
+     * and diskless configurations pass through here trivially, and
+     * their step 9 is reported as skipped.
+     */
+    if (m_nsl_datafiles_scanned > 0) {
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 4,
+                         NodeState::ST_ILLEGAL_TYPE, "completed",
+                         (Int64)m_nsl_timer.elapsed_sec(),
+                         "scanned %u datafiles", m_nsl_datafiles_scanned);
+    }
+    m_nsl_timer.stop_step();
     signal->theData[0] = reference();
     sendSignal(DBLQH_REF, GSN_START_RECCONF, signal, 1, JBB);
     return;
@@ -1750,6 +1768,15 @@ void Tsman::scan_extent_headers(Signal *signal, Ptr<Datafile> ptr) {
     Local_datafile_list full(m_file_pool, ts_ptr.p->m_full_files);
     meta.remove(ptr);
     full.addFirst(ptr);
+  }
+
+  m_nsl_datafiles_scanned++;
+  if (m_nsl_timer.report_due(globalData.theNodeStartLogReportFrequency)) {
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 4,
+                       NodeState::ST_ILLEGAL_TYPE, "progress",
+                       (Int64)m_nsl_timer.elapsed_sec(),
+                       "scanned %u datafiles", m_nsl_datafiles_scanned);
   }
 
   signal->theData[0] = TsmanContinueB::SCAN_DATAFILE_EXTENT_HEADERS;

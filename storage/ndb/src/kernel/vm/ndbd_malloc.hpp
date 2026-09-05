@@ -37,6 +37,14 @@
  * common memory allocation function for ndbd kernel
  */
 void *ndbd_malloc(size_t size);
+
+/**
+ * Arm/disarm the [NODE-START] touch-memory progress reports. Armed by
+ * ndbd_run once the configuration is fetched (value =
+ * NodeStartLogReportFrequency) and disarmed (0) when the node has
+ * started, so runtime page population and unit tests stay silent.
+ */
+void ndbd_malloc_set_touch_report_frequency(Uint32 freq_sec);
 bool ndbd_malloc_need_watchdog(size_t size);
 void *ndbd_malloc_watched(size_t size, volatile Uint32 *watch_dog);
 void ndbd_free(void *p, size_t size);

@@ -29,6 +29,8 @@
 #include <ndb_global.h>
 #include <NdbOut.hpp>
 #include <algorithm>
+#include <atomic>
+#include "NodeStartLog.hpp"
 #include "debugger/EventLogger.hpp"
 #include "my_sys.h"
 #include "portlib/NdbMem.h"
@@ -47,12 +49,42 @@
 #define MIN_START_THREAD_SIZE (128 * 1024 * 1024)
 #define NUM_PAGES_BETWEEN_WATCHDOG_SETS 32768
 
+/**
+ * Frequency in seconds of the [NODE-START] touch-memory progress
+ * reports, 0 = silent. Armed by ndbd_run after the configuration is
+ * fetched, disarmed again when the node has started. Deliberately not
+ * read from globalData: that would pull Emulator.o and its
+ * ErrorReporter dependencies into the standalone unit-test binaries
+ * that link ndbd_malloc.o.
+ */
+static Uint32 g_touch_report_frequency = 0;
+
+void ndbd_malloc_set_touch_report_frequency(Uint32 freq_sec) {
+  g_touch_report_frequency = freq_sec;
+}
+
+/**
+ * Shared progress state for one memory-touch job, reported as
+ * [NODE-START] step 1 sub-step 2 while the node is starting. The
+ * touch threads add their touched pages and the thread that claims
+ * the report slot (compare_exchange on last_report_ms) prints, so a
+ * report is emitted at most once per NodeStartLogReportFrequency
+ * without any lock in the touch loop.
+ */
+struct TouchMemProgress {
+  std::atomic<Uint64> pages_done{0};
+  std::atomic<Uint64> last_report_ms{0};
+  Uint64 tot_pages{0};
+  NDB_TICKS start;
+};
+
 struct AllocTouchMem {
   volatile Uint32 *watchCounter;
   size_t sz;
   void *p;
   Uint32 index;
   bool make_readwritable;
+  TouchMemProgress *progress;
 };
 
 // Enable/disable debug check for reads from uninitialized memory.
@@ -135,6 +167,29 @@ static void *touch_mem(void *arg) {
     }
     *watchCounter = 9;
 
+    TouchMemProgress *progress = touch_mem_ptr->progress;
+    if (progress != nullptr) {
+      const Uint64 chunk_pages = size / TOUCH_PAGE_SIZE;
+      const Uint64 done = progress->pages_done.fetch_add(chunk_pages) +
+                          chunk_pages;
+      const NDB_TICKS now = NdbTick_getCurrentTicks();
+      const Uint64 elapsed_ms =
+          NdbTick_Elapsed(progress->start, now).milliSec();
+      const Uint64 freq_ms = Uint64(g_touch_report_frequency) * 1000;
+      Uint64 last = progress->last_report_ms.load();
+      if (elapsed_ms >= last + freq_ms &&
+          progress->last_report_ms.compare_exchange_strong(last, elapsed_ms)) {
+        char buf[NodeStartLog::BUF_SIZE];
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 2,
+                           NodeState::ST_ILLEGAL_TYPE, "progress",
+                           (Int64)(elapsed_ms / 1000),
+                           "touched %llu/%llu pages (%u%%)",
+                           (unsigned long long)done,
+                           (unsigned long long)progress->tot_pages,
+                           (Uint32)((done * 100) / progress->tot_pages));
+      }
+    }
+
     if (debugUinitMemUse) {
       /*
         Initialize the memory to something likely to trigger access violations 
@@ -183,12 +238,27 @@ void ndbd_alloc_touch_mem(void *p, size_t sz, volatile Uint32 *watchCounter,
     watchCounter = &dummy_watch_counter;
   }
 
+  /**
+   * Report [NODE-START] touch progress for large jobs while the node
+   * is still starting. Small jobs and page population after the node
+   * has started (frequency disarmed) stay silent.
+   */
+  TouchMemProgress progress;
+  TouchMemProgress *progress_ptr = nullptr;
+  if (sz > MIN_START_THREAD_SIZE && g_touch_report_frequency != 0) {
+    const size_t TOUCH_PAGE_SIZE = NdbMem_GetSystemPageSize();
+    progress.tot_pages = (sz + (TOUCH_PAGE_SIZE - 1)) / TOUCH_PAGE_SIZE;
+    progress.start = NdbTick_getCurrentTicks();
+    progress_ptr = &progress;
+  }
+
   for (Uint32 i = 0; i < TOUCH_PARALLELISM; i++) {
     touch_mem_struct[i].watchCounter = watchCounter;
     touch_mem_struct[i].sz = sz;
     touch_mem_struct[i].p = p;
     touch_mem_struct[i].index = i;
     touch_mem_struct[i].make_readwritable = make_readwritable;
+    touch_mem_struct[i].progress = progress_ptr;
 
     thread_ptr[i] = NULL;
     if (sz > MIN_START_THREAD_SIZE) {

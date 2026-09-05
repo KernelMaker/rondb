@@ -4088,6 +4088,8 @@ void Lgman::execSTART_RECREQ(Signal *signal) {
   jamEntry();
   m_latest_lcp = signal->theData[0];
   m_latest_local_lcp = signal->theData[1];
+  m_nsl_timer.start_step();
+  m_nsl_total_pages = 0;
 
   Ptr<Logfile_group> lg_ptr;
   m_logfile_group_list.first(lg_ptr);
@@ -4105,6 +4107,7 @@ void Lgman::execSTART_RECREQ(Signal *signal) {
    * not using disk data in this data node. So we can immediately respond
    * the execution of UNDO log for disk data is completed.
    */
+  m_nsl_timer.stop_step();
   signal->theData[0] = reference();
   sendSignal(DBLQH_REF, GSN_START_RECCONF, signal, 1, JBB);
 }
@@ -4732,6 +4735,7 @@ void Lgman::find_log_head_complete(Signal *signal, Ptr<Logfile_group> lg_ptr,
      */
     g_eventLogger->info("LGMAN: Total number of pages in Undo log: %lld",
                         total);
+    m_nsl_total_pages += (Uint64)total;
   }
 
   /**
@@ -4832,6 +4836,7 @@ void Lgman::init_run_undo_log(Signal *signal) {
      * No logfilegroup had any logfiles
      */
     jam();
+    m_nsl_timer.stop_step();
     signal->theData[0] = reference();
     sendSignal(DBLQH_REF, GSN_START_RECCONF, signal, 1, JBB);
     return;
@@ -5167,6 +5172,19 @@ void Lgman::execute_undo_record(Signal *signal) {
           " completed, applied %llu records, reached"
           " LSN %llu",
           m_pages_applied, m_records_applied, lsn);
+    }
+    if ((m_records_applied & 1023) == 0 &&
+        m_nsl_timer.report_due(globalData.theNodeStartLogReportFrequency)) {
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 2,
+                         NodeState::ST_ILLEGAL_TYPE, "progress",
+                         (Int64)m_nsl_timer.elapsed_sec(),
+                         "LGMAN: applied %llu/%llu pages, %llu records,"
+                         " LSN %llu",
+                         (unsigned long long)m_pages_applied,
+                         (unsigned long long)m_nsl_total_pages,
+                         (unsigned long long)m_records_applied,
+                         (unsigned long long)lsn);
     }
     Uint32 len = (*ptr) & 0xFFFF;
     Uint32 type = (*ptr) >> 16;
@@ -5721,6 +5739,22 @@ void Lgman::stop_run_undo_log(Signal *signal) {
     return;
   }
 
+  if (m_nsl_timer.is_active()) {
+    jam();
+    /* [NODE-START] step 9: sub-step 2 done, sub-step 3 (flush) begins. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 2,
+                       NodeState::ST_ILLEGAL_TYPE, "completed",
+                       (Int64)m_nsl_timer.elapsed_sec(),
+                       "LGMAN: applied %llu pages, %llu records",
+                       (unsigned long long)m_pages_applied,
+                       (unsigned long long)m_records_applied);
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 3,
+                       NodeState::ST_ILLEGAL_TYPE, "started", -1,
+                       "LGMAN: flushing the page cache");
+    /* Re-anchored: sub-step 3 ends in execEND_LCPCONF. */
+    m_nsl_timer.start_step();
+  }
   infoEvent("LGMAN: Flushing page cache after undo completion");
   g_eventLogger->info("LGMAN: Flushing page cache after undo completion");
 
@@ -5747,6 +5781,17 @@ void Lgman::execEND_LCPCONF(Signal *signal) {
     Dbtup_client tup(this, m_tup);
     tup.disk_restart_undo(signal, 0, File_formats::Undofile::UNDO_END, 0, 0);
     jamEntry();
+  }
+
+  if (m_nsl_timer.is_active()) {
+    jam();
+    /* [NODE-START] step 9 sub-step 3: PGMAN has flushed the page cache. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 3,
+                       NodeState::ST_ILLEGAL_TYPE, "completed",
+                       (Int64)m_nsl_timer.elapsed_sec(),
+                       "LGMAN: page cache flushed");
+    m_nsl_timer.stop_step();
   }
 
   /**

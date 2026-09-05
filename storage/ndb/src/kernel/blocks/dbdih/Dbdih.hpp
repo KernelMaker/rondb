@@ -29,6 +29,7 @@
 
 #include <ndb_limits.h>
 #include <SignalCounter.hpp>
+#include <NodeStartLog.hpp>
 #include <SimulatedBlock.hpp>
 #include <pc.hpp>
 #include "Sysfile.hpp"
@@ -2521,6 +2522,50 @@ class Dbdih : public SimulatedBlock {
   Uint32 cnoReplicas;
 
   bool cwaitLcpSr;
+
+  /**
+   * [NODE-START] logging of the DIH-owned steps on the starting node
+   * (start-perm, metadata, synchronize, wait-lcp), see
+   * vm/NodeStartLog.hpp. A ZNSL_REPORT CONTINUEB chain prints
+   * periodic waiting/progress lines while a step is active.
+   */
+  NodeStartLogTimer c_nsl_timer;
+  Uint32 c_nsl_active_step;
+  Uint32 c_nsl_perm_retries;
+  Uint32 c_nsl_last_perm_ref;
+  Uint32 c_nsl_frags_copied;
+  Uint32 c_nsl_sync_sub;            /* step 12 sub-step in progress (2, 3) */
+  Uint32 c_nsl_sr_meta_phase;       /* SR step 7: 0 wait nodes, 1 sysfile, 2 schema */
+  Uint32 c_nsl_sr_tabs_distributed; /* SR master: tables distributed to all nodes */
+  Uint32 c_nsl_sr_tabs_received;    /* SR non-master: tables received from master */
+  Uint32 c_nsl_frags_distributed;   /* SR master: fragments given START_FRAGREQ */
+  bool c_nsl_wait_lcp_reported;     /* step 13 completed already logged here */
+  void nsl_start_step(Signal *signal, Uint32 step);
+  void nsl_stop_step();
+  void nsl_report_progress(Signal *signal);
+
+  /**
+   * [NODE-START] view of a node restart this node is assisting as
+   * master (or as a live node invalidating LCPs): step 5 sub-step 3
+   * and the step 7 sub-steps. Reported on the same ZNSL_REPORT chain,
+   * marked with NSL_MASTER_TAG in theData[1].
+   */
+  enum NslMasterState {
+    NSL_M_IDLE = 0,
+    NSL_M_INVALIDATE = 1,
+    NSL_M_WAIT_PAUSE = 2,
+    NSL_M_COPY_META = 3,
+    NSL_M_COPY_DICT = 4
+  };
+  static constexpr Uint32 NSL_MASTER_TAG = 0xFFFFFFFF;
+  Uint32 c_nsl_master_state;
+  Uint32 c_nsl_master_node;
+  Uint32 c_nsl_tabs_copied;
+  Uint32 c_nsl_tabs_total;
+  bool c_nsl_master_tick_armed;
+  NodeStartLogTimer c_nsl_master_timer;
+  void nsl_master_set_state(Signal *signal, Uint32 state, Uint32 node);
+  void nsl_master_report(Signal *signal);
 
   /**
    * After a node failure we want to increase the disk checkpoint speed until

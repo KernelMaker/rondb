@@ -39,6 +39,7 @@
 #include <signaldata/StopReq.hpp>
 
 #include <NdbTick.h>
+#include <NodeStartLog.hpp>
 #include <NodeState.hpp>
 
 #define JAM_FILE_ID 457
@@ -478,6 +479,43 @@ class Ndbcntr : public SimulatedBlock {
   bool m_restart_barrier_waiting;
   NDB_TICKS m_restart_barrier_entry_time;
   Uint32 c_restart_barrier_timeout_ms;
+
+  /**
+   * [NODE-START] uniform start-step logging, see vm/NodeStartLog.hpp.
+   * The admission timer covers step 3 (waiting for the NDBCNTR master
+   * to grant our start in CNTR_START_CONF), c_nsl_start_ticks anchors
+   * the total elapsed time reported when the node has started.
+   */
+  NodeStartLogTimer c_nsl_admission_timer;
+  bool c_nsl_waiting_admission;
+  NDB_TICKS c_nsl_start_ticks;
+  NodeStartLogTimer c_nsl_barrier_timer;
+
+  /**
+   * [NODE-START] heartbeat for the cluster-wide wait points of an
+   * initial or system restart, where this node is parked in NDBCNTR
+   * until the master or every node has reached a point: the start
+   * phase barrier (wait_sp), wait points 4.1, 5.2, 6.1 and 7.1 on a
+   * non-master, and the master's waits for the 5.2, 6.1 and 7.1
+   * reports. Reported from the ZSTARTUP tick, see nsl_report_park().
+   */
+  enum NslPark {
+    NSL_PARK_NONE = 0,
+    NSL_PARK_WAIT_SP = 1,
+    NSL_PARK_WP_4_1 = 2,
+    NSL_PARK_WP_5_2 = 3,
+    NSL_PARK_WP_6_1 = 4,
+    NSL_PARK_WP_7_1 = 5,
+    NSL_PARK_MASTER_5_2 = 6,
+    NSL_PARK_MASTER_6_1 = 7,
+    NSL_PARK_MASTER_7_1 = 8
+  };
+  Uint32 c_nsl_park;
+  Uint32 c_nsl_park_sp;
+  NodeStartLogTimer c_nsl_park_timer;
+  void nsl_park(Uint32 park, Uint32 sp = 0);
+  void nsl_unpark();
+  void nsl_report_park();
   
  public:
   struct StopRecord {
