@@ -29997,6 +29997,9 @@ void Dblqh::rebuildOrderedIndexes(Signal *signal, Uint32 tableId) {
                         instance());
     c_nsl_indexes_total = 0;
     c_nsl_indexes_done = 0;
+    c_nsl_index_current = RNIL;
+    c_nsl_index_rows_total = 0;
+    c_tux->nsl_build_rows_reset();
     for (Uint32 i = 0; i < ctabrecFileSize; i++) {
       TablerecPtr countTabPtr;
       countTabPtr.i = i;
@@ -30004,6 +30007,19 @@ void Dblqh::rebuildOrderedIndexes(Signal *signal, Uint32 tableId) {
       if (DictTabInfo::isOrderedIndex(countTabPtr.p->tableType) &&
           countTabPtr.p->tableStatus == Tablerec::TABLE_DEFINED) {
         c_nsl_indexes_total++;
+        /**
+         * Rows the build of this index scans: the base table's
+         * fragments on this LDM. The TUP row counts are current here,
+         * restore and REDO execution are done.
+         */
+        Uint32 fragIdx = 0;
+        Uint64 tupFragPtrI;
+        while ((tupFragPtrI = getNextTupFragrec(
+                    countTabPtr.p->primaryTableId, fragIdx)) != RNIL64) {
+          c_nsl_index_rows_total +=
+              c_tup->get_frag_stats(tupFragPtrI).committedRowCount;
+          fragIdx++;
+        }
       }
     }
     nsl_start_step(signal, NodeStartLog::NSL_INDEX_REBUILD);
@@ -30060,8 +30076,9 @@ void Dblqh::rebuildOrderedIndexes(Signal *signal, Uint32 tableId) {
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INDEX_REBUILD, 0,
                          cstartType, "completed",
                          (Int64)c_nsl_timer.elapsed_sec(),
-                         "LDM(%u): %u ordered indexes", instance(),
-                         c_nsl_indexes_done);
+                         "LDM(%u): %u ordered indexes, %llu rows scanned",
+                         instance(), c_nsl_indexes_done,
+                         (unsigned long long)c_tux->nsl_build_rows());
       nsl_stop_step();
     }
     return;
@@ -30089,6 +30106,7 @@ void Dblqh::rebuildOrderedIndexes(Signal *signal, Uint32 tableId) {
        instance(), tabptr.p->primaryTableId, tableId));
 
   ndbassert(!m_is_query_block);
+  c_nsl_index_current = tableId;
   BuildIndxImplReq *const req = (BuildIndxImplReq *)signal->getDataPtrSend();
   req->senderRef = reference();
   req->senderData = tableId;
@@ -38689,10 +38707,44 @@ void Dblqh::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_INDEX_REBUILD: {
+      /**
+       * Rows scanned so far over all indexes (DBTUX counts them in the
+       * build threads) against the rows counted at step start, then
+       * the fragment fan-out of the index being built (DBTUP).
+       */
+      char detail[384];
+      const Uint64 rows = c_tux->nsl_build_rows();
+      const Uint64 total = c_nsl_index_rows_total;
+      int pos = BaseString::snprintf(
+          detail, sizeof(detail),
+          "LDM(%u): rebuilt %u/%u ordered indexes, rows scanned %llu/%llu",
+          instance(), c_nsl_indexes_done, c_nsl_indexes_total,
+          (unsigned long long)rows, (unsigned long long)total);
+      if (total > 0 && pos > 0 && (size_t)pos < sizeof(detail)) {
+        const Uint32 pct =
+            (rows >= total) ? 100 : (Uint32)((rows * 100) / total);
+        pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                                    " (%u%%)", pct);
+      }
+      if (pos > 0 && (size_t)pos < sizeof(detail)) {
+        pos += NodeStartLog::appendRateEta(detail + pos, sizeof(detail) - pos,
+                                           rows, total, elapsed, "rows");
+      }
+      if (c_nsl_index_current != RNIL && pos > 0 &&
+          (size_t)pos < sizeof(detail)) {
+        Uint32 indexId, fragsDone, fragsTotal, building;
+        c_tup->nsl_build_index_progress(indexId, fragsDone, fragsTotal,
+                                        building);
+        /* DBTUP still describes the previous index until it executes
+           the BUILD_INDX_IMPL_REQ we just sent; skip the part then. */
+        if (indexId == c_nsl_index_current) {
+          BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                               "; index %u: %u/%u fragments done, %u building",
+                               indexId, fragsDone, fragsTotal, building);
+        }
+      }
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INDEX_REBUILD, 1,
-                         cstartType, "progress", elapsed,
-                         "LDM(%u): rebuilt %u/%u ordered indexes", instance(),
-                         c_nsl_indexes_done, c_nsl_indexes_total);
+                         cstartType, "progress", elapsed, "%s", detail);
       break;
     }
     case NodeStartLog::NSL_RESTORE: {

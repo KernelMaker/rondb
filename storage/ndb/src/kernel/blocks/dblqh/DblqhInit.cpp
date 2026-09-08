@@ -119,6 +119,8 @@ void Dblqh::initData()
   c_nsl_active_step = 0;
   c_nsl_indexes_total = 0;
   c_nsl_indexes_done = 0;
+  c_nsl_index_current = RNIL;
+  c_nsl_index_rows_total = 0;
   c_nsl_frags_restored = 0;
   c_nsl_redo_sub = 1;
   c_start_phase_9_waiting = false;

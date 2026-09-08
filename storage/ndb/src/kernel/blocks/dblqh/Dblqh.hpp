@@ -3165,6 +3165,8 @@ private:
   Uint32 c_nsl_active_step;
   Uint32 c_nsl_indexes_total;
   Uint32 c_nsl_indexes_done;
+  Uint32 c_nsl_index_current;    /* step 11: index table being built */
+  Uint64 c_nsl_index_rows_total; /* step 11: rows the builds will scan */
   Uint32 c_nsl_frags_restored;
   Uint32 c_nsl_redo_sub; /* step 10: 1 = execution rounds, 2 = head/tail */
   void nsl_start_step(Signal *signal, Uint32 step);

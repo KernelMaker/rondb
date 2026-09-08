@@ -456,6 +456,30 @@ struct NodeStartLog {
                                const char *detail_fmt, ...)
       ATTRIBUTE_FORMAT(printf, 4, 5);
 
+  /**
+   * Append ", R <unit>/s" and ", ~Ns left" to a progress detail from
+   * the work done so far, the total and the seconds spent in the step.
+   * Nothing is appended before the first second or before any work is
+   * done; the estimate is omitted once the work is done or while the
+   * rate rounds to zero. Returns the number of characters appended.
+   */
+  static Uint32 appendRateEta(char *buf, Uint32 len, Uint64 done,
+                              Uint64 total, Int64 elapsed_sec,
+                              const char *unit) {
+    if (elapsed_sec <= 0 || done == 0 || len == 0) return 0;
+    const Uint64 rate = done / (Uint64)elapsed_sec;
+    Uint32 pos = clamp((Uint32)snprintf(buf, len, ", %llu %s/s",
+                                        (unsigned long long)rate, unit),
+                       len);
+    if (rate > 0 && done < total) {
+      pos = clamp(pos + (Uint32)snprintf(
+                            buf + pos, len - pos, ", ~%llus left",
+                            (unsigned long long)((total - done) / rate)),
+                  len);
+    }
+    return pos;
+  }
+
  private:
   static Uint32 clamp(Uint32 pos, Uint32 len) {
     return (pos >= len) ? (len - 1) : pos;
