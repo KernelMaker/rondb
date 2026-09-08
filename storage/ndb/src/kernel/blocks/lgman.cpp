@@ -4099,6 +4099,13 @@ void Lgman::execSTART_RECREQ(Signal *signal) {
               m_latest_local_lcp);
     g_eventLogger->info("LGMAN: Applying undo to LCP: [%d,%d]", m_latest_lcp,
                         m_latest_local_lcp);
+    {
+      /* [NODE-START] step 9 sub-step 1, ends in init_run_undo_log. */
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 1,
+                         NodeState::ST_ILLEGAL_TYPE, "started", -1,
+                         "LGMAN: locating the UNDO log head");
+    }
     find_log_head(signal, lg_ptr);
     return;
   }
@@ -4316,6 +4323,22 @@ void Lgman::execFSREADCONF(Signal *signal) {
   lsn += page->m_page_header.m_page_lsn_hi;
   lsn <<= 32;
   lsn += page->m_page_header.m_page_lsn_lo;
+
+  if ((file_ptr.p->m_state == Undofile::FS_SEARCHING ||
+       file_ptr.p->m_state == Undofile::FS_SEARCHING_END) &&
+      m_nsl_timer.report_due(globalData.theNodeStartLogReportFrequency)) {
+    jam();
+    /* [NODE-START] step 9 sub-step 1 liveness: the head search reads
+       one page per file system round trip. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 1,
+                       NodeState::ST_ILLEGAL_TYPE, "progress",
+                       (Int64)m_nsl_timer.elapsed_sec(),
+                       "LGMAN: locating the UNDO log head, reading file %u"
+                       " page %u",
+                       file_ptr.p->m_file_id,
+                       file_ptr.p->m_online.m_read_page_idx);
+  }
 
   switch (file_ptr.p->m_state) {
     case Undofile::FS_SORTING:
@@ -4836,6 +4859,15 @@ void Lgman::init_run_undo_log(Signal *signal) {
      * No logfilegroup had any logfiles
      */
     jam();
+    if (m_nsl_timer.is_active()) {
+      jam();
+      /* [NODE-START] close sub-step 9.1: it was started for the group. */
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 1,
+                         NodeState::ST_ILLEGAL_TYPE, "completed",
+                         (Int64)m_nsl_timer.elapsed_sec(),
+                         "LGMAN: no UNDO log files, nothing to apply");
+    }
     m_nsl_timer.stop_step();
     signal->theData[0] = reference();
     sendSignal(DBLQH_REF, GSN_START_RECCONF, signal, 1, JBB);
@@ -4846,6 +4878,21 @@ void Lgman::init_run_undo_log(Signal *signal) {
     for (unsigned int i = 0; i <= getLqhWorkers(); i++) {
       m_pending_undo_records[i] = 0;  // initialize
     }
+  }
+  if (m_nsl_timer.is_active()) {
+    jam();
+    /* [NODE-START] step 9: sub-step 1 done, sub-step 2 (apply) begins. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 1,
+                       NodeState::ST_ILLEGAL_TYPE, "completed",
+                       (Int64)m_nsl_timer.elapsed_sec(),
+                       "LGMAN: UNDO log head located, %llu pages in the log",
+                       (unsigned long long)m_nsl_total_pages);
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 2,
+                       NodeState::ST_ILLEGAL_TYPE, "started", -1,
+                       "LGMAN: applying the UNDO log");
+    /* Re-anchored: sub-step 2 ends in stop_run_undo_log. */
+    m_nsl_timer.start_step();
   }
   execute_undo_record(signal);
 }

@@ -2215,7 +2215,6 @@ Dbdict::Dbdict(Block_context &ctx)
       c_reservedCounterMgr(*this) {
   BLOCK_CONSTRUCTOR(Dbdict);
 
-  NdbTick_Invalidate(&c_nsl_activate_start);
   c_nsl_fk_current_id = RNIL;
   c_nsl_fk_enabled = 0;
   c_nsl_fk_tick_armed = false;
@@ -3323,7 +3322,6 @@ void Dbdict::execNDB_STTOR(Signal *signal) {
       c_systemRestart = false;
       c_initialNodeRestart = false;
       c_nodeRestart = false;
-      c_nsl_activate_start = NdbTick_getCurrentTicks();
       sendNDB_STTORRY(signal);
       break;
     case 7:
@@ -4033,20 +4031,13 @@ void Dbdict::enableFKs(Signal *signal, Uint32 id) {
     const Int64 fk_elapsed =
         c_nsl_fk_timer.is_active() ? (Int64)c_nsl_fk_timer.elapsed_sec() : -1;
     c_nsl_fk_timer.stop_step();
+    /* The step itself completes in NDBCNTR at the end of start phase
+       100, after the remaining NDB start phases (Missra). */
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ACTIVATE,
                        NodeStartLog::subTotal(NodeStartLog::NSL_ACTIVATE,
                                               c_restartType),
                        c_restartType, "completed", fk_elapsed,
                        "%u foreign keys enabled", c_nsl_fk_enabled);
-    Int64 elapsed = -1;
-    if (NdbTick_IsValid(c_nsl_activate_start)) {
-      elapsed = (Int64)NdbTick_Elapsed(c_nsl_activate_start,
-                                       NdbTick_getCurrentTicks())
-                    .seconds();
-    }
-    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                       NodeStartLog::NSL_ACTIVATE, 0,
-                                       c_restartType, "completed", elapsed));
   }
   sendNDB_STTORRY(signal);
 }

@@ -484,11 +484,14 @@ class Ndbcntr : public SimulatedBlock {
    * [NODE-START] uniform start-step logging, see vm/NodeStartLog.hpp.
    * The admission timer covers step 3 (waiting for the NDBCNTR master
    * to grant our start in CNTR_START_CONF), c_nsl_start_ticks anchors
-   * the total elapsed time reported when the node has started.
+   * the total elapsed time reported when the node has started,
+   * c_nsl_activate_start the step 14 (activate) elapsed time: from
+   * NDB start phase 6 to the end of start phase 100 (Missra).
    */
   NodeStartLogTimer c_nsl_admission_timer;
   bool c_nsl_waiting_admission;
   NDB_TICKS c_nsl_start_ticks;
+  NDB_TICKS c_nsl_activate_start;
   NodeStartLogTimer c_nsl_barrier_timer;
 
   /**

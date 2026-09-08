@@ -58,19 +58,28 @@ class DblqhProxy : public LocalProxy {
   Uint8 *c_tableRec;  // bool => table exists
 
   /**
-   * [NODE-START] node-wide step completion, see vm/NodeStartLog.hpp.
+   * [NODE-START] node-wide step lines, see vm/NodeStartLog.hpp.
    * The workers print per-LDM lines; the proxy prints one
    * 'completed: all N LDMs' line, mirrored to the cluster log, at the
    * fan-ins that already exist: NDB_STTORRY of phase 1 (step 4
    * redo-init), LOCAL_RECOVERY_COMP_REP per phase (steps 8, 9, 10) and
    * START_RECCONF (step 11). Step 6 (redo-prepare) ends LDM-locally in
    * closingSrLab with no fan-in, so it has per-LDM lines only. The
-   * anchors give the node-wide elapsed time: from the first LDM
-   * starting a step to the last LDM finishing it.
+   * proxy also prints the node-wide 'started' lines that no single
+   * worker can place because a worker may own no fragment: step 8 at
+   * the first START_FRAGREQ (with the SR non-master step 7 completion,
+   * the START_FRAGREQs come from the master that distributed the
+   * metadata) and step 9 when the last LDM has finished its restore,
+   * which is when LGMAN receives its START_RECREQ. The anchors give
+   * the node-wide elapsed time: from the first LDM starting a step to
+   * the last LDM finishing it, except step 9 whose work starts only
+   * when the last LDM is done with step 8.
    */
   Uint32 c_nsl_start_type;
   NDB_TICKS c_nsl_redo_init_start;
   NDB_TICKS c_nsl_rec_start[4]; /* restore, undo-dd, redo-exec, index */
+  bool nsl_step_runs(Uint32 step) const;
+  void nsl_node_started(Uint32 step);
   void nsl_node_completed(Uint32 step, const NDB_TICKS &since);
   void sendNDB_STTORRY_nsl(Signal *, Uint32 ssId);
 

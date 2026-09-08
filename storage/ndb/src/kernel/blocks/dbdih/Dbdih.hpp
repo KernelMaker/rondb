@@ -2534,7 +2534,7 @@ class Dbdih : public SimulatedBlock {
   Uint32 c_nsl_perm_retries;
   Uint32 c_nsl_last_perm_ref;
   Uint32 c_nsl_frags_copied;
-  Uint32 c_nsl_sync_sub;            /* step 12 sub-step in progress (2, 3) */
+  Uint32 c_nsl_sync_sub;            /* step 12 sub-step in progress (1..3) */
   Uint32 c_nsl_sr_meta_phase;       /* SR step 7: 0 wait nodes, 1 sysfile, 2 schema */
   Uint32 c_nsl_sr_tabs_distributed; /* SR master: tables distributed to all nodes */
   Uint32 c_nsl_sr_tabs_received;    /* SR non-master: tables received from master */
@@ -2543,19 +2543,29 @@ class Dbdih : public SimulatedBlock {
   void nsl_start_step(Signal *signal, Uint32 step);
   void nsl_stop_step();
   void nsl_report_progress(Signal *signal);
+  /**
+   * System restart master: c_nsl_active_step value from the arrival of
+   * its own START_RECCONF (local recovery done, DBLQH printed steps
+   * 8-11) until the last node's. Not a step: the tick prints a
+   * step-less waiting line naming the nodes still recovering.
+   */
+  static constexpr Uint32 NSL_WAIT_RECCONF_TAG = 0xFFFFFFFE;
 
   /**
    * [NODE-START] view of a node restart this node is assisting as
-   * master (or as a live node invalidating LCPs): step 5 sub-step 3
-   * and the step 7 sub-steps. Reported on the same ZNSL_REPORT chain,
-   * marked with NSL_MASTER_TAG in theData[1].
+   * master (or as a live node invalidating LCPs): step 5 sub-step 2
+   * (initial node restart: the old LCPs are invalidated before start
+   * permission is granted) and the step 7 sub-steps, up to the
+   * START_MECONF that ends the node's step 7. Reported on the same
+   * ZNSL_REPORT chain, marked with NSL_MASTER_TAG in theData[1].
    */
   enum NslMasterState {
     NSL_M_IDLE = 0,
     NSL_M_INVALIDATE = 1,
     NSL_M_WAIT_PAUSE = 2,
     NSL_M_COPY_META = 3,
-    NSL_M_COPY_DICT = 4
+    NSL_M_COPY_DICT = 4,
+    NSL_M_INCLUDE = 5
   };
   static constexpr Uint32 NSL_MASTER_TAG = 0xFFFFFFFF;
   Uint32 c_nsl_master_state;

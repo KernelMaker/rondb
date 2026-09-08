@@ -82,7 +82,7 @@ struct NodeStartLog {
     NSL_ADMISSION = 3,      /* CNTR_START_REQ to NDBCNTR master       */
     NSL_REDO_INIT = 4,      /* create + init REDO log files           */
     NSL_START_PERM = 5,     /* DICT lock + START_PERMREQ              */
-    NSL_REDO_PREPARE = 6,   /* read REDO metadata, locate head/tail   */
+    NSL_REDO_PREPARE = 6,   /* read REDO log page headers (head)      */
     NSL_METADATA = 7,       /* schema + distribution synchronisation  */
     NSL_RESTORE = 8,        /* restore fragments from LCP             */
     NSL_UNDO_DD = 9,        /* disk data UNDO log + extent scan       */
@@ -200,20 +200,31 @@ struct NodeStartLog {
     return count;
   }
 
+  /**
+   * A sub-step is a phase of the step that runs on its own, one after
+   * the other, so that a sub-step line names what the node is doing
+   * right now. Work that is interleaved with another phase is not a
+   * sub-step of its own: the REDO log files are created and
+   * initialized one file at a time (step 4), the REDO execution
+   * limits are computed at the start of each of the four execution
+   * rounds (step 10), and the initial-node-restart LCP invalidation
+   * runs on the live nodes while the start permission handshake is
+   * pending (step 5, reported as assist lines under sub-step 2).
+   */
   static Uint32 subTotal(Uint32 step, Uint32 startType) {
     switch (step) {
       case NSL_INIT:
         return 4;
       case NSL_JOIN:
-        return 4;
+        return 3;
       case NSL_ADMISSION:
-        return 2;
+        return 1;
       case NSL_REDO_INIT:
-        return 2;
+        return 1;
       case NSL_START_PERM:
-        return (startType == NodeState::ST_INITIAL_NODE_RESTART) ? 3 : 2;
-      case NSL_REDO_PREPARE:
         return 2;
+      case NSL_REDO_PREPARE:
+        return 1;
       case NSL_METADATA:
         return 4;
       case NSL_RESTORE:
@@ -221,7 +232,7 @@ struct NodeStartLog {
       case NSL_UNDO_DD:
         return 4;
       case NSL_REDO_EXEC:
-        return 3;
+        return 2;
       case NSL_INDEX_REBUILD:
         return 1;
       case NSL_SYNCHRONIZE:
@@ -259,32 +270,32 @@ struct NodeStartLog {
         return (sub >= 1 && sub <= 4) ? n[sub - 1] : unknown;
       }
       case NSL_JOIN: {
-        static const char *n[4] = {"check local sysfile",
+        /* The node joins the heartbeat protocol as the inclusion
+           protocol commits; the step's completed line says so. */
+        static const char *n[3] = {"check local sysfile",
                                    "president discovery/election",
-                                   "node inclusion protocol",
-                                   "heartbeat inclusion"};
-        return (sub >= 1 && sub <= 4) ? n[sub - 1] : unknown;
-      }
-      case NSL_ADMISSION: {
-        static const char *n[2] = {"request start permission",
-                                   "start type granted"};
-        return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
-      }
-      case NSL_REDO_INIT: {
-        static const char *n[2] = {"create REDO log files",
-                                   "initialize REDO log files"};
-        return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
-      }
-      case NSL_START_PERM: {
-        static const char *n[3] = {"acquire DICT lock",
-                                   "start permission handshake",
-                                   "invalidate node LCPs"};
+                                   "node inclusion protocol"};
         return (sub >= 1 && sub <= 3) ? n[sub - 1] : unknown;
       }
-      case NSL_REDO_PREPARE: {
-        static const char *n[2] = {"read REDO log page headers",
-                                   "locate REDO head/tail"};
+      case NSL_ADMISSION: {
+        /* The granted start type is the detail of the completed line. */
+        return (sub == 1) ? "request start permission" : unknown;
+      }
+      case NSL_REDO_INIT: {
+        return (sub == 1) ? "create and initialize REDO log files" : unknown;
+      }
+      case NSL_START_PERM: {
+        /* In an initial node restart the live nodes invalidate this
+           node's old LCPs before the master grants sub-step 2; they
+           report that as assist lines under sub-step 2. */
+        static const char *n[2] = {"acquire DICT lock",
+                                   "start permission handshake"};
         return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
+      }
+      case NSL_REDO_PREPARE: {
+        /* Reading the page headers is what locates the head; the tail
+           is found by the execution limits of step 10. */
+        return (sub == 1) ? "read REDO log page headers" : unknown;
       }
       case NSL_METADATA: {
         if (startType == NodeState::ST_SYSTEM_RESTART ||
@@ -313,10 +324,10 @@ struct NodeStartLog {
         return (sub >= 1 && sub <= 4) ? n[sub - 1] : unknown;
       }
       case NSL_REDO_EXEC: {
-        static const char *n[3] = {"compute REDO execution limits",
-                                   "execute REDO log",
+        /* Each of the four execution rounds first computes its limits. */
+        static const char *n[2] = {"execute REDO log",
                                    "relocate REDO head and invalidate tail"};
-        return (sub >= 1 && sub <= 3) ? n[sub - 1] : unknown;
+        return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
       }
       case NSL_INDEX_REBUILD: {
         return (sub == 1) ? "rebuild ordered indexes" : unknown;

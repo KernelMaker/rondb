@@ -3166,6 +3166,7 @@ private:
   Uint32 c_nsl_indexes_total;
   Uint32 c_nsl_indexes_done;
   Uint32 c_nsl_frags_restored;
+  Uint32 c_nsl_redo_sub; /* step 10: 1 = execution rounds, 2 = head/tail */
   void nsl_start_step(Signal *signal, Uint32 step);
   void nsl_stop_step();
   bool nsl_is_reporter() const;

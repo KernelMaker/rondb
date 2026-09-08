@@ -4680,11 +4680,6 @@ class Dbdict : public SimulatedBlock {
   bool c_restart_enable_fks;
   bool c_nr_upgrade_fks_done;
   /**
-   * [NODE-START] step 14 (activate) elapsed-time anchor, set when
-   * NDB_STTOR phase 6 passes DICT, see vm/NodeStartLog.hpp.
-   */
-  NDB_TICKS c_nsl_activate_start;
-  /**
    * Step 14 FK sub-step: timer for its waiting heartbeat (CONTINUEB
    * ZNSL_FK_REPORT, armed at the sub-step start, ends with the timer),
    * the dictionary object id whose schema transaction is running (RNIL

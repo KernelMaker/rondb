@@ -120,6 +120,7 @@ void Dblqh::initData()
   c_nsl_indexes_total = 0;
   c_nsl_indexes_done = 0;
   c_nsl_frags_restored = 0;
+  c_nsl_redo_sub = 1;
   c_start_phase_9_waiting = false;
   c_outstanding_write_local_sysfile = false;
   c_send_gcp_saveref_needed = false;

@@ -2015,19 +2015,26 @@ void Dbdih::nsl_report_progress(Signal *signal) {
         }
         break;
       }
-      char detail[256];
-      const int pos = BaseString::snprintf(
+      char detail[320];
+      int pos = BaseString::snprintf(
           detail, sizeof(detail),
           "waiting for start permission from master node %u, %u retries",
           refToNode(cmasterdihref), c_nsl_perm_retries);
       if (c_nsl_last_perm_ref != 0 && pos > 0 &&
           (size_t)pos < sizeof(detail)) {
+        pos += BaseString::snprintf(
+            detail + pos, sizeof(detail) - pos, ", last refusal: %s",
+            (c_nsl_last_perm_ref == StartPermRef::ZNODE_ALREADY_STARTING_ERROR)
+                ? "another node is starting"
+                : "node start currently disallowed");
+      }
+      if (cstarttype == NodeState::ST_INITIAL_NODE_RESTART && pos > 0 &&
+          (size_t)pos < sizeof(detail)) {
+        /* Granted once every live node has invalidated this node's old
+           LCPs; they report that as assist lines under this sub-step. */
         BaseString::snprintf(detail + pos, sizeof(detail) - pos,
-                             ", last refusal: %s",
-                             (c_nsl_last_perm_ref ==
-                              StartPermRef::ZNODE_ALREADY_STARTING_ERROR)
-                                 ? "another node is starting"
-                                 : "node start currently disallowed");
+                             ", the live nodes first invalidate this node's"
+                             " old LCPs");
       }
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_START_PERM, 2,
                          cstarttype, "waiting", elapsed, "%s", detail);
@@ -2080,6 +2087,18 @@ void Dbdih::nsl_report_progress(Signal *signal) {
        * row/byte truth is in DBLQH's "Completed copy of fragment"
        * reporting.
        */
+      if (c_nsl_sync_sub == 1) {
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 1,
+                           cstarttype, "waiting", elapsed,
+                           "waiting for master node %u to accept the"
+                           " take-over (START_TOREQ)",
+                           refToNode(cmasterdihref));
+        if (c_nsl_timer.escalate_due()) {
+          jam();
+          infoEvent("%s", buf);
+        }
+        break;
+      }
       if (c_nsl_sync_sub == 3) {
         NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 3,
                            cstarttype, "progress", elapsed,
@@ -2093,18 +2112,18 @@ void Dbdih::nsl_report_progress(Signal *signal) {
                          c_nsl_frags_copied);
       break;
     }
-    case NodeStartLog::NSL_INDEX_REBUILD: {
-      /* System restart master: fan-in of START_RECCONF from all nodes. */
-      if (c_START_RECREQ_Counter.isWaitingFor(getOwnNodeId())) {
-        /* Our own DBLQH instances still report steps 8-11 themselves. */
-        break;
-      }
+    case NSL_WAIT_RECCONF_TAG: {
+      /**
+       * System restart master, own local recovery done (DBLQH printed
+       * steps 8-11): waiting for the other nodes to finish theirs.
+       */
       char nodes[NdbNodeBitmask::TextLength + 1];
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INDEX_REBUILD, 0,
-                         cstarttype, "waiting", elapsed,
-                         "local recovery of this node is complete, waiting"
-                         " for START_RECCONF from nodes %s",
-                         c_START_RECREQ_Counter.getNodeBitmask().getText(nodes));
+      NodeStartLog::wait_line(buf, sizeof(buf), elapsed,
+                              "local recovery of this node is complete,"
+                              " waiting for nodes %s to complete theirs"
+                              " (START_RECCONF)",
+                              c_START_RECREQ_Counter.getNodeBitmask().getText(
+                                  nodes));
       if (c_nsl_timer.escalate_due()) {
         jam();
         infoEvent("%s", buf);
@@ -2150,10 +2169,11 @@ void Dbdih::nsl_master_report(Signal *signal) {
   switch (c_nsl_master_state) {
     case NSL_M_INVALIDATE: {
       NodeStartLog::assist_line(buf, sizeof(buf), c_nsl_master_node,
-                                NodeStartLog::NSL_START_PERM, 3,
+                                NodeStartLog::NSL_START_PERM, 2,
                                 NodeState::ST_INITIAL_NODE_RESTART,
                                 "progress", elapsed,
-                                "invalidating node LCPs");
+                                "invalidating this node's old LCPs before"
+                                " its start permission is granted");
       break;
     }
     case NSL_M_WAIT_PAUSE: {
@@ -2178,6 +2198,16 @@ void Dbdih::nsl_master_report(Signal *signal) {
                                 NodeStartLog::NSL_METADATA, 3,
                                 NodeState::ST_NODE_RESTART, "waiting",
                                 elapsed, "DICT is copying the schema");
+      break;
+    }
+    case NSL_M_INCLUDE: {
+      NodeStartLog::assist_line(buf, sizeof(buf), c_nsl_master_node,
+                                NodeStartLog::NSL_METADATA, 4,
+                                NodeState::ST_NODE_RESTART, "waiting",
+                                elapsed,
+                                "waiting for the GCP boundary and for every"
+                                " node to include the node in the GCP and"
+                                " LCP protocols (INCL_NODEREQ)");
       break;
     }
     default:
@@ -4680,7 +4710,14 @@ void Dbdih::nodeDictStartConfLab(Signal* signal, Uint32 nodeId)
                               NodeState::ST_NODE_RESTART, "completed",
                               (Int64)c_nsl_master_timer.elapsed_sec(),
                               "schema copied");
-    nsl_master_set_state(signal, NSL_M_IDLE, 0);
+    /* Sub-step 4 ends with START_MECONF, see execUNBLO_DICTCONF. */
+    nsl_master_set_state(signal, NSL_M_INCLUDE, nodeId);
+    NodeStartLog::assist_line(buf, sizeof(buf), nodeId,
+                              NodeStartLog::NSL_METADATA, 4,
+                              NodeState::ST_NODE_RESTART, "started", -1,
+                              "including the node in the GCP and LCP"
+                              " protocols on all nodes at the next GCP"
+                              " boundary");
   }
 
   /*-------------------------------------------------------------------------
@@ -4898,6 +4935,18 @@ void Dbdih::execUNBLO_DICTCONF(Signal *signal) {
     ndbrequire(ret == 0);
     send_START_MECONF_data_v1(signal, ref);
   }
+  if (c_nsl_master_state == NSL_M_INCLUDE) {
+    jam();
+    /* [NODE-START] step 7 sub-step 4 done: START_MECONF ends the
+       starting node's step 7. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::assist_line(buf, sizeof(buf), nodeId,
+                              NodeStartLog::NSL_METADATA, 4,
+                              NodeState::ST_NODE_RESTART, "completed",
+                              (Int64)c_nsl_master_timer.elapsed_sec(),
+                              "node included in the protocols on all nodes");
+    nsl_master_set_state(signal, NSL_M_IDLE, 0);
+  }
   nodeResetStart(signal);
 
   /**
@@ -5098,9 +5147,11 @@ void Dbdih::execSTART_INFOREQ(Signal *signal) {
     {
       char buf[NodeStartLog::BUF_SIZE];
       NodeStartLog::assist_line(buf, sizeof(buf), startNode,
-                                NodeStartLog::NSL_START_PERM, 3,
+                                NodeStartLog::NSL_START_PERM, 2,
                                 NodeState::ST_INITIAL_NODE_RESTART,
-                                "started", -1, "invalidating node LCPs");
+                                "started", -1,
+                                "invalidating this node's old LCPs before"
+                                " its start permission is granted");
     }
     setAllowNodeStart(startNode, false);
     init_invalidate_node_lcp(startNode);
@@ -8589,6 +8640,22 @@ void Dbdih::execSTART_TOCONF(Signal *signal) {
   c_mainTakeOverPtr = takeOverPtr;
   c_mainTakeOverPtr.p->m_number_of_copy_threads = c_max_takeover_copy_threads;
   c_mainTakeOverPtr.p->m_copy_threads_completed = 0;
+  if (c_nsl_active_step == NodeStartLog::NSL_SYNCHRONIZE &&
+      c_nsl_sync_sub == 1) {
+    jam();
+    /* [NODE-START] step 12: sub-step 1 done, the copy (sub-step 2) begins. */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 1,
+                       cstarttype, "completed",
+                       (Int64)c_nsl_timer.elapsed_sec(),
+                       "take-over accepted by master node %u, %u copy"
+                       " threads",
+                       refToNode(cmasterdihref), c_max_takeover_copy_threads);
+    c_nsl_sync_sub = 2;
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 2,
+                       cstarttype, "started", -1,
+                       "copying fragments from live nodes");
+  }
   c_activeThreadTakeOverPtr.i = RNIL;
   check_take_over_completed_correctly();
 
@@ -11510,11 +11577,11 @@ void Dbdih::invalidateNodeLCP(Signal *signal,
         jam();
         char buf[NodeStartLog::BUF_SIZE];
         NodeStartLog::assist_line(buf, sizeof(buf), nodeId,
-                                  NodeStartLog::NSL_START_PERM, 3,
+                                  NodeStartLog::NSL_START_PERM, 2,
                                   NodeState::ST_INITIAL_NODE_RESTART,
                                   "completed",
                                   (Int64)c_nsl_master_timer.elapsed_sec(),
-                                  "invalidated node LCPs");
+                                  "old LCPs invalidated");
         nsl_master_set_state(signal, NSL_M_IDLE, 0);
       }
       if (getNodeStatus(nodeId) == NodeRecord::STARTING) {
@@ -20856,11 +20923,10 @@ void Dbdih::completeRestartLab(Signal *signal) {
                        c_nsl_frags_distributed);
   }
   /**
-   * The master's own local recovery is reported by its DBLQH instances.
-   * Once that is done the master only waits for the other nodes'
-   * START_RECCONF; the ZNSL_REPORT tick names them under step 11.
+   * The master's own local recovery (steps 8-11) is reported by its
+   * DBLQH instances; the wait for the other nodes' START_RECCONF is
+   * armed when its own arrives, see execSTART_RECCONF.
    */
-  nsl_start_step(signal, NodeStartLog::NSL_INDEX_REBUILD);
   sendLoopMacro(START_RECREQ, sendSTART_RECREQ, RNIL);
 }  // completeRestartLab()
 
@@ -20895,7 +20961,7 @@ void Dbdih::execSTART_RECCONF(Signal *signal) {
     infoEvent("Bring Database On-line Starting on node %u", senderNodeId);
 
     c_nsl_frags_copied = 0;
-    c_nsl_sync_sub = 2;
+    c_nsl_sync_sub = 1; /* START_TOREQ outstanding, see execSTART_TOCONF */
     nsl_start_step(signal, NodeStartLog::NSL_SYNCHRONIZE);
     {
       char buf[NodeStartLog::BUF_SIZE];
@@ -20916,14 +20982,23 @@ void Dbdih::execSTART_RECCONF(Signal *signal) {
 
   /* No take over record in the system restart case here */
   ndbrequire(senderData == RNIL);
+  if (senderNodeId == getOwnNodeId()) {
+    jam();
+    /**
+     * [NODE-START] this node's local recovery is done (its DBLQH printed
+     * steps 8-11); from here the master waits for the other nodes'
+     * START_RECCONF. The ZNSL_REPORT tick prints a step-less waiting
+     * line naming them; stopped below when the last one has arrived.
+     */
+    nsl_start_step(signal, NSL_WAIT_RECCONF_TAG);
+  }
   /* --------------------------------------------------------------------- */
   // This was the system restart case. We set the state indicating that the
   // node has completed restoration of all fragments.
   /* --------------------------------------------------------------------- */
   receiveLoopMacro(START_RECREQ, senderNodeId);
-  if (c_nsl_active_step == NodeStartLog::NSL_INDEX_REBUILD) {
+  if (c_nsl_active_step == NSL_WAIT_RECCONF_TAG) {
     jam();
-    /* Every node completed local recovery; the DBLQH lines carry the completions. */
     nsl_stop_step();
   }
 

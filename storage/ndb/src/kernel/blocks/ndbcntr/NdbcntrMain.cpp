@@ -3377,6 +3377,8 @@ void Ndbcntr::waitpoint51Lab(Signal *signal) {
   // THIS IS NDB START PHASE 6 WHICH IS FOR ALL BLOCKS IN ALL NODES.
   /*---------------------------------------------------------------------------*/
   g_eventLogger->info("Start NDB start phase 6");
+  /* [NODE-START] step 14 starts here (DIH prints the line in NDB_STTOR 6). */
+  c_nsl_activate_start = NdbTick_getCurrentTicks();
   cinternalStartphase = cstartPhase - 1;
   cndbBlocksCount = 0;
   ph6BLab(signal);
@@ -5910,6 +5912,27 @@ void Ndbcntr::Missra::sendNextSTTOR(Signal *signal) {
     NodeState newState(NodeState::SL_STARTING, currentStartPhase,
                        (NodeState::StartType)cntr.ctypeOfStart);
     cntr.updateNodeState(signal, newState);
+
+    if (currentStartPhase == 100) {
+      jam();
+      /**
+       * [NODE-START] step 14 (activate) ends here: NDB start phase 6
+       * (GCP start), the FK enabling of NDB start phase 7, NDB start
+       * phase 8 and start phases 9 and 100 are done. Start phase 101
+       * is the SUMA handover (step 15), 110 the restart barrier (16).
+       */
+      char buf[NodeStartLog::BUF_SIZE];
+      const Int64 elapsed =
+          NdbTick_IsValid(cntr.c_nsl_activate_start)
+              ? (Int64)NdbTick_Elapsed(cntr.c_nsl_activate_start,
+                                       NdbTick_getCurrentTicks())
+                    .seconds()
+              : -1;
+      cntr.infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                              NodeStartLog::NSL_ACTIVATE, 0,
+                                              cntr.ctypeOfStart, "completed",
+                                              elapsed));
+    }
 
     if (start != 0) {
       /**

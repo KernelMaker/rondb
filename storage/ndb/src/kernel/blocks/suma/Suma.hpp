@@ -632,6 +632,15 @@ class Suma : public SimulatedBlock {
    * and takes over subscription buckets in start phase 101.
    */
   NodeStartLogTimer c_nsl_handover_timer;
+  /**
+   * Sub-step 2: the switchover GCI (0 until SUMA_HANDOVER_REQ is sent)
+   * and whether ONE HANDOVER_WAIT_TIMEOUT CONTINUEB is pending. The
+   * flag is cleared when that signal is consumed and every arming goes
+   * through nsl_arm_handover_tick(), so two tick chains cannot coexist.
+   */
+  Uint32 c_nsl_handover_gci;
+  bool c_nsl_handover_tick_armed;
+  void nsl_arm_handover_tick(Signal *signal, bool force);
 
   /**
    * for graceful shutdown

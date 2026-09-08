@@ -234,33 +234,45 @@ void DblqhProxy::sendNDB_STTORRY_nsl(Signal *signal, Uint32 ssId) {
 }
 
 /**
- * One node-wide 'completed' line per LQH step at its fan-in. The step
- * runs on the workers only for the start types below; otherwise the
- * workers printed 'skipped' and the fan-in passes trivially.
+ * The LQH steps run on the workers only for the start types below;
+ * otherwise the workers printed 'skipped' and the fan-in passes
+ * trivially, so the proxy prints no node-wide line either.
  */
-void DblqhProxy::nsl_node_completed(Uint32 step, const NDB_TICKS &since) {
+bool DblqhProxy::nsl_step_runs(Uint32 step) const {
   const Uint32 t = c_nsl_start_type;
-  bool runs = false;
   switch (step) {
     case NodeStartLog::NSL_REDO_INIT:
-      runs = (t == NodeState::ST_INITIAL_START ||
+      return (t == NodeState::ST_INITIAL_START ||
               t == NodeState::ST_INITIAL_NODE_RESTART);
-      break;
     case NodeStartLog::NSL_RESTORE:
     case NodeStartLog::NSL_UNDO_DD:
     case NodeStartLog::NSL_REDO_EXEC:
-      runs = (t == NodeState::ST_NODE_RESTART ||
+      return (t == NodeState::ST_NODE_RESTART ||
               t == NodeState::ST_SYSTEM_RESTART);
-      break;
     case NodeStartLog::NSL_INDEX_REBUILD:
-      runs = (t == NodeState::ST_NODE_RESTART ||
+      return (t == NodeState::ST_NODE_RESTART ||
               t == NodeState::ST_SYSTEM_RESTART ||
               t == NodeState::ST_INITIAL_NODE_RESTART);
-      break;
     default:
-      break;
+      return false;
   }
-  if (!runs) {
+}
+
+/* One node-wide 'started' line, mirrored to the cluster log. */
+void DblqhProxy::nsl_node_started(Uint32 step) {
+  if (!nsl_step_runs(step)) {
+    jam();
+    return;
+  }
+  char buf[NodeStartLog::BUF_SIZE];
+  infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0,
+                                     c_nsl_start_type, "started", -1));
+}
+
+/* One node-wide 'completed' line per LQH step at its fan-in. */
+void DblqhProxy::nsl_node_completed(Uint32 step, const NDB_TICKS &since) {
+  const Uint32 t = c_nsl_start_type;
+  if (!nsl_step_runs(step)) {
     jam();
     return;
   }
@@ -1203,8 +1215,29 @@ void DblqhProxy::execSTART_FRAGREQ(Signal *signal) {
   jam();
   if (!NdbTick_IsValid(c_nsl_rec_start[0])) {
     jam();
-    /* [NODE-START] step 8 begins on a worker at its first START_FRAGREQ. */
+    /**
+     * [NODE-START] step 8 begins at the first START_FRAGREQ. In a
+     * system restart the requests come from the master's DIH, which
+     * read and distributed the metadata (step 7) for this node too;
+     * account for that step here on the other nodes, right before
+     * their restore starts. START_FRAGREQs without an LCP also arrive
+     * in an initial node restart, where the workers print step 8 as
+     * skipped; nsl_node_started prints nothing for that start type.
+     */
     c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
+    const Uint32 sender = refToNode(signal->getSendersBlockRef());
+    if (c_nsl_start_type == NodeState::ST_SYSTEM_RESTART &&
+        sender != getOwnNodeId()) {
+      jam();
+      char buf[NodeStartLog::BUF_SIZE];
+      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                         NodeStartLog::NSL_METADATA, 0,
+                                         c_nsl_start_type, "completed", -1,
+                                         "metadata distributed by master"
+                                         " node %u",
+                                         sender));
+    }
+    nsl_node_started(NodeStartLog::NSL_RESTORE);
   }
   StartFragReq *req = (StartFragReq *)signal->getDataPtrSend();
   Uint32 instanceNo = getInstance(req->tableId, req->fragId);
@@ -1285,15 +1318,18 @@ void DblqhProxy::execLOCAL_RECOVERY_COMP_REP(Signal *signal) {
     case LocalRecoveryCompleteRep::RESTORE_FRAG_COMPLETED: {
       jam();
       ss.restoreFragCompletedCount++;
-      if (ss.restoreFragCompletedCount == 1) {
-        jam();
-        c_nsl_rec_start[1] = NdbTick_getCurrentTicks(); /* first LDM: undo */
-      }
       if (ss.restoreFragCompletedCount < c_workers) {
         jam();
         return;
       }
       nsl_node_completed(NodeStartLog::NSL_RESTORE, c_nsl_rec_start[0]);
+      /**
+       * Step 9 starts now, not at the first LDM's restore end: LGMAN
+       * receives its START_RECREQ only once every LDM has sent one
+       * (the START_RECREQ_2 fan-in), so nothing runs before this.
+       */
+      c_nsl_rec_start[1] = NdbTick_getCurrentTicks();
+      nsl_node_started(NodeStartLog::NSL_UNDO_DD);
       break;
     }
     case LocalRecoveryCompleteRep::UNDO_DD_COMPLETED: {

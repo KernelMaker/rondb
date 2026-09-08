@@ -28925,38 +28925,17 @@ void Dblqh::execSTART_FRAGREQ(Signal *signal) {
   /**
    * Placed at the end of the handler: nsl_start_step writes
    * signal->theData for its CONTINUEB, the request data must have
-   * been consumed before that.
+   * been consumed before that. Per-LDM timer only: the node-wide
+   * 'started' line (and the SR non-master step 7 completion) is printed
+   * by DblqhProxy at its first START_FRAGREQ, since a single worker
+   * may own no fragment at all.
    */
   if (c_nsl_active_step != NodeStartLog::NSL_RESTORE &&
       (cstartType == NodeState::ST_SYSTEM_RESTART ||
        cstartType == NodeState::ST_NODE_RESTART)) {
     jam();
-    if (cstartType == NodeState::ST_SYSTEM_RESTART &&
-        c_master_node_id != getOwnNodeId() && nsl_is_reporter()) {
-      jam();
-      /**
-       * In a system restart the metadata (step 7) is read and
-       * distributed by the master; account for it here on the other
-       * nodes, right before their restore starts. The master is
-       * identified via READ_NODESCONF: cmasterDihBlockref is not set
-       * until START_RECREQ, and the signal sender is always the local
-       * proxy in ndbmtd.
-       */
-      char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                         NodeStartLog::NSL_METADATA, 0,
-                                         cstartType, "completed", -1,
-                                         "metadata distributed by the"
-                                         " master node"));
-    }
     c_nsl_frags_restored = 0;
     nsl_start_step(signal, NodeStartLog::NSL_RESTORE);
-    if (nsl_is_reporter()) {
-      char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                         NodeStartLog::NSL_RESTORE, 0,
-                                         cstartType, "started", -1));
-    }
   }
 
   if (nodeRestorableGci != 0 && c_lcp_restoring_fragments.isEmpty()) {
@@ -29956,6 +29935,7 @@ void Dblqh::execSET_LOCAL_LCP_ID_CONF(Signal *signal) {
       c_nsl_active_step != NodeStartLog::NSL_REDO_EXEC) {
     jam();
     nsl_start_step(signal, NodeStartLog::NSL_REDO_EXEC);
+    c_nsl_redo_sub = 1;
     if (nsl_is_reporter()) {
       char buf[NodeStartLog::BUF_SIZE];
       infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
@@ -29998,6 +29978,15 @@ void Dblqh::rebuildOrderedIndexes(Signal *signal, Uint32 tableId) {
     if (c_nsl_active_step == NodeStartLog::NSL_REDO_EXEC) {
       jam();
       char buf[NodeStartLog::BUF_SIZE];
+      if (c_nsl_redo_sub == 2) {
+        jam();
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 2,
+                           cstartType, "completed",
+                           (Int64)c_nsl_timer.elapsed_sec(),
+                           "LDM(%u): REDO head relocated, log tail"
+                           " invalidated",
+                           instance());
+      }
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 0,
                          cstartType, "completed",
                          (Int64)c_nsl_timer.elapsed_sec(), "LDM(%u)",
@@ -30396,6 +30385,23 @@ void Dblqh::continue_execSrCompletedLab(Signal *signal) {
         "LDM(%u): REDO log execution completed, now"
         " finding the new log head + tail",
         instance());
+    if (c_nsl_active_step == NodeStartLog::NSL_REDO_EXEC) {
+      jam();
+      /* [NODE-START] step 10: the execution rounds are done, the head
+         relocation and tail invalidation (sub-step 2) begin. */
+      char buf[NodeStartLog::BUF_SIZE];
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 1,
+                         cstartType, "completed",
+                         (Int64)c_nsl_timer.elapsed_sec(),
+                         "LDM(%u): %u rounds executed", instance(),
+                         csrPhasesCompleted);
+      c_nsl_redo_sub = 2;
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 2,
+                         cstartType, "started", -1,
+                         "LDM(%u): relocating the REDO head and invalidating"
+                         " the log tail",
+                         instance());
+    }
     LogPartRecordPtr logPartPtr;
     for (logPartPtr.i = 0; logPartPtr.i < clogPartFileSize; logPartPtr.i++) {
       jam();
@@ -38598,8 +38604,10 @@ void Dblqh::writeDbgInfoPageHeader(LogPageRecordPtr logP,
 
 bool Dblqh::nsl_is_reporter() const {
   /**
-   * Node-level [NODE-START] boundary lines are emitted by one LQH
-   * instance only: instance 0 in ndbd, worker instance 1 in ndbmtd.
+   * Node-level [NODE-START] boundary lines that need no proxy view are
+   * emitted by worker instance 1 only (instance 0 without a proxy).
+   * Lines that depend on which LDM owns fragments (step 8 started,
+   * step 9 started, SR step 7 completed) come from DblqhProxy.
    * Per-LDM progress and completion lines come from every instance.
    */
   return instance() <= 1;
@@ -38631,7 +38639,7 @@ void Dblqh::nsl_report_progress(Signal *signal) {
                              ? (Uint32)((Uint64(c_logMBytesInitDone) * 100) /
                                         c_totallogMBytes)
                              : 0;
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_INIT, 2,
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_INIT, 1,
                          cstartType, "progress", elapsed,
                          "LDM(%u): initialized %u/%u MBytes (%u%%),"
                          " %u/%u files",
@@ -38647,19 +38655,19 @@ void Dblqh::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_REDO_EXEC: {
-      if (c_executing_redo_log == 0) {
-        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 1,
-                           cstartType, "progress", elapsed,
-                           "LDM(%u): computing REDO execution limits",
-                           instance());
-        break;
-      }
       char detail[384];
-      const Uint32 round =
-          (csrPhasesCompleted < 3) ? (csrPhasesCompleted + 1) : 4;
-      int pos = BaseString::snprintf(detail, sizeof(detail),
-                                     "LDM(%u): round %u/4", instance(),
-                                     round);
+      int pos;
+      if (c_nsl_redo_sub == 2) {
+        pos = BaseString::snprintf(detail, sizeof(detail),
+                                   "LDM(%u): relocating the REDO head and"
+                                   " invalidating the log tail",
+                                   instance());
+      } else {
+        const Uint32 round =
+            (csrPhasesCompleted < 3) ? (csrPhasesCompleted + 1) : 4;
+        pos = BaseString::snprintf(detail, sizeof(detail),
+                                   "LDM(%u): round %u/4", instance(), round);
+      }
       LogPartRecordPtr logPartPtr;
       for (logPartPtr.i = 0; logPartPtr.i < clogPartFileSize &&
                              pos > 0 && (size_t)pos < sizeof(detail);
@@ -38675,8 +38683,9 @@ void Dblqh::nsl_report_progress(Signal *signal) {
                                     filePtr.p->fileNo,
                                     filePtr.p->currentMbyte);
       }
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC, 2,
-                         cstartType, "progress", elapsed, "%s", detail);
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_EXEC,
+                         c_nsl_redo_sub, cstartType, "progress", elapsed,
+                         "%s", detail);
       break;
     }
     case NodeStartLog::NSL_INDEX_REBUILD: {
@@ -38695,10 +38704,12 @@ void Dblqh::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_UNDO_DD: {
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 2,
-                         cstartType, "progress", elapsed,
-                         "LDM(%u): applying disk data UNDO log, flushing"
-                         " the page cache or scanning tablespace extents",
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 0,
+                         cstartType, "waiting", elapsed,
+                         "LDM(%u): restore done, waiting for the disk data"
+                         " recovery by LGMAN and TSMAN (it runs once every"
+                         " LDM has finished restore, see their sub-step"
+                         " lines)",
                          instance());
       break;
     }
@@ -39369,13 +39380,12 @@ void Dblqh::mark_end_of_lcp_restore(Signal *signal) {
                          c_fragmentsStarted);
       nsl_stop_step();
     }
+    /**
+     * Per-LDM timer only: the node-wide 'started' line is printed by
+     * DblqhProxy when the last LDM has finished its restore, which is
+     * when LGMAN actually receives its START_RECREQ.
+     */
     nsl_start_step(signal, NodeStartLog::NSL_UNDO_DD);
-    if (nsl_is_reporter()) {
-      char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                         NodeStartLog::NSL_UNDO_DD, 0,
-                                         cstartType, "started", -1));
-    }
   }
   g_eventLogger->info("LDM(%u): Starting DD Undo log application", instance());
 
