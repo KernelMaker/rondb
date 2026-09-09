@@ -9624,6 +9624,9 @@ void Dblqh::execLQHKEYREQ(Signal *signal) {
       useStat.m_fragCopyRowsDel++;
     else
       useStat.m_fragCopyRowsIns++;
+    /* [NODE-START] steps 8 and 12 progress, published per 1024 rows
+       and at each fragment's end. */
+    if (++c_nsl_copy_row_ops_batch == 1024) nsl_copy_row_ops_flush();
     
     useStat.m_fragBytesCopied+= (signal->length() << 2);
   }
@@ -22872,6 +22875,7 @@ void Dblqh::closeCopyRequestLab(Signal *signal,
 /*  COPY_ACTIVEREQ: Change state of a fragment to ACTIVE. */
 /* ****************************************************** */
 void Dblqh::execCOPY_ACTIVEREQ(Signal *signal) {
+  nsl_copy_row_ops_flush(); /* [NODE-START] the fragment's copy is done */
   /**
    * We come here two times for normal stored tables.
    * We also come here two times for ordered index tables which
@@ -28932,9 +28936,13 @@ void Dblqh::execSTART_FRAGREQ(Signal *signal) {
    */
   if (c_nsl_active_step != NodeStartLog::NSL_RESTORE &&
       (cstartType == NodeState::ST_SYSTEM_RESTART ||
-       cstartType == NodeState::ST_NODE_RESTART)) {
+       cstartType == NodeState::ST_NODE_RESTART ||
+       cstartType == NodeState::ST_INITIAL_NODE_RESTART)) {
     jam();
     c_nsl_frags_restored = 0;
+    c_nsl_copy_row_ops_batch = 0;
+    c_nsl_copy_row_ops.store(0, std::memory_order_relaxed);
+    nsl_restore_row_ops_reset();
     nsl_start_step(signal, NodeStartLog::NSL_RESTORE);
   }
 
@@ -29353,6 +29361,7 @@ void Dblqh::move_start_gci_forward(Signal *signal, Uint32 new_start_gci) {
 void Dblqh::execRESTORE_LCP_CONF(Signal *signal) {
   jamEntry();
   c_nsl_frags_restored++;
+  nsl_copy_row_ops_flush(); /* [NODE-START] a copied fragment is done */
   RestoreLcpConf* conf= (RestoreLcpConf*)signal->getDataPtr();
   TablerecPtr tabPtr;
   ndbrequire(getTableFragmentrec(conf->tableId,
@@ -38666,10 +38675,81 @@ void Dblqh::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_REDO_PREPARE: {
+      /**
+       * Per log part: the file whose page headers are being read and
+       * its MByte position. The files are opened one by one for the
+       * search (front page, header of the last file, headers of the
+       * earlier files) and are OPEN while their pages are read; a part
+       * that has finished the search says so.
+       */
+      char detail[384];
+      int pos = BaseString::snprintf(detail, sizeof(detail),
+                                     "LDM(%u): reading REDO log page headers",
+                                     instance());
+      LogPartRecordPtr logPartPtr;
+      for (logPartPtr.i = 0; logPartPtr.i < clogPartFileSize && pos > 0 &&
+                             (size_t)pos < sizeof(detail);
+           logPartPtr.i++) {
+        ptrAss(logPartPtr, logPartRecord);
+        if (logPartPtr.p->logPartState ==
+            LogPartRecord::SR_FIRST_PHASE_COMPLETED) {
+          pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                                      ", part %u done",
+                                      logPartPtr.p->logPartNo);
+          continue;
+        }
+        /* Prefer the file being read (OPEN) over one being opened or
+           closed; several files can be in flight at once. */
+        Uint32 reading = RNIL, opening = RNIL, closing = RNIL;
+        LogFileRecordPtr filePtr;
+        filePtr.i = logPartPtr.p->firstLogfile;
+        for (Uint32 f = 0; f < logPartPtr.p->noLogFiles && filePtr.i != RNIL;
+             f++) {
+          ptrCheckGuard(filePtr, clogFileFileSize, logFileRecord);
+          switch (filePtr.p->logFileStatus) {
+            case LogFileRecord::OPEN:
+              if (reading == RNIL) reading = filePtr.i;
+              break;
+            case LogFileRecord::OPEN_SR_FRONTPAGE:
+            case LogFileRecord::OPEN_SR_LAST_FILE:
+            case LogFileRecord::OPEN_SR_NEXT_FILE:
+              if (opening == RNIL) opening = filePtr.i;
+              break;
+            case LogFileRecord::CLOSING_SR:
+            case LogFileRecord::CLOSING_SR_FRONTPAGE:
+              if (closing == RNIL) closing = filePtr.i;
+              break;
+            default:
+              break;
+          }
+          filePtr.i = filePtr.p->nextLogFile;
+        }
+        if (reading != RNIL) {
+          filePtr.i = reading;
+          ptrCheckGuard(filePtr, clogFileFileSize, logFileRecord);
+          pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                                      ", part %u reading file %u MB %u",
+                                      logPartPtr.p->logPartNo,
+                                      filePtr.p->fileNo,
+                                      filePtr.p->currentMbyte);
+        } else if (opening != RNIL || closing != RNIL) {
+          filePtr.i = (opening != RNIL) ? opening : closing;
+          ptrCheckGuard(filePtr, clogFileFileSize, logFileRecord);
+          pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                                      ", part %u %s file %u",
+                                      logPartPtr.p->logPartNo,
+                                      (opening != RNIL) ? "opening"
+                                                        : "closing",
+                                      filePtr.p->fileNo);
+        } else {
+          pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
+                                      ", part %u waiting for the file"
+                                      " system",
+                                      logPartPtr.p->logPartNo);
+        }
+      }
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_PREPARE, 1,
-                         cstartType, "progress", elapsed,
-                         "LDM(%u): reading REDO log page headers",
-                         instance());
+                         cstartType, "progress", elapsed, "%s", detail);
       break;
     }
     case NodeStartLog::NSL_REDO_EXEC: {
@@ -38748,11 +38828,39 @@ void Dblqh::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_RESTORE: {
+      /**
+       * Fragments done of those assigned, then the row operations
+       * applied so far with the rate: the LCP restore operations of all
+       * restorers working for this LDM plus the rows received for the
+       * fragments that are copied from a live node instead. No estimate:
+       * a fragment's row count is only known once its LCP control file
+       * has been read, so there is no total up front.
+       */
+      char detail[256];
+      const Uint64 ops =
+          nsl_restore_row_ops() + nsl_copy_row_ops() + c_nsl_copy_row_ops_batch;
+      int pos;
+      if (cstartType == NodeState::ST_INITIAL_NODE_RESTART) {
+        pos = BaseString::snprintf(
+            detail, sizeof(detail),
+            "LDM(%u): copied %u/%u assigned fragments from live nodes,"
+            " %llu row operations so far",
+            instance(), c_nsl_frags_restored, c_fragmentsStarted,
+            (unsigned long long)ops);
+      } else {
+        pos = BaseString::snprintf(
+            detail, sizeof(detail),
+            "LDM(%u): restored %u/%u assigned fragments, %llu row operations"
+            " so far",
+            instance(), c_nsl_frags_restored, c_fragmentsStarted,
+            (unsigned long long)ops);
+      }
+      if (pos > 0 && (size_t)pos < sizeof(detail)) {
+        NodeStartLog::appendRateEta(detail + pos, sizeof(detail) - pos, ops,
+                                    0, elapsed, "row operations");
+      }
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_RESTORE, 2,
-                         cstartType, "progress", elapsed,
-                         "LDM(%u): restored %u/%u assigned fragments",
-                         instance(), c_nsl_frags_restored,
-                         c_fragmentsStarted);
+                         cstartType, "progress", elapsed, "%s", detail);
       break;
     }
     case NodeStartLog::NSL_UNDO_DD: {
@@ -39405,33 +39513,43 @@ void Dblqh::mark_end_of_lcp_restore(Signal *signal) {
       instance(), c_fragmentsStarted,
       c_fragmentsStarted - c_fragmentsStartedWithCopy,
       c_fragmentsStartedWithCopy);
-  if (cstartType == NodeState::ST_INITIAL_NODE_RESTART) {
+  if (c_nsl_active_step == NodeStartLog::NSL_RESTORE) {
     jam();
     /**
-     * An initial node restart passes through the restore and UNDO
-     * paths with nothing to do; the plan lists both as skipped.
+     * Step 8 ends for this LDM. In an initial node restart the
+     * fragments were copied from the live nodes instead of being
+     * restored from an LCP (START_FRAGREQ with SFR_COPY_FRAG).
      */
+    char buf[NodeStartLog::BUF_SIZE];
+    const unsigned long long ops =
+        nsl_restore_row_ops() + nsl_copy_row_ops();
+    if (cstartType == NodeState::ST_INITIAL_NODE_RESTART) {
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_RESTORE, 0,
+                         cstartType, "completed",
+                         (Int64)c_nsl_timer.elapsed_sec(),
+                         "LDM(%u): %u fragments copied from live nodes,"
+                         " %llu row operations",
+                         instance(), c_fragmentsStarted, ops);
+    } else {
+      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_RESTORE, 0,
+                         cstartType, "completed",
+                         (Int64)c_nsl_timer.elapsed_sec(),
+                         "LDM(%u): %u fragments, %llu row operations",
+                         instance(), c_fragmentsStarted, ops);
+    }
+    nsl_stop_step();
+  }
+  if (cstartType == NodeState::ST_INITIAL_NODE_RESTART) {
+    jam();
+    /* Nothing to undo after a copy; the plan lists step 9 as skipped. */
     if (nsl_is_reporter()) {
       char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
-                                            NodeStartLog::NSL_RESTORE,
-                                            cstartType));
       infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
                                             NodeStartLog::NSL_UNDO_DD,
                                             cstartType));
     }
   } else {
     jam();
-    if (c_nsl_active_step == NodeStartLog::NSL_RESTORE) {
-      jam();
-      char buf[NodeStartLog::BUF_SIZE];
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_RESTORE, 0,
-                         cstartType, "completed",
-                         (Int64)c_nsl_timer.elapsed_sec(),
-                         "LDM(%u): %u fragments", instance(),
-                         c_fragmentsStarted);
-      nsl_stop_step();
-    }
     /**
      * Per-LDM timer only: the node-wide 'started' line is printed by
      * DblqhProxy when the last LDM has finished its restore, which is
@@ -40267,3 +40385,22 @@ void Dblqh::checkInitGlobalVariables() {
   }
 }
 #endif
+
+/**
+ * [NODE-START] step 12 progress source for DBDIH (declared in
+ * NodeStartLog.hpp): rows received on the fragment copy path by every
+ * DBLQH worker. In ndbd the single DBLQH is instance 0; in ndbmtd
+ * instance 0 is the proxy and the workers are 1..ndbMtLqhWorkers.
+ */
+Uint64 nsl_lqh_copy_row_ops_total() {
+  if (globalData.ndbMtLqhWorkers == 0) {
+    Dblqh *lqh = (Dblqh *)globalData.getBlock(DBLQH);
+    return (lqh != nullptr) ? lqh->nsl_copy_row_ops() : 0;
+  }
+  Uint64 total = 0;
+  for (Uint32 i = 1; i <= globalData.ndbMtLqhWorkers; i++) {
+    Dblqh *lqh = (Dblqh *)globalData.getBlock(DBLQH, i);
+    if (lqh != nullptr) total += lqh->nsl_copy_row_ops();
+  }
+  return total;
+}

@@ -3118,6 +3118,29 @@ public:
   alignas(NDB_CL) Uint32 cfirstfreeTcConrecShared;
   Uint32 ctcNumFreeShared;
   Uint32 ctcConnectReservedShared;
+
+  /**
+   * [NODE-START] step 8 progress: row operations applied to this LDM's
+   * fragments so far by the LCP restore. A fragment is restored by this
+   * LDM's RESTORE instance or by a recover thread (QRESTORE) on its
+   * behalf, so the restorers add to the counter through the request's
+   * sender reference and it is atomic. Reset when the step starts, read
+   * by the report tick together with c_nsl_copy_row_ops.
+   */
+  void nsl_restore_row_ops_reset() {
+    c_nsl_restore_row_ops.store(0, std::memory_order_relaxed);
+  }
+  void nsl_restore_row_ops_add(Uint64 ops) {
+    c_nsl_restore_row_ops.fetch_add(ops, std::memory_order_relaxed);
+  }
+  Uint64 nsl_restore_row_ops() const {
+    return c_nsl_restore_row_ops.load(std::memory_order_relaxed);
+  }
+  /* Rows received on the fragment copy path (steps 8 and 12); the
+     DBDIH step 12 tick sums the workers from the main thread. */
+  Uint64 nsl_copy_row_ops() const {
+    return c_nsl_copy_row_ops.load(std::memory_order_relaxed);
+  }
 private:
   struct TcNodeFailRecord {
     enum TcFailStatus {
@@ -3168,6 +3191,25 @@ private:
   Uint32 c_nsl_index_current;    /* step 11: index table being built */
   Uint64 c_nsl_index_rows_total; /* step 11: rows the builds will scan */
   Uint32 c_nsl_frags_restored;
+  std::atomic<Uint64> c_nsl_restore_row_ops{0}; /* step 8, see accessors */
+  /**
+   * Rows received by the copy of a fragment from a live node: in step
+   * 8 for a fragment without a usable LCP (every fragment in an initial
+   * node restart), in step 12 for the changes since the LCP. Counted
+   * in this thread in c_nsl_copy_row_ops_batch and published to the
+   * atomic every 1024 rows and at each fragment's end, so the copy row
+   * path pays one plain increment per row. Reset with step 8; DBDIH
+   * takes a baseline at the start of step 12.
+   */
+  std::atomic<Uint64> c_nsl_copy_row_ops{0};
+  Uint64 c_nsl_copy_row_ops_batch;
+  void nsl_copy_row_ops_flush() {
+    if (c_nsl_copy_row_ops_batch != 0) {
+      c_nsl_copy_row_ops.fetch_add(c_nsl_copy_row_ops_batch,
+                                   std::memory_order_relaxed);
+      c_nsl_copy_row_ops_batch = 0;
+    }
+  }
   Uint32 c_nsl_redo_sub; /* step 10: 1 = execution rounds, 2 = head/tail */
   void nsl_start_step(Signal *signal, Uint32 step);
   void nsl_stop_step();

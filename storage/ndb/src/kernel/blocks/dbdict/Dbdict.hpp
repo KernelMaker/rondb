@@ -1295,9 +1295,13 @@ class Dbdict : public SimulatedBlock {
    * when a file is being read from disk
    ****************************************************************************/
   struct RestartRecord {
-    RestartRecord() { m_complete = false; }
+    RestartRecord() {
+      m_complete = false;
+      m_active = false;
+    }
 
     bool m_complete;
+    bool m_active; /* [NODE-START] step 7: a schema restore is running */
 
     /**    Global check point identity       */
     Uint32 gciToRestart;
@@ -1320,6 +1324,16 @@ class Dbdict : public SimulatedBlock {
   };
   RestartRecord c_restartRecord;
 
+ public:
+  /**
+   * [NODE-START] step 7 progress: the position of a running schema
+   * restore (pass and schema object), read by DBDIH's report tick in
+   * the same thread. Returns false when no schema restore is running.
+   */
+  bool nsl_restart_progress(Uint32 &pass, Uint32 &passes, Uint32 &object,
+                            Uint32 &last_object) const;
+
+ private:
   /**
    * This record stores all the information needed
    * when a file is being read from disk

@@ -150,7 +150,9 @@ struct NodeStartLog {
      * (ST_SYSTEM_RESTART_NOT_RESTORABLE) is started later by the
      * master as a node restart. Step 12 applies to a system restart
      * only when some node needs take-over; the runtime emits 'skipped'
-     * there otherwise.
+     * there otherwise. Step 8 in an initial node restart copies the
+     * fragments from the live nodes instead of restoring them from an
+     * LCP; it is the bulk data movement of that start type.
      */
     static const Uint8 tab[TOTAL_STEPS][4] = {
         /* 1 init          */ {1, 1, 1, 1},
@@ -160,7 +162,7 @@ struct NodeStartLog {
         /* 5 start-perm    */ {0, 0, 1, 1},
         /* 6 redo-prepare  */ {0, 1, 1, 0},
         /* 7 metadata      */ {0, 1, 1, 1},
-        /* 8 restore       */ {0, 1, 1, 0},
+        /* 8 restore       */ {0, 1, 1, 1},
         /* 9 undo-dd       */ {0, 1, 1, 0},
         /*10 redo-exec     */ {0, 1, 1, 0},
         /*11 index-rebuild */ {0, 1, 1, 1},
@@ -313,6 +315,11 @@ struct NodeStartLog {
         return (sub >= 1 && sub <= 4) ? n[sub - 1] : unknown;
       }
       case NSL_RESTORE: {
+        if (startType == NodeState::ST_INITIAL_NODE_RESTART) {
+          static const char *n[2] = {"distribute fragment copy requests",
+                                     "copy fragments from live nodes"};
+          return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
+        }
         static const char *n[2] = {"distribute fragment restore requests",
                                    "restore fragments from LCP"};
         return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
@@ -698,6 +705,23 @@ class NodeStartLogTimer {
   bool m_escalated;
   bool m_active;
 };
+
+/**
+ * Progress sources owned by another block than the one that reports
+ * them. Plain declarations keep the readers free of the owners' headers;
+ * the definitions live next to the data.
+ *
+ * nsl_lqh_copy_row_ops_total() (DblqhMain.cpp): rows received on the
+ * fragment copy path by all DBLQH workers, read by the DBDIH step 12
+ * tick in the main thread (the workers count atomically).
+ *
+ * nsl_dict_restart_progress() (Dbdict.cpp): the position of the DBDICT
+ * schema restore, read by the DBDIH step 7 tick in the same thread.
+ * Returns false when no schema restore is running.
+ */
+Uint64 nsl_lqh_copy_row_ops_total();
+bool nsl_dict_restart_progress(Uint32 &pass, Uint32 &passes, Uint32 &object,
+                               Uint32 &last_object);
 
 #undef JAM_FILE_ID
 

@@ -122,6 +122,7 @@ void Dblqh::initData()
   c_nsl_index_current = RNIL;
   c_nsl_index_rows_total = 0;
   c_nsl_frags_restored = 0;
+  c_nsl_copy_row_ops_batch = 0;
   c_nsl_redo_sub = 1;
   c_start_phase_9_waiting = false;
   c_outstanding_write_local_sysfile = false;

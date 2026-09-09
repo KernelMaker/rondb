@@ -245,6 +245,11 @@ bool DblqhProxy::nsl_step_runs(Uint32 step) const {
       return (t == NodeState::ST_INITIAL_START ||
               t == NodeState::ST_INITIAL_NODE_RESTART);
     case NodeStartLog::NSL_RESTORE:
+      /* An initial node restart copies the fragments from the live
+         nodes in this step instead of restoring them from an LCP. */
+      return (t == NodeState::ST_NODE_RESTART ||
+              t == NodeState::ST_SYSTEM_RESTART ||
+              t == NodeState::ST_INITIAL_NODE_RESTART);
     case NodeStartLog::NSL_UNDO_DD:
     case NodeStartLog::NSL_REDO_EXEC:
       return (t == NodeState::ST_NODE_RESTART ||
@@ -1220,9 +1225,9 @@ void DblqhProxy::execSTART_FRAGREQ(Signal *signal) {
      * system restart the requests come from the master's DIH, which
      * read and distributed the metadata (step 7) for this node too;
      * account for that step here on the other nodes, right before
-     * their restore starts. START_FRAGREQs without an LCP also arrive
-     * in an initial node restart, where the workers print step 8 as
-     * skipped; nsl_node_started prints nothing for that start type.
+     * their restore starts. In an initial node restart the requests
+     * carry no LCP and the workers copy the fragments from the live
+     * nodes; step 8 covers that copy.
      */
     c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
     const Uint32 sender = refToNode(signal->getSendersBlockRef());
@@ -1281,7 +1286,11 @@ void DblqhProxy::execSTART_RECREQ(Signal *signal) {
   ss.phaseToSend = 0;
   if (!NdbTick_IsValid(c_nsl_rec_start[0])) {
     jam();
+    /* No START_FRAGREQ arrived: this node holds no fragment (e.g. no
+       node group). Step 8 still gets its start line here, so that the
+       fan-in below has a boundary to complete. */
     c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
+    nsl_node_started(NodeStartLog::NSL_RESTORE);
   }
 
   // seize records for sub-ops

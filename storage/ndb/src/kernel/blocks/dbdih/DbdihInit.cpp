@@ -98,6 +98,7 @@ void Dbdih::initData() {
   c_nsl_perm_retries = 0;
   c_nsl_last_perm_ref = 0;
   c_nsl_frags_copied = 0;
+  c_nsl_sync_row_ops_base = 0;
   c_nsl_sync_sub = 2;
   c_nsl_sr_meta_phase = 0;
   c_nsl_sr_tabs_distributed = 0;

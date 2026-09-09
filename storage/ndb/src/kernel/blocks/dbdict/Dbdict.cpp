@@ -2511,6 +2511,7 @@ void Dbdict::initCommonData() {
   initRetrieveRecord(0, 0, 0);
   initSchemaRecord();
   initRestartRecord();
+  c_max_restart_table_id = 0;
   initSendSchemaRecord();
   initReadTableRecord();
   initWriteTableRecord();
@@ -3294,6 +3295,7 @@ void Dbdict::execNDB_STTOR(Signal *signal) {
     jam();
     c_initialStart = true;
     c_restartRecord.m_complete = true;
+    c_restartRecord.m_active = false;
   } else if (restartType == NodeState::ST_SYSTEM_RESTART) {
     jam();
     c_systemRestart = true;
@@ -4732,6 +4734,10 @@ void Dbdict::set_max_check_schema_status() {
       continue;
     }
     c_max_restart_table_id = tableId;
+    /* [NODE-START] step 7: the schema restore is running from here on
+       (both the read from disk and the copy from the master pass this
+       point before checkSchemaStatus starts). */
+    c_restartRecord.m_active = true;
     g_eventLogger->info("Start restore schema, max restart table id = %u", tableId);
     return;
   }
@@ -4897,6 +4903,8 @@ void Dbdict::restartNextPass(Signal *signal) {
     jam();
 
     c_restartRecord.m_complete = true;
+
+    c_restartRecord.m_active = false;
     ndbrequire(c_restartRecord.m_op_cnt == 0);
 
     /**
@@ -35046,4 +35054,26 @@ void Dbdict::execLIST_DATABASE_REQ(Signal *signal) {
     db_ptr.p->m_max_parallel_complex_queries;
   sendSignal(req->senderRef, GSN_LIST_DATABASE_CONF, signal,
              ListDatabaseConf::SignalLength, JBB, lsPtr, 1);
+}
+
+bool Dbdict::nsl_restart_progress(Uint32 &pass, Uint32 &passes,
+                                  Uint32 &object, Uint32 &last_object) const {
+  if (!c_restartRecord.m_active) return false;
+  pass = c_restartRecord.m_pass + 1;
+  passes = c_restartRecord.m_end_pass + 1;
+  last_object = c_max_restart_table_id;
+  /* activeTable runs one past the last object while a pass ends its
+     schema transaction; show the end of the pass, not 101/100. */
+  object = (c_restartRecord.activeTable > last_object)
+               ? last_object
+               : c_restartRecord.activeTable;
+  return true;
+}
+
+/* Declared in NodeStartLog.hpp; DBDICT and DBDIH share the main thread. */
+bool nsl_dict_restart_progress(Uint32 &pass, Uint32 &passes, Uint32 &object,
+                               Uint32 &last_object) {
+  const Dbdict *dict = (const Dbdict *)globalData.getBlock(DBDICT);
+  return (dict != nullptr) &&
+         dict->nsl_restart_progress(pass, passes, object, last_object);
 }

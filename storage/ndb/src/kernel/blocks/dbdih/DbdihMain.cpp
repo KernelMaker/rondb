@@ -2057,9 +2057,18 @@ void Dbdih::nsl_report_progress(Signal *signal) {
                              cstarttype, "waiting", elapsed,
                              "synchronizing the sysfile with all nodes");
         } else if (c_nsl_sr_tabs_distributed == 0) {
-          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 2,
-                             cstarttype, "waiting", elapsed,
-                             "DICT is restoring the schema from disk");
+          Uint32 pass, passes, object, last_object;
+          if (nsl_dict_restart_progress(pass, passes, object, last_object)) {
+            NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA,
+                               2, cstarttype, "progress", elapsed,
+                               "DICT is restoring the schema from disk:"
+                               " pass %u/%u, schema object %u/%u",
+                               pass, passes, object, last_object);
+          } else {
+            NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA,
+                               2, cstarttype, "waiting", elapsed,
+                               "DICT is restoring the schema from disk");
+          }
         } else {
           NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 4,
                              cstarttype, "progress", elapsed,
@@ -2068,10 +2077,23 @@ void Dbdih::nsl_report_progress(Signal *signal) {
           break;
         }
       } else {
-        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 0,
-                           cstarttype, "waiting", elapsed,
-                           "waiting for master node %u to copy metadata to us",
-                           refToNode(cmasterdihref));
+        Uint32 pass, passes, object, last_object;
+        if (nsl_dict_restart_progress(pass, passes, object, last_object)) {
+          /* Sub-step 3: our DICT works through the copied schema. */
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 3,
+                             cstarttype, "progress", elapsed,
+                             "DICT is processing the schema copied from"
+                             " master node %u: pass %u/%u, schema object"
+                             " %u/%u",
+                             refToNode(cmasterdihref), pass, passes, object,
+                             last_object);
+        } else {
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 0,
+                             cstarttype, "waiting", elapsed,
+                             "waiting for master node %u to copy metadata"
+                             " to us",
+                             refToNode(cmasterdihref));
+        }
       }
       if (c_nsl_timer.escalate_due()) {
         jam();
@@ -2106,10 +2128,29 @@ void Dbdih::nsl_report_progress(Signal *signal) {
                            c_nsl_frags_copied);
         break;
       }
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 2,
-                         cstarttype, "progress", elapsed,
-                         "copied %u fragments from live nodes",
-                         c_nsl_frags_copied);
+      {
+        /**
+         * Fragments done, then the rows received by the DBLQH workers
+         * since the step started, with the rate: this moves inside a
+         * large fragment. No total is known up front.
+         */
+        char detail[256];
+        const Uint64 total = nsl_lqh_copy_row_ops_total();
+        const Uint64 ops = (total >= c_nsl_sync_row_ops_base)
+                               ? (total - c_nsl_sync_row_ops_base)
+                               : total;
+        int pos = BaseString::snprintf(
+            detail, sizeof(detail),
+            "copied %u fragments from live nodes, %llu row operations"
+            " received so far",
+            c_nsl_frags_copied, (unsigned long long)ops);
+        if (pos > 0 && (size_t)pos < sizeof(detail)) {
+          NodeStartLog::appendRateEta(detail + pos, sizeof(detail) - pos, ops,
+                                      0, elapsed, "row operations");
+        }
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 2,
+                           cstarttype, "progress", elapsed, "%s", detail);
+      }
       break;
     }
     case NSL_WAIT_RECCONF_TAG: {
@@ -9467,11 +9508,16 @@ void Dbdih::toCopyCompletedLab(Signal *signal, TakeOverRecordPtr takeOverPtr) {
     /* Sub-step 3 (enable REDO logging) follows; the step completes in
        nr_start_logging once all take-over threads have finished it. */
     char buf[NodeStartLog::BUF_SIZE];
+    const Uint64 copy_total = nsl_lqh_copy_row_ops_total();
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 2,
                        cstarttype, "completed",
                        (Int64)c_nsl_timer.elapsed_sec(),
-                       "%u fragments copied from live nodes",
-                       c_nsl_frags_copied);
+                       "%u fragments copied from live nodes, %llu row"
+                       " operations received",
+                       c_nsl_frags_copied,
+                       (unsigned long long)((copy_total >= c_nsl_sync_row_ops_base)
+                                                ? (copy_total - c_nsl_sync_row_ops_base)
+                                                : copy_total));
     c_nsl_sync_sub = 3;
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 3,
                        cstarttype, "started", -1,
@@ -20961,6 +21007,7 @@ void Dbdih::execSTART_RECCONF(Signal *signal) {
     infoEvent("Bring Database On-line Starting on node %u", senderNodeId);
 
     c_nsl_frags_copied = 0;
+    c_nsl_sync_row_ops_base = nsl_lqh_copy_row_ops_total();
     c_nsl_sync_sub = 1; /* START_TOREQ outstanding, see execSTART_TOCONF */
     nsl_start_step(signal, NodeStartLog::NSL_SYNCHRONIZE);
     {
