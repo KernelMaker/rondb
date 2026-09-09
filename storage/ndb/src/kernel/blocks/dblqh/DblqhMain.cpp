@@ -39539,21 +39539,15 @@ void Dblqh::mark_end_of_lcp_restore(Signal *signal) {
     }
     nsl_stop_step();
   }
-  if (cstartType == NodeState::ST_INITIAL_NODE_RESTART) {
-    jam();
-    /* Nothing to undo after a copy; the plan lists step 9 as skipped. */
-    if (nsl_is_reporter()) {
-      char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
-                                            NodeStartLog::NSL_UNDO_DD,
-                                            cstartType));
-    }
-  } else {
+  if (cstartType != NodeState::ST_INITIAL_NODE_RESTART) {
     jam();
     /**
      * Per-LDM timer only: the node-wide 'started' line is printed by
      * DblqhProxy when the last LDM has finished its restore, which is
-     * when LGMAN actually receives its START_RECREQ.
+     * when LGMAN actually receives its START_RECREQ. In an initial
+     * node restart there is nothing to undo after the copy; the proxy
+     * prints the step 9 skipped marker at that same point, after the
+     * node-wide step 8 completion.
      */
     nsl_start_step(signal, NodeStartLog::NSL_UNDO_DD);
   }

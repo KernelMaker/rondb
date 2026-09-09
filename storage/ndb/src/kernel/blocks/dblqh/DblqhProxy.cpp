@@ -1335,10 +1335,20 @@ void DblqhProxy::execLOCAL_RECOVERY_COMP_REP(Signal *signal) {
       /**
        * Step 9 starts now, not at the first LDM's restore end: LGMAN
        * receives its START_RECREQ only once every LDM has sent one
-       * (the START_RECREQ_2 fan-in), so nothing runs before this.
+       * (the START_RECREQ_2 fan-in), so nothing runs before this. An
+       * initial node restart has nothing to undo after its copy; its
+       * skipped marker belongs here too, after the step 8 completion.
        */
       c_nsl_rec_start[1] = NdbTick_getCurrentTicks();
-      nsl_node_started(NodeStartLog::NSL_UNDO_DD);
+      if (c_nsl_start_type == NodeState::ST_INITIAL_NODE_RESTART) {
+        jam();
+        char buf[NodeStartLog::BUF_SIZE];
+        infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf),
+                                              NodeStartLog::NSL_UNDO_DD,
+                                              c_nsl_start_type));
+      } else {
+        nsl_node_started(NodeStartLog::NSL_UNDO_DD);
+      }
       break;
     }
     case LocalRecoveryCompleteRep::UNDO_DD_COMPLETED: {
