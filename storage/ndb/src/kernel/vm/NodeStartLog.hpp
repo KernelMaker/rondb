@@ -66,6 +66,12 @@
  * waiting lines are throttled by NodeStartLogTimer using the
  * NodeStartLogReportFrequency configuration parameter (seconds,
  * 0 = boundary lines only).
+ *
+ * The elapsed field of a step line counts from the start of the step (on
+ * a per-LDM line from that LDM's start of the step); on a sub-step line
+ * (started, progress, waiting, completed) it counts from the start of that
+ * sub-step, so a sub-step completion gives the sub-step's own duration.
+ * Assist lines count from the start of the assisted sub-step.
  */
 struct NodeStartLog {
   static constexpr Uint32 TOTAL_STEPS = 16;
@@ -228,7 +234,13 @@ struct NodeStartLog {
       case NSL_REDO_PREPARE:
         return 1;
       case NSL_METADATA:
-        return 4;
+        /* System restart: sysfile, then one interleaved phase in which
+           DICT restores the schema while each table's distribution is
+           read and sent to all nodes. Node restarts have four. */
+        return (startType == NodeState::ST_SYSTEM_RESTART ||
+                startType == NodeState::ST_SYSTEM_RESTART_NOT_RESTORABLE)
+                   ? 2
+                   : 4;
       case NSL_RESTORE:
         return 2;
       case NSL_UNDO_DD:
@@ -302,11 +314,10 @@ struct NodeStartLog {
       case NSL_METADATA: {
         if (startType == NodeState::ST_SYSTEM_RESTART ||
             startType == NodeState::ST_SYSTEM_RESTART_NOT_RESTORABLE) {
-          static const char *n[4] = {"synchronize sysfile",
-                                     "read schema from disk",
-                                     "read table distribution files",
-                                     "distribute tables to all nodes"};
-          return (sub >= 1 && sub <= 4) ? n[sub - 1] : unknown;
+          static const char *n[2] = {"synchronize sysfile",
+                                     "restore the schema and distribute the"
+                                     " tables"};
+          return (sub >= 1 && sub <= 2) ? n[sub - 1] : unknown;
         }
         static const char *n[4] = {"pause LCP",
                                    "copy distribution information",
@@ -718,10 +729,40 @@ class NodeStartLogTimer {
  * nsl_dict_restart_progress() (Dbdict.cpp): the position of the DBDICT
  * schema restore, read by the DBDIH step 7 tick in the same thread.
  * Returns false when no schema restore is running.
+ *
+ * nsl_dih_sr_metadata_start() (DbdihMain.cpp): the tick at which a
+ * non-master node's step 7 started in a system restart, read by the
+ * DBLQH proxy in the same thread when it accounts the step's completion
+ * at its first START_FRAGREQ. Invalid when the step has not started.
  */
 Uint64 nsl_lqh_copy_row_ops_total();
 bool nsl_dict_restart_progress(Uint32 &pass, Uint32 &passes, Uint32 &object,
                                Uint32 &last_object);
+NDB_TICKS nsl_dih_sr_metadata_start();
+/**
+ * nsl_dih_performed_copy_phase() / nsl_dih_wait_lcp_reported()
+ * (DbdihMain.cpp): whether this node was taken over at wait point 4.2 of
+ * a system restart and whether DBDIH already logged its own step 13 for
+ * that take-over; read by NDBCNTR at wait point 5.2, where a non-master
+ * prints the step 12 skipped marker and the step 13 boundaries.
+ */
+bool nsl_dih_performed_copy_phase();
+bool nsl_dih_wait_lcp_reported();
+/**
+ * nsl_lqh_proxy_undo_dd_start() (DblqhProxy.cpp): the node-wide start of
+ * step 9 as a tick value (NDB_TICKS::getUint64), 0 until the last LDM has
+ * finished its restore; read by the LDM workers (atomic, other thread) to
+ * anchor their step 9 waiting/completed lines at the node-wide start and
+ * to report the wait for the other LDMs' restore as a step 8 wait.
+ */
+Uint64 nsl_lqh_proxy_undo_dd_start();
+/**
+ * nsl_lqh_proxy_redo_prepare_done() (DblqhProxy.cpp): counts one LDM's
+ * step 6 (redo-prepare) completion in the proxy (atomic, other thread)
+ * and returns the new count with the number of LDMs holding REDO log
+ * parts, so that the last of them prints the node-wide completion.
+ */
+Uint32 nsl_lqh_proxy_redo_prepare_done(Uint32 &ldms_with_log_parts);
 
 #undef JAM_FILE_ID
 

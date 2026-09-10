@@ -1549,6 +1549,7 @@ void Tsman::execSTART_RECREQ(Signal *signal) {
 
   m_nsl_timer.start_step();
   m_nsl_datafiles_scanned = 0;
+  m_nsl_scan_started = false;
 
   signal->theData[0] = TsmanContinueB::SCAN_TABLESPACE_EXTENT_HEADERS;
   signal->theData[1] = ts_ptr.i;
@@ -1564,7 +1565,7 @@ void Tsman::scan_tablespace(Signal *signal, Uint32 ptrI) {
      * and diskless configurations pass through here trivially, and
      * their step 9 is reported as skipped.
      */
-    if (m_nsl_datafiles_scanned > 0) {
+    if (m_nsl_scan_started) {
       char buf[NodeStartLog::BUF_SIZE];
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 4,
                          NodeState::ST_ILLEGAL_TYPE, "completed",
@@ -1583,6 +1584,18 @@ void Tsman::scan_tablespace(Signal *signal, Uint32 ptrI) {
   {
     Local_datafile_list meta(m_file_pool, ts_ptr.p->m_meta_files);
     meta.first(file_ptr);
+  }
+  if (file_ptr.i != RNIL && !m_nsl_scan_started) {
+    jam();
+    /* [NODE-START] step 9 sub-step 4 begins with the first datafile scan
+       (an initial node restart dispatches none and reports the step as
+       skipped). */
+    m_nsl_scan_started = true;
+    m_nsl_timer.start_step(); /* the sub-step counts from here */
+    char buf[NodeStartLog::BUF_SIZE];
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_UNDO_DD, 4,
+                       NodeState::ST_ILLEGAL_TYPE, "started", -1,
+                       "scanning the tablespace extents");
   }
 
   scan_datafile(signal, ts_ptr.i, file_ptr.i);

@@ -263,6 +263,33 @@ bool DblqhProxy::nsl_step_runs(Uint32 step) const {
   }
 }
 
+/**
+ * System restart, non-master: the master's DIH read and distributed the
+ * metadata (step 7) for this node too; account for that step once, at
+ * the first START_FRAGREQ or, for a node holding no fragment, at the
+ * START_RECREQ. DBDIH printed the step's 'started' line and runs in this
+ * thread; its start tick gives the elapsed time.
+ */
+void DblqhProxy::nsl_sr_metadata_completed(Uint32 sender) {
+  if (c_nsl_start_type != NodeState::ST_SYSTEM_RESTART ||
+      sender == getOwnNodeId() || c_nsl_sr_metadata_done) {
+    jam();
+    return;
+  }
+  c_nsl_sr_metadata_done = true;
+  const NDB_TICKS since = nsl_dih_sr_metadata_start();
+  const Int64 elapsed =
+      NdbTick_IsValid(since)
+          ? (Int64)NdbTick_Elapsed(since, NdbTick_getCurrentTicks()).seconds()
+          : -1;
+  char buf[NodeStartLog::BUF_SIZE];
+  infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                     NodeStartLog::NSL_METADATA, 0,
+                                     c_nsl_start_type, "completed", elapsed,
+                                     "metadata distributed by master node %u",
+                                     sender));
+}
+
 /* One node-wide 'started' line, mirrored to the cluster log. */
 void DblqhProxy::nsl_node_started(Uint32 step) {
   if (!nsl_step_runs(step)) {
@@ -286,8 +313,54 @@ void DblqhProxy::nsl_node_completed(Uint32 step, const NDB_TICKS &since) {
           ? (Int64)NdbTick_Elapsed(since, NdbTick_getCurrentTicks()).seconds()
           : -1;
   char buf[NodeStartLog::BUF_SIZE];
+  if (step == NodeStartLog::NSL_REDO_INIT) {
+    jam();
+    /**
+     * Only the LDMs that own REDO log parts initialize files and print
+     * a per-LDM completion (part i is owned by LDM i for fewer parts
+     * than LDMs); name that count rather than all the workers.
+     */
+    const Uint32 parts = globalData.ndbLogParts;
+    const Uint32 ldms = nsl_ldms_with_log_parts();
+    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t,
+                                       "completed", elapsed,
+                                       "all %u LDMs holding the %u REDO log"
+                                       " parts",
+                                       ldms, parts));
+    return;
+  }
   infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t, "completed",
                                      elapsed, "all %u LDMs", c_workers));
+}
+
+/**
+ * Declared in NodeStartLog.hpp: the node-wide step 9 start for the LDM
+ * workers (0 before it, and in ndbd, which has no proxy).
+ */
+Uint64 nsl_lqh_proxy_undo_dd_start() {
+  if (globalData.ndbMtLqhWorkers == 0) {
+    return 0;
+  }
+  const DblqhProxy *proxy = (const DblqhProxy *)globalData.getBlock(DBLQH);
+  return (proxy != nullptr) ? proxy->nsl_undo_dd_start() : 0;
+}
+
+/**
+ * Declared in NodeStartLog.hpp: a worker's step 6 completion counted in
+ * the proxy; returns the count and the number of LDMs that hold REDO log
+ * parts (0 in ndbd, which has no proxy and no node-wide LQH lines).
+ */
+Uint32 nsl_lqh_proxy_redo_prepare_done(Uint32 &ldms_with_log_parts) {
+  ldms_with_log_parts = 0;
+  if (globalData.ndbMtLqhWorkers == 0) {
+    return 0;
+  }
+  DblqhProxy *proxy = (DblqhProxy *)globalData.getBlock(DBLQH);
+  if (proxy == nullptr) {
+    return 0;
+  }
+  ldms_with_log_parts = proxy->nsl_ldms_with_log_parts();
+  return proxy->nsl_redo_prepare_done_inc();
 }
 
 // GSN_READ_CONFIG_REQ
@@ -1230,18 +1303,7 @@ void DblqhProxy::execSTART_FRAGREQ(Signal *signal) {
      * nodes; step 8 covers that copy.
      */
     c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
-    const Uint32 sender = refToNode(signal->getSendersBlockRef());
-    if (c_nsl_start_type == NodeState::ST_SYSTEM_RESTART &&
-        sender != getOwnNodeId()) {
-      jam();
-      char buf[NodeStartLog::BUF_SIZE];
-      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                         NodeStartLog::NSL_METADATA, 0,
-                                         c_nsl_start_type, "completed", -1,
-                                         "metadata distributed by master"
-                                         " node %u",
-                                         sender));
-    }
+    nsl_sr_metadata_completed(refToNode(signal->getSendersBlockRef()));
     nsl_node_started(NodeStartLog::NSL_RESTORE);
   }
   StartFragReq *req = (StartFragReq *)signal->getDataPtrSend();
@@ -1288,8 +1350,11 @@ void DblqhProxy::execSTART_RECREQ(Signal *signal) {
     jam();
     /* No START_FRAGREQ arrived: this node holds no fragment (e.g. no
        node group). Step 8 still gets its start line here, so that the
-       fan-in below has a boundary to complete. */
+       fan-in below has a boundary to complete; in a system restart the
+       master's metadata step (7) is completed for this node here too,
+       the START_RECREQ comes from the master's DIH. */
     c_nsl_rec_start[0] = NdbTick_getCurrentTicks();
+    nsl_sr_metadata_completed(refToNode(signal->getSendersBlockRef()));
     nsl_node_started(NodeStartLog::NSL_RESTORE);
   }
 
@@ -1340,6 +1405,8 @@ void DblqhProxy::execLOCAL_RECOVERY_COMP_REP(Signal *signal) {
        * skipped marker belongs here too, after the step 8 completion.
        */
       c_nsl_rec_start[1] = NdbTick_getCurrentTicks();
+      c_nsl_undo_dd_start.store(c_nsl_rec_start[1].getUint64(),
+                                std::memory_order_release);
       if (c_nsl_start_type == NodeState::ST_INITIAL_NODE_RESTART) {
         jam();
         char buf[NodeStartLog::BUF_SIZE];

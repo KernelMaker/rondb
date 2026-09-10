@@ -3186,11 +3186,22 @@ private:
    */
   NodeStartLogTimer c_nsl_timer;
   Uint32 c_nsl_active_step;
+  /**
+   * Step 6 (redo-prepare) reads the page headers of this LDM's REDO log
+   * parts while the restore (step 8) can already start on its fragments
+   * (system restart: START_FRAGREQ arrives during the header scan), so
+   * it keeps its own state and report chain instead of c_nsl_active_step.
+   */
+  bool c_nsl_redo_prepare_active;
+  NodeStartLogTimer c_nsl_redo_prepare_timer;
+  void nsl_report_redo_prepare(Signal *signal);
+  NDB_TICKS c_nsl_redo_sub2_start; /* step 10 sub-step 2 start */
   Uint32 c_nsl_indexes_total;
   Uint32 c_nsl_indexes_done;
   Uint32 c_nsl_index_current;    /* step 11: index table being built */
   Uint64 c_nsl_index_rows_total; /* step 11: rows the builds will scan */
   Uint32 c_nsl_frags_restored;
+  NDB_TICKS c_nsl_restore_start; /* step 8 start on this LDM (step 8 wait lines) */
   std::atomic<Uint64> c_nsl_restore_row_ops{0}; /* step 8, see accessors */
   /**
    * Rows received by the copy of a fragment from a live node: in step
@@ -3211,6 +3222,8 @@ private:
     }
   }
   Uint32 c_nsl_redo_sub; /* step 10: 1 = execution rounds, 2 = head/tail */
+  bool c_nsl_redo_round_done;      /* step 10: every part finished the round */
+  Uint32 c_nsl_redo_round_done_no; /* ... and which round that was (1..4) */
   void nsl_start_step(Signal *signal, Uint32 step);
   void nsl_stop_step();
   bool nsl_is_reporter() const;

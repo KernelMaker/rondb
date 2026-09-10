@@ -233,6 +233,7 @@ public:
    */
   NodeStartLogTimer m_nsl_timer;
   Uint32 m_nsl_datafiles_scanned;
+  bool m_nsl_scan_started = false; /* step 9 sub-step 4 started line printed */
   Datafile_hash m_file_hash;
   Tablespace_list m_tablespace_list;
   Tablespace_hash m_tablespace_hash;

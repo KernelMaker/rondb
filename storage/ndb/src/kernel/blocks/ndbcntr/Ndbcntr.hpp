@@ -492,6 +492,7 @@ class Ndbcntr : public SimulatedBlock {
   bool c_nsl_waiting_admission;
   NDB_TICKS c_nsl_start_ticks;
   NDB_TICKS c_nsl_activate_start;
+  NDB_TICKS c_nsl_wait_lcp_start; /* non-master IS/SR: step 13 started at wp 5.2 */
   NodeStartLogTimer c_nsl_barrier_timer;
 
   /**

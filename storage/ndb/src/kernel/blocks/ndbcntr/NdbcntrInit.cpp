@@ -43,6 +43,7 @@ void Ndbcntr::initData() {
   c_nsl_park = NSL_PARK_NONE;
   c_nsl_park_sp = 0;
   NdbTick_Invalidate(&c_nsl_activate_start);
+  NdbTick_Invalidate(&c_nsl_wait_lcp_start);
   c_start.reset();
   cmasterNodeId = 0;
   cnoStartNodes = 0;

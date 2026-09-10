@@ -98,12 +98,17 @@ void Dbdih::initData() {
   c_nsl_perm_retries = 0;
   c_nsl_last_perm_ref = 0;
   c_nsl_frags_copied = 0;
+  c_nsl_frags_logged = 0;
   c_nsl_sync_row_ops_base = 0;
   c_nsl_sync_sub = 2;
+  NdbTick_Invalidate(&c_nsl_sync_sub_start);
   c_nsl_sr_meta_phase = 0;
+  NdbTick_Invalidate(&c_nsl_sr_sub_start);
   c_nsl_sr_tabs_distributed = 0;
   c_nsl_sr_tabs_received = 0;
+  NdbTick_Invalidate(&c_nsl_sr_meta_start);
   c_nsl_frags_distributed = 0;
+  NdbTick_Invalidate(&c_nsl_frags_dist_start);
   c_nsl_wait_lcp_reported = false;
   c_nsl_master_state = NSL_M_IDLE;
   c_nsl_master_node = 0;

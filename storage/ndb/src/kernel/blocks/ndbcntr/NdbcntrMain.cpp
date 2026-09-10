@@ -3302,6 +3302,45 @@ void Ndbcntr::ph5ALab(Signal *signal) {
       signal->theData[1] = CntrWaitRep::ZWAITPOINT_5_2;
       sendSignal(calcNdbCntrBlockRef(cmasterNodeId), GSN_CNTR_WAITREP, signal,
                  2, JBB);
+      {
+        /**
+         * [NODE-START]: only the master executes NDB start phase 5 in
+         * DBDIH, which drives the first LCP (step 13) for the whole
+         * cluster; this node waits for it here. Account for the steps
+         * this node did not run at the point where they would have
+         * executed: 8-12 in an initial start, 12 in a system restart
+         * unless the node was taken over at wait point 4.2, where
+         * DBDIH logged its own steps 12 and 13. The step completes
+         * when the master reports wait point 5.1.
+         */
+        char buf[NodeStartLog::BUF_SIZE];
+        if (ctypeOfStart == NodeState::ST_INITIAL_START) {
+          jam();
+          for (Uint32 step = NodeStartLog::NSL_RESTORE;
+               step <= NodeStartLog::NSL_SYNCHRONIZE; step++) {
+            infoEvent("%s", NodeStartLog::skipped(buf, sizeof(buf), step,
+                                                  ctypeOfStart));
+          }
+        } else if (!nsl_dih_performed_copy_phase()) {
+          jam();
+          infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                             NodeStartLog::NSL_SYNCHRONIZE, 0,
+                                             ctypeOfStart, "skipped", -1,
+                                             "no take-over of this node"));
+        }
+        if (!nsl_dih_wait_lcp_reported()) {
+          jam();
+          c_nsl_wait_lcp_start = NdbTick_getCurrentTicks();
+          infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                             NodeStartLog::NSL_WAIT_LCP, 0,
+                                             ctypeOfStart, "started", -1,
+                                             "master node %u drives the first"
+                                             " local checkpoint, this node"
+                                             " waits for it at NDB start"
+                                             " phase 5 wait point",
+                                             cmasterNodeId));
+        }
+      }
       nsl_park(NSL_PARK_WP_5_2);
       return;
     default:
@@ -3995,6 +4034,21 @@ void Ndbcntr::execCNTR_WAITREP(Signal *signal) {
       break;
     case CntrWaitRep::ZWAITPOINT_5_1:
       jam();
+      if (NdbTick_IsValid(c_nsl_wait_lcp_start)) {
+        jam();
+        /* Step 13 on a non-master, started at the wait point 5.2 park. */
+        char buf[NodeStartLog::BUF_SIZE];
+        infoEvent("%s", NodeStartLog::line(
+                            buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 0,
+                            ctypeOfStart, "completed",
+                            (Int64)NdbTick_Elapsed(c_nsl_wait_lcp_start,
+                                                   NdbTick_getCurrentTicks())
+                                .seconds(),
+                            "first local checkpoint completed, driven by"
+                            " master node %u",
+                            signal->theData[0]));
+        NdbTick_Invalidate(&c_nsl_wait_lcp_start);
+      }
       nsl_unpark();
       g_eventLogger->info(
           "Master node %u have reached completion of NDB start"
@@ -5734,10 +5788,7 @@ void Ndbcntr::Missra::execSTART_ORD(Signal *signal) {
   {
     char buf[NodeStartLog::BUF_SIZE];
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 4,
-                       NodeState::ST_ILLEGAL_TYPE, "started",
-                       (Int64)NdbTick_Elapsed(cntr.c_nsl_start_ticks,
-                                              NdbTick_getCurrentTicks())
-                           .seconds());
+                       NodeState::ST_ILLEGAL_TYPE, "started", -1);
   }
 
   signal->theData[0] = NDB_LE_NDBStartStarted;

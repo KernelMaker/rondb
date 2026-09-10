@@ -2466,6 +2466,15 @@ class Dbdih : public SimulatedBlock {
   CountingSemaphore c_lcpTabDefWritesControl;
 
  public:
+  /* [NODE-START] state read by other main-thread blocks through the free
+     functions declared in NodeStartLog.hpp: the step 7 start tick of a
+     system-restart non-master (DBLQH proxy completes the step), whether
+     this node was taken over at wait point 4.2 and whether it already
+     logged its own step 13 (NDBCNTR prints the non-master step 12/13
+     markers at wait point 5.2). */
+  const NDB_TICKS &nsl_sr_metadata_start() const { return c_nsl_sr_meta_start; }
+  bool nsl_performed_copy_phase() const { return c_performed_copy_phase; }
+  bool nsl_wait_lcp_reported() const { return c_nsl_wait_lcp_reported; }
   enum LcpMasterTakeOverState {
     LMTOS_IDLE = 0,
     LMTOS_WAIT_LCP_FRAG_REP = 2,  // Currently waiting for outst. LCP_FRAG_REP
@@ -2534,15 +2543,22 @@ class Dbdih : public SimulatedBlock {
   Uint32 c_nsl_perm_retries;
   Uint32 c_nsl_last_perm_ref;
   Uint32 c_nsl_frags_copied;
+  Uint32 c_nsl_frags_logged;        /* step 12 sub-step 3: fragments with REDO logging enabled */
   Uint64 c_nsl_sync_row_ops_base;   /* step 12: DBLQH copy rows at its start */
   Uint32 c_nsl_sync_sub;            /* step 12 sub-step in progress (1..3) */
+  NDB_TICKS c_nsl_sync_sub_start;   /* start of the current step 12 sub-step */
   Uint32 c_nsl_sr_meta_phase;       /* SR step 7: 0 wait nodes, 1 sysfile, 2 schema */
+  NDB_TICKS c_nsl_sr_sub_start;     /* SR step 7: start of the current sub-step */
   Uint32 c_nsl_sr_tabs_distributed; /* SR master: tables distributed to all nodes */
   Uint32 c_nsl_sr_tabs_received;    /* SR non-master: tables received from master */
+  NDB_TICKS c_nsl_sr_meta_start;    /* SR non-master: step 7 started (DBLQH completes it) */
   Uint32 c_nsl_frags_distributed;   /* SR master: fragments given START_FRAGREQ */
+  NDB_TICKS c_nsl_frags_dist_start; /* SR master: step 8 sub-step 1 started */
   bool c_nsl_wait_lcp_reported;     /* step 13 completed already logged here */
   void nsl_start_step(Signal *signal, Uint32 step);
   void nsl_stop_step();
+  Int64 nsl_sync_sub_elapsed() const;
+  Int64 nsl_sr_sub_elapsed() const;
   void nsl_report_progress(Signal *signal);
   /**
    * System restart master: c_nsl_active_step value from the arrival of

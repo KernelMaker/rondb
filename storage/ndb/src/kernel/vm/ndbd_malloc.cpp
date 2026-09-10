@@ -58,14 +58,27 @@
  * that link ndbd_malloc.o.
  */
 static Uint32 g_touch_report_frequency = 0;
+static Uint32 g_touch_report_substep = 2;
+static bool g_touch_report_start_set = false;
+static NDB_TICKS g_touch_report_start;
 
 void ndbd_malloc_set_touch_report_frequency(Uint32 freq_sec) {
   g_touch_report_frequency = freq_sec;
 }
 
+void ndbd_malloc_set_touch_report_substep(Uint32 sub_step) {
+  g_touch_report_substep = sub_step;
+}
+
+void ndbd_malloc_set_touch_report_start(const NDB_TICKS &start) {
+  g_touch_report_start = start;
+  g_touch_report_start_set = true;
+}
+
 /**
  * Shared progress state for one memory-touch job, reported as
- * [NODE-START] step 1 sub-step 2 while the node is starting. The
+ * [NODE-START] step 1 progress of the current sub-step while the node
+ * is starting (g_touch_report_substep, see the header). The
  * touch threads add their touched pages and the thread that claims
  * the report slot (compare_exchange on last_report_ms) prints, so a
  * report is emitted at most once per NodeStartLogReportFrequency
@@ -152,10 +165,13 @@ static void *touch_mem(void *arg) {
   for (Uint32 i = 0; i < num_pages_per_thread;
        i += NUM_PAGES_BETWEEN_WATCHDOG_SETS,
               ptr += NUM_PAGES_BETWEEN_WATCHDOG_SETS * TOUCH_PAGE_SIZE) {
+    /* Bound by the pages left in this thread's range, so the last
+       chunk does not run into the next thread's range (the overlap
+       was harmless but touched pages twice and over-counted them). */
     const size_t size =
         std::min({ptrdiff_t(end - ptr),
         ptrdiff_t(NUM_PAGES_BETWEEN_WATCHDOG_SETS * TOUCH_PAGE_SIZE),
-        ptrdiff_t(num_pages_per_thread * TOUCH_PAGE_SIZE)});
+        ptrdiff_t((num_pages_per_thread - i) * TOUCH_PAGE_SIZE)});
 
     if (make_readwritable) {
       // Populate address space earlier Reserved.
@@ -169,7 +185,8 @@ static void *touch_mem(void *arg) {
 
     TouchMemProgress *progress = touch_mem_ptr->progress;
     if (progress != nullptr) {
-      const Uint64 chunk_pages = size / TOUCH_PAGE_SIZE;
+      /* Count a trailing partial page like tot_pages does (ceiling). */
+      const Uint64 chunk_pages = (size + TOUCH_PAGE_SIZE - 1) / TOUCH_PAGE_SIZE;
       const Uint64 done = progress->pages_done.fetch_add(chunk_pages) +
                           chunk_pages;
       const NDB_TICKS now = NdbTick_getCurrentTicks();
@@ -180,9 +197,13 @@ static void *touch_mem(void *arg) {
       if (elapsed_ms >= last + freq_ms &&
           progress->last_report_ms.compare_exchange_strong(last, elapsed_ms)) {
         char buf[NodeStartLog::BUF_SIZE];
-        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 2,
-                           NodeState::ST_ILLEGAL_TYPE, "progress",
-                           (Int64)(elapsed_ms / 1000),
+        const Int64 elapsed_sec =
+            g_touch_report_start_set
+                ? (Int64)NdbTick_Elapsed(g_touch_report_start, now).seconds()
+                : (Int64)(elapsed_ms / 1000);
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT,
+                           g_touch_report_substep,
+                           NodeState::ST_ILLEGAL_TYPE, "progress", elapsed_sec,
                            "touched %llu/%llu pages (%u%%)",
                            (unsigned long long)done,
                            (unsigned long long)progress->tot_pages,

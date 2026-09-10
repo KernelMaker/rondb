@@ -874,15 +874,29 @@ void stop_async_log_func(NdbThread *thr, ThreadData &thr_args) {
  * globalData.theNodeStartTicks, set at the top of ndbd_run.
  */
 static void log_init_step(Uint32 sub, const char *verb, bool with_elapsed) {
+  /* A sub-step counts from its own start: the end of the previous one
+     (the node start for sub-step 1), see NodeStartLog.hpp. */
+  static NDB_TICKS sub_start;
+  const NDB_TICKS now = NdbTick_getCurrentTicks();
+  if (!NdbTick_IsValid(sub_start)) {
+    sub_start = NdbTick_IsValid(globalData.theNodeStartTicks)
+                    ? globalData.theNodeStartTicks
+                    : now;
+  }
   char buf[NodeStartLog::BUF_SIZE];
   Int64 elapsed = -1;
   if (with_elapsed) {
-    elapsed = (Int64)NdbTick_Elapsed(globalData.theNodeStartTicks,
-                                     NdbTick_getCurrentTicks())
-                  .seconds();
+    elapsed = (Int64)NdbTick_Elapsed(sub_start, now).seconds();
   }
   NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, sub,
                      NodeState::ST_ILLEGAL_TYPE, verb, elapsed);
+  if (sub > 0 && strcmp(verb, "completed") == 0) {
+    /* The next sub-step starts now; memory touched from now on belongs
+       to it and its progress lines count from here. */
+    sub_start = now;
+    ndbd_malloc_set_touch_report_substep(sub + 1);
+    ndbd_malloc_set_touch_report_start(now);
+  }
 }
 
 /**

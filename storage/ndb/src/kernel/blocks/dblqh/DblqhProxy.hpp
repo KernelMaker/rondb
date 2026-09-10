@@ -25,6 +25,8 @@
 #ifndef NDB_DBLQH_PROXY_HPP
 #define NDB_DBLQH_PROXY_HPP
 
+#include <atomic>
+
 #include <LocalProxy.hpp>
 #include <signaldata/CreateDatabase.hpp>
 #include <signaldata/AlterDb.hpp>
@@ -64,7 +66,9 @@ class DblqhProxy : public LocalProxy {
    * fan-ins that already exist: NDB_STTORRY of phase 1 (step 4
    * redo-init), LOCAL_RECOVERY_COMP_REP per phase (steps 8, 9, 10) and
    * START_RECCONF (step 11). Step 6 (redo-prepare) ends LDM-locally in
-   * closingSrLab with no fan-in, so it has per-LDM lines only. The
+   * closingSrLab with no signal to the proxy, so its node-wide line is
+   * printed by the last worker holding a log part, counted through the
+   * atomic c_nsl_redo_prepare_done below. The
    * proxy also prints the node-wide 'started' lines that no single
    * worker can place because a worker may own no fragment: step 8 at
    * the first START_FRAGREQ (with the SR non-master step 7 completion,
@@ -78,6 +82,35 @@ class DblqhProxy : public LocalProxy {
   Uint32 c_nsl_start_type;
   NDB_TICKS c_nsl_redo_init_start;
   NDB_TICKS c_nsl_rec_start[4]; /* restore, undo-dd, redo-exec, index */
+  /**
+   * Node-wide start of step 9 (undo-dd) as a tick value, 0 until the
+   * last LDM has finished its restore. Read by the LDM workers through
+   * nsl_lqh_proxy_undo_dd_start() (NodeStartLog.hpp) so their step 9
+   * lines are anchored at the node-wide start, not at their own
+   * restore end.
+   */
+  std::atomic<Uint64> c_nsl_undo_dd_start{0};
+  /**
+   * Step 6 (redo-prepare) fan-in: the workers holding REDO log parts
+   * count their completion here (nsl_lqh_proxy_redo_prepare_done()),
+   * the last one prints the node-wide completion; the proxy sees no
+   * signal at that point (see DblqhProxy fan-ins vs steps).
+   */
+  std::atomic<Uint32> c_nsl_redo_prepare_done{0};
+ public:
+  Uint64 nsl_undo_dd_start() const {
+    return c_nsl_undo_dd_start.load(std::memory_order_acquire);
+  }
+  Uint32 nsl_redo_prepare_done_inc() {
+    return c_nsl_redo_prepare_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+  }
+  Uint32 nsl_ldms_with_log_parts() const {
+    const Uint32 parts = globalData.ndbLogParts;
+    return (parts < c_workers) ? parts : c_workers;
+  }
+ protected:
+  bool c_nsl_sr_metadata_done = false; /* SR non-master: step 7 completed printed */
+  void nsl_sr_metadata_completed(Uint32 sender);
   bool nsl_step_runs(Uint32 step) const;
   void nsl_node_started(Uint32 step);
   void nsl_node_completed(Uint32 step, const NDB_TICKS &since);
