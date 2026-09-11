@@ -2181,11 +2181,53 @@ void Dbdih::nsl_report_progress(Signal *signal) {
         break;
       }
       if (c_nsl_sync_sub == 3) {
-        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE, 3,
-                           cstarttype, "progress", nsl_sync_sub_elapsed(),
-                           "enabling REDO logging on the copied fragments:"
-                           " %u/%u done",
-                           c_nsl_frags_logged, c_nsl_frags_copied);
+        /**
+         * DBLQH answers the first COPY_ACTIVEREQ of the logging phase
+         * only once every LDM has completed a local checkpoint of the
+         * fragments it copied and the log tails are cut (NDBCNTR's
+         * WAIT_ALL_COMPLETE_LCP barrier), so the fragment counter
+         * cannot move before that: report the barrier as the wait it
+         * is, the counter takes over once it has passed.
+         */
+        Uint32 ldms_done = 0, ldms = 0, gci_needed = 0, gci_done = 0;
+        const Uint32 barrier =
+            nsl_cntr_local_lcp_barrier(ldms_done, ldms, gci_needed, gci_done);
+        if (barrier == 1) {
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
+                             3, cstarttype, "waiting", nsl_sync_sub_elapsed(),
+                             "the copied fragments are being checkpointed"
+                             " locally before REDO logging is enabled,"
+                             " %u/%u LDMs done",
+                             ldms_done, ldms);
+        } else if (barrier == 2) {
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
+                             3, cstarttype, "waiting", nsl_sync_sub_elapsed(),
+                             "local checkpoint of the copied fragments"
+                             " complete on all %u LDMs, waiting for GCI %u"
+                             " to become restorable (GCI %u is) before the"
+                             " log tails are cut and REDO logging is"
+                             " enabled",
+                             ldms, gci_needed, gci_done);
+        } else if (barrier == 3) {
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
+                             3, cstarttype, "waiting", nsl_sync_sub_elapsed(),
+                             "local checkpoint of the copied fragments"
+                             " complete on all %u LDMs, cutting the REDO"
+                             " and UNDO log tails before REDO logging is"
+                             " enabled",
+                             ldms);
+        } else {
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
+                             3, cstarttype, "progress", nsl_sync_sub_elapsed(),
+                             "enabling REDO logging on the copied fragments:"
+                             " %u/%u done",
+                             c_nsl_frags_logged, c_nsl_frags_copied);
+          break;
+        }
+        if (c_nsl_timer.escalate_due()) {
+          jam();
+          infoEvent("%s", buf);
+        }
         break;
       }
       {

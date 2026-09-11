@@ -763,6 +763,20 @@ Uint64 nsl_lqh_proxy_undo_dd_start();
  * parts, so that the last of them prints the node-wide completion.
  */
 Uint32 nsl_lqh_proxy_redo_prepare_done(Uint32 &ldms_with_log_parts);
+/**
+ * nsl_cntr_local_lcp_barrier() (NdbcntrMain.cpp): the local-checkpoint
+ * barrier of the REDO logging phase of a take-over (step 12 sub-step 3).
+ * DBLQH answers the first COPY_ACTIVEREQ of that phase only once every
+ * LDM has completed a local LCP of the fragments it copied, the GCI in
+ * that checkpoint is restorable and the log tails are cut (NDBCNTR's
+ * WAIT_ALL_COMPLETE_LCP protocol). Returns 0 when no such barrier is
+ * pending, 1 while the LDMs checkpoint (ldms_done of ldms have
+ * finished), 2 once all have and gci_needed must still become restorable
+ * (gci_done is), 3 while the log tails are being cut. Read by the DBDIH
+ * step 12 tick; NDBCNTR and DBDIH share the main thread.
+ */
+Uint32 nsl_cntr_local_lcp_barrier(Uint32 &ldms_done, Uint32 &ldms,
+                                  Uint32 &gci_needed, Uint32 &gci_done);
 
 #undef JAM_FILE_ID
 

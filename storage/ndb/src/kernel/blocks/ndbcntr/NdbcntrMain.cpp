@@ -7749,6 +7749,54 @@ void Ndbcntr::sendWAIT_ALL_COMPLETE_LCP_CONF(Signal *signal) {
   DEB_LCP(("m_lcp_started false again"));
 }
 
+/**
+ * [NODE-START] step 12 sub-step 3: the local-checkpoint barrier that the
+ * REDO logging of the copied fragments waits behind. A local LCP is
+ * pending from START_LOCAL_LCP_ORD until WAIT_ALL_COMPLETE_LCP_CONF; the
+ * LDMs report their completion with WAIT_COMPLETE_LCP_CONF once one of
+ * them has asked to complete it (m_received_wait_all), and the log tails
+ * are cut after the last one, once the GCI in the checkpoint is
+ * restorable. Returns 0 when nothing is pending, 1 while the LDMs
+ * checkpoint, 2 once all have and gci_needed must still become restorable
+ * (gci_done is), 3 while the log tails are being cut.
+ */
+Uint32 Ndbcntr::nsl_local_lcp_barrier(Uint32 &ldms_done, Uint32 &ldms,
+                                      Uint32 &gci_needed,
+                                      Uint32 &gci_done) const {
+  ldms = (globalData.ndbMtLqhWorkers > 0) ? globalData.ndbMtLqhWorkers : 1;
+  ldms_done = 0;
+  gci_needed = m_max_gci_in_lcp;
+  gci_done = m_max_completed_gci;
+  if (!m_local_lcp_started) {
+    return 0;
+  }
+  if (m_local_lcp_completed) {
+    ldms_done = ldms;
+    /* execWAIT_COMPLETE_LCP_CONF sets m_ready_to_cut_log_tail and waits
+       for the checkpoint's GCI to be restorable; send_cut_log_tail clears
+       it when the CUT_*_LOG_TAIL_REQs go out. */
+    return m_ready_to_cut_log_tail ? 2 : 3;
+  }
+  if (m_received_wait_all && m_outstanding_wait_lcp <= ldms) {
+    ldms_done = ldms - m_outstanding_wait_lcp;
+  }
+  return 1;
+}
+
+/* Declared in NodeStartLog.hpp; DBDIH reads it in the same thread. */
+Uint32 nsl_cntr_local_lcp_barrier(Uint32 &ldms_done, Uint32 &ldms,
+                                  Uint32 &gci_needed, Uint32 &gci_done) {
+  const Ndbcntr *cntr = (const Ndbcntr *)globalData.getBlock(NDBCNTR);
+  if (cntr == nullptr) {
+    ldms_done = 0;
+    ldms = 0;
+    gci_needed = 0;
+    gci_done = 0;
+    return 0;
+  }
+  return cntr->nsl_local_lcp_barrier(ldms_done, ldms, gci_needed, gci_done);
+}
+
 void Ndbcntr::get_node_group_mask(Signal *signal, NodeId node_id,
                                   NdbNodeBitmask &mask) {
   CheckNodeGroups *sd = (CheckNodeGroups *)signal->getDataPtrSend();

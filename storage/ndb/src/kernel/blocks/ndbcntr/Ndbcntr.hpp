@@ -522,6 +522,14 @@ class Ndbcntr : public SimulatedBlock {
   void nsl_report_park();
   
  public:
+  /**
+   * [NODE-START] step 12 sub-step 3 (read by DBDIH in the same thread):
+   * the state of the local-checkpoint barrier that precedes the REDO
+   * logging of the copied fragments, see nsl_cntr_local_lcp_barrier() in
+   * vm/NodeStartLog.hpp.
+   */
+  Uint32 nsl_local_lcp_barrier(Uint32 &ldms_done, Uint32 &ldms,
+                               Uint32 &gci_needed, Uint32 &gci_done) const;
   struct StopRecord {
   public:
     StopRecord(Ndbcntr &_cntr) : cntr(_cntr) { stopReq.senderRef = 0; }
