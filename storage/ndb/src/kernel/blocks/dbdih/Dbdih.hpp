@@ -27,6 +27,8 @@
 #ifndef DBDIH_H
 #define DBDIH_H
 
+#include <atomic>
+
 #include <ndb_limits.h>
 #include <SignalCounter.hpp>
 #include <NodeStartLog.hpp>
@@ -2466,15 +2468,28 @@ class Dbdih : public SimulatedBlock {
   CountingSemaphore c_lcpTabDefWritesControl;
 
  public:
-  /* [NODE-START] state read by other main-thread blocks through the free
-     functions declared in NodeStartLog.hpp: the step 7 start tick of a
-     system-restart non-master (DBLQH proxy completes the step), whether
-     this node was taken over at wait point 4.2 and whether it already
-     logged its own step 13 (NDBCNTR prints the non-master step 12/13
-     markers at wait point 5.2). */
-  const NDB_TICKS &nsl_sr_metadata_start() const { return c_nsl_sr_meta_start; }
+  /**
+   * [NODE-START] state read by other blocks through the free functions
+   * declared in NodeStartLog.hpp. NDBCNTR shares DBDIH's main thread
+   * (mt.cpp thr_GLOBAL) and reads plainly: whether this node was taken
+   * over at wait point 4.2 and whether it already logged its own step 13
+   * (NDBCNTR prints the non-master step 12/13 markers at wait point 5.2).
+   * The DBLQH proxy runs in the rep thread (thr_LOCAL) and completes the
+   * system-restart non-master's step 7 and its sub-step 2: their start
+   * ticks (as Uint64, 0 = not started) and the table count are published
+   * with release stores and read with acquire loads.
+   */
   bool nsl_performed_copy_phase() const { return c_performed_copy_phase; }
   bool nsl_wait_lcp_reported() const { return c_nsl_wait_lcp_reported; }
+  Uint64 nsl_sr_metadata_start() const {
+    return c_nsl_sr_meta_start_pub.load(std::memory_order_acquire);
+  }
+  Uint64 nsl_sr_sub2_start() const {
+    return c_nsl_sr_sub2_start_pub.load(std::memory_order_acquire);
+  }
+  Uint32 nsl_sr_tabs_received() const {
+    return c_nsl_sr_tabs_received_pub.load(std::memory_order_acquire);
+  }
   enum LcpMasterTakeOverState {
     LMTOS_IDLE = 0,
     LMTOS_WAIT_LCP_FRAG_REP = 2,  // Currently waiting for outst. LCP_FRAG_REP
@@ -2551,7 +2566,11 @@ class Dbdih : public SimulatedBlock {
   NDB_TICKS c_nsl_sr_sub_start;     /* SR step 7: start of the current sub-step */
   Uint32 c_nsl_sr_tabs_distributed; /* SR master: tables distributed to all nodes */
   Uint32 c_nsl_sr_tabs_received;    /* SR non-master: tables received from master */
-  NDB_TICKS c_nsl_sr_meta_start;    /* SR non-master: step 7 started (DBLQH completes it) */
+  /* SR non-master: step 7 / sub-step 2 start ticks and tables received,
+     published for the DBLQH proxy (rep thread), see the accessors above. */
+  std::atomic<Uint64> c_nsl_sr_meta_start_pub{0};
+  std::atomic<Uint64> c_nsl_sr_sub2_start_pub{0};
+  std::atomic<Uint32> c_nsl_sr_tabs_received_pub{0};
   Uint32 c_nsl_frags_distributed;   /* SR master: fragments given START_FRAGREQ */
   NDB_TICKS c_nsl_frags_dist_start; /* SR master: step 8 sub-step 1 started */
   bool c_nsl_wait_lcp_reported;     /* step 13 completed already logged here */

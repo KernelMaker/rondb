@@ -267,8 +267,9 @@ bool DblqhProxy::nsl_step_runs(Uint32 step) const {
  * System restart, non-master: the master's DIH read and distributed the
  * metadata (step 7) for this node too; account for that step once, at
  * the first START_FRAGREQ or, for a node holding no fragment, at the
- * START_RECREQ. DBDIH printed the step's 'started' line and runs in this
- * thread; its start tick gives the elapsed time.
+ * START_RECREQ. DBDIH printed the step's 'started' line in the main
+ * thread and publishes its start tick atomically for this proxy, which
+ * runs in the rep thread (mt.cpp thr_LOCAL).
  */
 void DblqhProxy::nsl_sr_metadata_completed(Uint32 sender) {
   if (c_nsl_start_type != NodeState::ST_SYSTEM_RESTART ||
@@ -277,12 +278,25 @@ void DblqhProxy::nsl_sr_metadata_completed(Uint32 sender) {
     return;
   }
   c_nsl_sr_metadata_done = true;
-  const NDB_TICKS since = nsl_dih_sr_metadata_start();
+  const NDB_TICKS now = NdbTick_getCurrentTicks();
+  const Uint64 since = nsl_dih_sr_metadata_start();
   const Int64 elapsed =
-      NdbTick_IsValid(since)
-          ? (Int64)NdbTick_Elapsed(since, NdbTick_getCurrentTicks()).seconds()
-          : -1;
+      (since != 0) ? (Int64)NdbTick_Elapsed(NDB_TICKS(since), now).seconds()
+                   : -1;
   char buf[NodeStartLog::BUF_SIZE];
+  Uint64 sub_start = 0;
+  Uint32 tables = 0;
+  if (nsl_dih_sr_receiving_tables(sub_start, tables)) {
+    jam();
+    /* Sub-step 2 (receiving the tables) ends with the step; DBDIH
+       printed its started and progress lines. */
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 2,
+                       c_nsl_start_type, "completed",
+                       (Int64)NdbTick_Elapsed(NDB_TICKS(sub_start), now)
+                           .seconds(),
+                       "received %u tables from master node %u", tables,
+                       sender);
+  }
   infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
                                      NodeStartLog::NSL_METADATA, 0,
                                      c_nsl_start_type, "completed", elapsed,

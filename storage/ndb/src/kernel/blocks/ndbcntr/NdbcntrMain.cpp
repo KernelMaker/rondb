@@ -5787,6 +5787,7 @@ void Ndbcntr::Missra::execSTART_ORD(Signal *signal) {
                                : NdbTick_getCurrentTicks();
   {
     char buf[NodeStartLog::BUF_SIZE];
+    cntr.c_nsl_read_config_start = NdbTick_getCurrentTicks();
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 4,
                        NodeState::ST_ILLEGAL_TYPE, "started", -1);
   }
@@ -5848,12 +5849,21 @@ void Ndbcntr::Missra::sendNextREAD_CONFIG_REQ(Signal *signal) {
       " needed by the data node in its lifetime");
   {
     char buf[NodeStartLog::BUF_SIZE];
+    const NDB_TICKS now = NdbTick_getCurrentTicks();
+    /* Sub-step 4 (READ_CONFIG_REQ to every block) ends here: its own
+       duration first, then the step's. */
+    NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 4,
+                       NodeState::ST_ILLEGAL_TYPE, "completed",
+                       NdbTick_IsValid(cntr.c_nsl_read_config_start)
+                           ? (Int64)NdbTick_Elapsed(
+                                 cntr.c_nsl_read_config_start, now)
+                                 .seconds()
+                           : -1);
     cntr.infoEvent(
         "%s", NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_INIT, 0,
                                  NodeState::ST_ILLEGAL_TYPE, "completed",
-                                 (Int64)NdbTick_Elapsed(
-                                     cntr.c_nsl_start_ticks,
-                                     NdbTick_getCurrentTicks())
+                                 (Int64)NdbTick_Elapsed(cntr.c_nsl_start_ticks,
+                                                        now)
                                      .seconds()));
   }
   /**

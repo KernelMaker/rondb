@@ -730,15 +730,17 @@ class NodeStartLogTimer {
  * schema restore, read by the DBDIH step 7 tick in the same thread.
  * Returns false when no schema restore is running.
  *
- * nsl_dih_sr_metadata_start() (DbdihMain.cpp): the tick at which a
- * non-master node's step 7 started in a system restart, read by the
- * DBLQH proxy in the same thread when it accounts the step's completion
- * at its first START_FRAGREQ. Invalid when the step has not started.
+ * nsl_dih_sr_metadata_start() (DbdihMain.cpp): the tick (as Uint64, 0
+ * when the step has not started) at which a non-master node's step 7
+ * started in a system restart, read by the DBLQH proxy when it accounts
+ * the step's completion at its first START_FRAGREQ. The proxy runs in
+ * the rep thread (mt.cpp thr_LOCAL) and DBDIH in the main thread
+ * (thr_GLOBAL): DBDIH publishes the value with a release store.
  */
 Uint64 nsl_lqh_copy_row_ops_total();
 bool nsl_dict_restart_progress(Uint32 &pass, Uint32 &passes, Uint32 &object,
                                Uint32 &last_object);
-NDB_TICKS nsl_dih_sr_metadata_start();
+Uint64 nsl_dih_sr_metadata_start();
 /**
  * nsl_dih_performed_copy_phase() / nsl_dih_wait_lcp_reported()
  * (DbdihMain.cpp): whether this node was taken over at wait point 4.2 of
@@ -774,9 +776,17 @@ Uint32 nsl_lqh_proxy_redo_prepare_done(Uint32 &ldms_with_log_parts);
  * finished), 2 once all have and gci_needed must still become restorable
  * (gci_done is), 3 while the log tails are being cut. Read by the DBDIH
  * step 12 tick; NDBCNTR and DBDIH share the main thread.
+ *
+ * nsl_dih_sr_receiving_tables() (DbdihMain.cpp): whether a non-master of
+ * a system restart has entered step 7 sub-step 2 (receiving the tables
+ * from the master), with that sub-step's start tick (Uint64) and the
+ * tables received so far; read by the DBLQH proxy (rep thread) when it
+ * completes the step at its first START_FRAGREQ, published by DBDIH with
+ * release stores.
  */
 Uint32 nsl_cntr_local_lcp_barrier(Uint32 &ldms_done, Uint32 &ldms,
                                   Uint32 &gci_needed, Uint32 &gci_done);
+bool nsl_dih_sr_receiving_tables(Uint64 &sub_start, Uint32 &tables);
 
 #undef JAM_FILE_ID
 

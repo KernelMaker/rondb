@@ -106,7 +106,9 @@ void Dbdih::initData() {
   NdbTick_Invalidate(&c_nsl_sr_sub_start);
   c_nsl_sr_tabs_distributed = 0;
   c_nsl_sr_tabs_received = 0;
-  NdbTick_Invalidate(&c_nsl_sr_meta_start);
+  c_nsl_sr_meta_start_pub.store(0, std::memory_order_relaxed);
+  c_nsl_sr_sub2_start_pub.store(0, std::memory_order_relaxed);
+  c_nsl_sr_tabs_received_pub.store(0, std::memory_order_relaxed);
   c_nsl_frags_distributed = 0;
   NdbTick_Invalidate(&c_nsl_frags_dist_start);
   c_nsl_wait_lcp_reported = false;

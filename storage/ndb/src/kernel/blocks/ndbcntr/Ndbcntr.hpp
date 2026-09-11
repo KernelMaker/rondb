@@ -493,6 +493,7 @@ class Ndbcntr : public SimulatedBlock {
   NDB_TICKS c_nsl_start_ticks;
   NDB_TICKS c_nsl_activate_start;
   NDB_TICKS c_nsl_wait_lcp_start; /* non-master IS/SR: step 13 started at wp 5.2 */
+  NDB_TICKS c_nsl_read_config_start; /* step 1 sub-step 4 started (Missra START_ORD) */
   NodeStartLogTimer c_nsl_barrier_timer;
 
   /**

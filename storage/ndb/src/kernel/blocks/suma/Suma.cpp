@@ -395,6 +395,7 @@ void Suma::execREAD_CONFIG_REQ(Signal *signal) {
   c_startup.m_wait_handover = false;
   c_startup.m_forced_disconnect_attempted = false;
   c_nsl_handover_gci = 0;
+  NdbTick_Invalidate(&c_nsl_handover_sub2_start);
   c_nsl_handover_tick_armed = false;
   c_failedApiNodes.clear();
   c_startup.m_wait_handover_timeout_ms = 120000; /* Default for old MGMD */
@@ -998,6 +999,7 @@ void Suma::check_start_handover(Signal *signal) {
                          (Int64)c_nsl_handover_timer.elapsed_sec(),
                          "%u subscriber nodes connected",
                          c_subscriber_nodes.count());
+      c_nsl_handover_sub2_start = NdbTick_getCurrentTicks();
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
                          m_typeOfStart, "started", -1,
                          "acquiring the DICT lock, then taking over the"
@@ -1175,13 +1177,13 @@ void Suma::check_wait_handover_timeout(Signal *signal) {
       if (c_nsl_handover_gci == 0) {
         NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
                            m_typeOfStart, "waiting",
-                           (Int64)c_nsl_handover_timer.elapsed_sec(),
+                           nsl_handover_sub2_elapsed(),
                            "waiting for the DICT lock and the subscription"
                            " reports before the bucket switchover");
       } else if (c_startup.m_handover_nodes.isclear()) {
         NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
                            m_typeOfStart, "waiting",
-                           (Int64)c_nsl_handover_timer.elapsed_sec(),
+                           nsl_handover_sub2_elapsed(),
                            "all nodes confirmed the bucket switchover,"
                            " waiting for GCI %u to complete",
                            c_nsl_handover_gci);
@@ -1189,7 +1191,7 @@ void Suma::check_wait_handover_timeout(Signal *signal) {
         char nodes[NdbNodeBitmask::TextLength + 1];
         NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
                            m_typeOfStart, "waiting",
-                           (Int64)c_nsl_handover_timer.elapsed_sec(),
+                           nsl_handover_sub2_elapsed(),
                            "waiting for the bucket switchover at GCI %u,"
                            " nodes still to confirm: %s",
                            c_nsl_handover_gci,
@@ -1282,7 +1284,7 @@ void Suma::send_handover_req(Signal *signal, Uint32 type) {
       char nsl_buf[NodeStartLog::BUF_SIZE];
       NodeStartLog::line(nsl_buf, sizeof(nsl_buf), NodeStartLog::NSL_HANDOVER,
                          2, m_typeOfStart, "progress",
-                         (Int64)c_nsl_handover_timer.elapsed_sec(),
+                         nsl_handover_sub2_elapsed(),
                          "handover of the subscription buckets requested from"
                          " nodes %s at GCI %u",
                          buf, gci);
@@ -1293,12 +1295,47 @@ void Suma::send_handover_req(Signal *signal, Uint32 type) {
 void Suma::sendSTTORRY(Signal *signal) {
   if (m_startphase == 101 && c_nsl_handover_timer.is_active()) {
     jam();
+    /**
+     * Sub-step 2 and the step end together. The GCI is the switchover
+     * point requested from the live nodes of this node's group; a node
+     * without a node group has no buckets (c_no_of_buckets == 0) and
+     * never sent the request, so the GCI stayed 0.
+     */
     char buf[NodeStartLog::BUF_SIZE];
-    infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
-                                       NodeStartLog::NSL_HANDOVER, 0,
-                                       m_typeOfStart, "completed",
-                                       (Int64)c_nsl_handover_timer
-                                           .elapsed_sec()));
+    const Int64 step_elapsed = (Int64)c_nsl_handover_timer.elapsed_sec();
+    if (NdbTick_IsValid(c_nsl_handover_sub2_start)) {
+      jam();
+      if (c_nsl_handover_gci != 0) {
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
+                           m_typeOfStart, "completed",
+                           nsl_handover_sub2_elapsed(),
+                           "subscription buckets taken over at GCI %u",
+                           c_nsl_handover_gci);
+      } else {
+        NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
+                           m_typeOfStart, "completed",
+                           nsl_handover_sub2_elapsed(),
+                           "no subscription buckets to take over, this node"
+                           " has no node group");
+      }
+    }
+    if (c_nsl_handover_gci != 0) {
+      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                         NodeStartLog::NSL_HANDOVER, 0,
+                                         m_typeOfStart, "completed",
+                                         step_elapsed,
+                                         "subscription buckets taken over at"
+                                         " GCI %u",
+                                         c_nsl_handover_gci));
+    } else {
+      infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
+                                         NodeStartLog::NSL_HANDOVER, 0,
+                                         m_typeOfStart, "completed",
+                                         step_elapsed,
+                                         "no subscription buckets to take"
+                                         " over, this node has no node"
+                                         " group"));
+    }
     c_nsl_handover_timer.stop_step();
   }
   signal->theData[0] = 0;

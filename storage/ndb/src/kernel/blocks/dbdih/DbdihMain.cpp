@@ -1993,11 +1993,12 @@ I N T E R N A L  P H A S E S
 /*---------------------------------------------------------------------------*/
 /*NDB_STTOR                              START SIGNAL AT START/RESTART       */
 /*---------------------------------------------------------------------------*/
-/* Declared in NodeStartLog.hpp; the DBLQH proxy, NDBCNTR and DBDIH share
-   the main thread. */
-NDB_TICKS nsl_dih_sr_metadata_start() {
+/* Declared in NodeStartLog.hpp. NDBCNTR shares DBDIH's main thread; the
+   DBLQH proxy runs in the rep thread and gets the values DBDIH publishes
+   atomically (Dbdih::nsl_sr_*). */
+Uint64 nsl_dih_sr_metadata_start() {
   const Dbdih *dih = (const Dbdih *)globalData.getBlock(DBDIH);
-  return (dih != nullptr) ? dih->nsl_sr_metadata_start() : NDB_TICKS();
+  return (dih != nullptr) ? dih->nsl_sr_metadata_start() : 0;
 }
 
 bool nsl_dih_performed_copy_phase() {
@@ -2008,6 +2009,22 @@ bool nsl_dih_performed_copy_phase() {
 bool nsl_dih_wait_lcp_reported() {
   const Dbdih *dih = (const Dbdih *)globalData.getBlock(DBDIH);
   return (dih != nullptr) && dih->nsl_wait_lcp_reported();
+}
+
+bool nsl_dih_sr_receiving_tables(Uint64 &sub_start, Uint32 &tables) {
+  const Dbdih *dih = (const Dbdih *)globalData.getBlock(DBDIH);
+  sub_start = 0;
+  tables = 0;
+  if (dih == nullptr) {
+    return false;
+  }
+  /* The sub-step start is published before any table count. */
+  sub_start = dih->nsl_sr_sub2_start();
+  if (sub_start == 0) {
+    return false;
+  }
+  tables = dih->nsl_sr_tabs_received();
+  return true;
 }
 
 void Dbdih::nsl_start_step(Signal *signal, Uint32 step) {
@@ -2494,7 +2511,8 @@ void Dbdih::execNDB_STTOR(Signal *signal) {
         } else {
           jam();
           c_nsl_timer.start_step();
-          c_nsl_sr_meta_start = NdbTick_getCurrentTicks();
+          c_nsl_sr_meta_start_pub.store(NdbTick_getCurrentTicks().getUint64(),
+                                        std::memory_order_release);
           char buf[NodeStartLog::BUF_SIZE];
           infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
                                              NodeStartLog::NSL_METADATA, 0,
@@ -8419,6 +8437,14 @@ void Dbdih::nr_start_logging(Signal *signal, TakeOverRecordPtr takeOverPtr) {
       if (c_nsl_active_step == NodeStartLog::NSL_SYNCHRONIZE) {
         jam();
         char buf[NodeStartLog::BUF_SIZE];
+        if (c_nsl_sync_sub == 3) {
+          jam();
+          /* Sub-step 3 ends with the last take-over thread. */
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
+                             3, cstarttype, "completed", nsl_sync_sub_elapsed(),
+                             "REDO logging enabled on %u fragments",
+                             c_nsl_frags_logged);
+        }
         infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
                                            NodeStartLog::NSL_SYNCHRONIZE, 0,
                                            cstarttype, "completed",
@@ -20534,6 +20560,8 @@ void Dbdih::execCOPY_TABREQ(Signal *signal) {
          first packet of the first table the master sends. */
       c_nsl_sr_meta_phase = 2;
       c_nsl_sr_sub_start = NdbTick_getCurrentTicks();
+      c_nsl_sr_sub2_start_pub.store(c_nsl_sr_sub_start.getUint64(),
+                                    std::memory_order_release);
       char buf[NodeStartLog::BUF_SIZE];
       NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_METADATA, 2,
                          cstarttype, "started", -1,
@@ -20601,6 +20629,8 @@ void Dbdih::execCOPY_TABREQ(Signal *signal) {
     jam();
     /* [NODE-START] step 7 progress of a non-master, see NDB_STTOR 3. */
     c_nsl_sr_tabs_received++;
+    c_nsl_sr_tabs_received_pub.store(c_nsl_sr_tabs_received,
+                                     std::memory_order_release);
     if (c_nsl_timer.report_due(globalData.theNodeStartLogReportFrequency)) {
       jam();
       char buf[NodeStartLog::BUF_SIZE];

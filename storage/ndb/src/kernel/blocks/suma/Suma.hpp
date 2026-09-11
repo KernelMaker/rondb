@@ -633,13 +633,24 @@ class Suma : public SimulatedBlock {
    */
   NodeStartLogTimer c_nsl_handover_timer;
   /**
-   * Sub-step 2: the switchover GCI (0 until SUMA_HANDOVER_REQ is sent)
-   * and whether ONE HANDOVER_WAIT_TIMEOUT CONTINUEB is pending. The
+   * Sub-step 2: its start tick (sub-step lines count from it, see
+   * vm/NodeStartLog.hpp), the switchover GCI (0 until SUMA_HANDOVER_REQ
+   * is sent, and to the end when no live node of this node's group
+   * holds buckets to hand over) and whether ONE HANDOVER_WAIT_TIMEOUT
+   * CONTINUEB is pending. The
    * flag is cleared when that signal is consumed and every arming goes
    * through nsl_arm_handover_tick(), so two tick chains cannot coexist.
    */
   Uint32 c_nsl_handover_gci;
+  NDB_TICKS c_nsl_handover_sub2_start;
   bool c_nsl_handover_tick_armed;
+  Int64 nsl_handover_sub2_elapsed() const {
+    return NdbTick_IsValid(c_nsl_handover_sub2_start)
+               ? (Int64)NdbTick_Elapsed(c_nsl_handover_sub2_start,
+                                        NdbTick_getCurrentTicks())
+                     .seconds()
+               : (Int64)c_nsl_handover_timer.elapsed_sec();
+  }
   void nsl_arm_handover_tick(Signal *signal, bool force);
 
   /**
