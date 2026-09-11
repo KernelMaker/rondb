@@ -97,6 +97,13 @@ class DblqhProxy : public LocalProxy {
    * signal at that point (see DblqhProxy fan-ins vs steps).
    */
   std::atomic<Uint32> c_nsl_redo_prepare_done{0};
+  /**
+   * Step 8 (restore): the workers that received a START_FRAGREQ (bit =
+   * instance number). Only they restore, or copy in an initial node
+   * restart, and print a per-LDM completion; the node-wide line names
+   * their count, or that the node holds no fragment (no node group).
+   */
+  Bitmask<(MAX_NDBMT_LQH_WORKERS + 32) / 32> c_nsl_workers_with_frags;
  public:
   Uint64 nsl_undo_dd_start() const {
     return c_nsl_undo_dd_start.load(std::memory_order_acquire);

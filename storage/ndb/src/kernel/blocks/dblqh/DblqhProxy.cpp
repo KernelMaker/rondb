@@ -329,6 +329,49 @@ void DblqhProxy::nsl_node_completed(Uint32 step, const NDB_TICKS &since) {
                                        ldms, parts));
     return;
   }
+  if (step == NodeStartLog::NSL_RESTORE) {
+    jam();
+    /**
+     * Only the workers that received a START_FRAGREQ restored (copied,
+     * in an initial node restart) anything and printed a per-LDM
+     * completion; a node without a node group holds no fragment and
+     * prints none. Name what happened instead of claiming every LDM.
+     */
+    const Uint32 with_frags = c_nsl_workers_with_frags.count();
+    const bool copied = (t == NodeState::ST_INITIAL_NODE_RESTART);
+    if (with_frags == 0) {
+      jam();
+      if (copied) {
+        infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t,
+                                           "completed", elapsed,
+                                           "no fragments to copy to this"
+                                           " node"));
+      } else {
+        infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t,
+                                           "completed", elapsed,
+                                           "no fragments to restore on this"
+                                           " node"));
+      }
+      return;
+    }
+    if (with_frags < c_workers) {
+      jam();
+      if (copied) {
+        infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t,
+                                           "completed", elapsed,
+                                           "%u of %u LDMs received fragments"
+                                           " to copy",
+                                           with_frags, c_workers));
+      } else {
+        infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t,
+                                           "completed", elapsed,
+                                           "%u of %u LDMs held fragments to"
+                                           " restore",
+                                           with_frags, c_workers));
+      }
+      return;
+    }
+  }
   infoEvent("%s", NodeStartLog::line(buf, sizeof(buf), step, 0, t, "completed",
                                      elapsed, "all %u LDMs", c_workers));
 }
@@ -1308,6 +1351,7 @@ void DblqhProxy::execSTART_FRAGREQ(Signal *signal) {
   }
   StartFragReq *req = (StartFragReq *)signal->getDataPtrSend();
   Uint32 instanceNo = getInstance(req->tableId, req->fragId);
+  c_nsl_workers_with_frags.set(instanceNo); /* [NODE-START] step 8 */
 
   // wl4391_todo impl. method that fakes senders block-ref
   sendSignal(numberToRef(DBLQH, instanceNo, getOwnNodeId()), GSN_START_FRAGREQ,
