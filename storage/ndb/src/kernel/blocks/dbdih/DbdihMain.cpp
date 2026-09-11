@@ -2221,9 +2221,9 @@ void Dbdih::nsl_report_progress(Signal *signal) {
                              3, cstarttype, "waiting", nsl_sync_sub_elapsed(),
                              "local checkpoint of the copied fragments"
                              " complete on all %u LDMs, waiting for GCI %u"
-                             " to become restorable (GCI %u is) before the"
-                             " log tails are cut and REDO logging is"
-                             " enabled",
+                             " to become restorable (GCI %u is restorable"
+                             " so far) before the log tails are cut and"
+                             " REDO logging is enabled",
                              ldms, gci_needed, gci_done);
         } else if (barrier == 3) {
           NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
@@ -2238,7 +2238,7 @@ void Dbdih::nsl_report_progress(Signal *signal) {
                              3, cstarttype, "progress", nsl_sync_sub_elapsed(),
                              "enabling REDO logging on the copied fragments:"
                              " %u/%u done",
-                             c_nsl_frags_logged, c_nsl_frags_copied);
+                             c_nsl_frags_logged, c_nsl_frags_to_log);
           break;
         }
         if (c_nsl_timer.escalate_due()) {
@@ -8485,11 +8485,24 @@ void Dbdih::nr_start_logging(Signal *signal, TakeOverRecordPtr takeOverPtr) {
         char buf[NodeStartLog::BUF_SIZE];
         if (c_nsl_sync_sub == 3) {
           jam();
-          /* Sub-step 3 ends with the last take-over thread. */
-          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_SYNCHRONIZE,
-                             3, cstarttype, "completed", nsl_sync_sub_elapsed(),
-                             "REDO logging enabled on %u fragments",
-                             c_nsl_frags_logged);
+          /* Sub-step 3 ends with the last take-over thread. The copy
+             visited every fragment of the node, REDO logging only those
+             of logged tables: say so when the counts differ. */
+          if (c_nsl_frags_logged == c_nsl_frags_copied) {
+            NodeStartLog::line(buf, sizeof(buf),
+                               NodeStartLog::NSL_SYNCHRONIZE, 3, cstarttype,
+                               "completed", nsl_sync_sub_elapsed(),
+                               "REDO logging enabled on %u fragments",
+                               c_nsl_frags_logged);
+          } else {
+            NodeStartLog::line(buf, sizeof(buf),
+                               NodeStartLog::NSL_SYNCHRONIZE, 3, cstarttype,
+                               "completed", nsl_sync_sub_elapsed(),
+                               "REDO logging enabled on %u of the %u copied"
+                               " fragments, the rest are ordered indexes or"
+                               " unlogged tables and need none",
+                               c_nsl_frags_logged, c_nsl_frags_copied);
+          }
         }
         infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
                                            NodeStartLog::NSL_SYNCHRONIZE, 0,
@@ -9466,6 +9479,11 @@ void Dbdih::execCOPY_FRAGCONF(Signal *signal) {
   TabRecordPtr tabPtr;
   tabPtr.i = takeOverPtr.p->toCurrentTabref;
   ptrCheckGuard(tabPtr, ctabFileSize, tabRecord);
+  if (tabPtr.p->tabStorage == TabRecord::ST_NORMAL) {
+    /* [NODE-START] step 12 sub-step 3 total: only these fragments get
+       REDO logging enabled (nr_start_logging skips the other classes). */
+    c_nsl_frags_to_log++;
+  }
 
   FragmentstorePtr fragPtr;
   getFragstore(tabPtr.p, takeOverPtr.p->toCurrentFragid, fragPtr);
@@ -21190,6 +21208,7 @@ void Dbdih::execSTART_RECCONF(Signal *signal) {
     infoEvent("Bring Database On-line Starting on node %u", senderNodeId);
 
     c_nsl_frags_copied = 0;
+    c_nsl_frags_to_log = 0;
     c_nsl_sync_row_ops_base = nsl_lqh_copy_row_ops_total();
     c_nsl_sync_sub = 1; /* START_TOREQ outstanding, see execSTART_TOCONF */
     nsl_start_step(signal, NodeStartLog::NSL_SYNCHRONIZE);

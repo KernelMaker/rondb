@@ -2558,6 +2558,9 @@ class Dbdih : public SimulatedBlock {
   Uint32 c_nsl_perm_retries;
   Uint32 c_nsl_last_perm_ref;
   Uint32 c_nsl_frags_copied;
+  Uint32 c_nsl_frags_to_log;        /* step 12: copied fragments of logged tables; the copy also
+                                       visits ordered indexes and unlogged tables, the REDO
+                                       logging phase (nr_start_logging) skips them */
   Uint32 c_nsl_frags_logged;        /* step 12 sub-step 3: fragments with REDO logging enabled */
   Uint64 c_nsl_sync_row_ops_base;   /* step 12: DBLQH copy rows at its start */
   Uint32 c_nsl_sync_sub;            /* step 12 sub-step in progress (1..3) */
