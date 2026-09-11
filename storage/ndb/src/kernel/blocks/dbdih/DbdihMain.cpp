@@ -2280,13 +2280,13 @@ void Dbdih::nsl_report_progress(Signal *signal) {
        * System restart master, own local recovery done (DBLQH printed
        * steps 8-11): waiting for the other nodes to finish theirs.
        */
-      char nodes[NdbNodeBitmask::TextLength + 1];
       NodeStartLog::wait_line(buf, sizeof(buf), elapsed,
                               "local recovery of this node is complete,"
                               " waiting for nodes %s to complete theirs"
                               " (START_RECCONF)",
-                              c_START_RECREQ_Counter.getNodeBitmask().getText(
-                                  nodes));
+                              BaseString::getPrettyTextShort(
+                                  c_START_RECREQ_Counter.getNodeBitmask())
+                                  .c_str());
       if (c_nsl_timer.escalate_due()) {
         jam();
         infoEvent("%s", buf);
@@ -2294,9 +2294,55 @@ void Dbdih::nsl_report_progress(Signal *signal) {
       break;
     }
     case NodeStartLog::NSL_WAIT_LCP: {
-      NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 1,
-                         cstarttype, "waiting", elapsed,
-                         "waiting for a complete local checkpoint");
+      /**
+       * Same reading of c_lcpState as the master's END_TOREQ handling
+       * (WAIT_LCP): up to LCP_TC_CLOPSIZE no LCP has started; from
+       * START_LCP_REQ on (handleStartLcpReq sets the status, the
+       * participants and SYSFILE->latestLCP_ID) the LCP includes this
+       * node only if it is a participating LQH. A non-master sees
+       * LCP_COPY_GCI before its START_LCP_REQ, when the participants of
+       * the new LCP are not known here yet.
+       */
+      const Uint32 master = refToNode(cmasterdihref);
+      switch (c_lcpState.lcpStatus) {
+        case LCP_STATUS_IDLE:
+        case LCP_WAIT_MUTEX:
+        case LCP_TCGET:
+        case LCP_TC_CLOPSIZE:
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 1,
+                             cstarttype, "waiting", elapsed,
+                             "master node %u has not yet completed a local"
+                             " checkpoint that includes this node, waiting"
+                             " for the next LCP to start",
+                             master);
+          break;
+        case LCP_COPY_GCI:
+          NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP, 1,
+                             cstarttype, "waiting", elapsed,
+                             "master node %u has not yet completed a local"
+                             " checkpoint that includes this node, an LCP"
+                             " is starting",
+                             master);
+          break;
+        default:
+          if (c_lcpState.m_participatingLQH.get(getOwnNodeId())) {
+            NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP,
+                               1, cstarttype, "waiting", elapsed,
+                               "master node %u has not yet completed a local"
+                               " checkpoint that includes this node, LCP %u"
+                               " is running with this node",
+                               master, SYSFILE->latestLCP_ID);
+          } else {
+            NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_WAIT_LCP,
+                               1, cstarttype, "waiting", elapsed,
+                               "master node %u has not yet completed a local"
+                               " checkpoint that includes this node, LCP %u"
+                               " is running without it, the next one"
+                               " includes it",
+                               master, SYSFILE->latestLCP_ID);
+          }
+          break;
+      }
       if (c_nsl_timer.escalate_due()) {
         jam();
         infoEvent("%s", buf);
@@ -21241,13 +21287,14 @@ void Dbdih::execSTART_RECCONF(Signal *signal) {
     } else {
       jam();
       /* The nodes needing take-over run it themselves after this point. */
-      char nodes[NdbNodeBitmask::TextLength + 1];
       infoEvent("%s", NodeStartLog::line(buf, sizeof(buf),
                                          NodeStartLog::NSL_SYNCHRONIZE, 0,
                                          cstarttype, "skipped", -1,
                                          "this node needs no take-over,"
                                          " nodes %s are taken over next",
-                                         m_to_nodes.getText(nodes)));
+                                         BaseString::getPrettyTextShort(
+                                             m_to_nodes)
+                                             .c_str()));
     }
   }
 

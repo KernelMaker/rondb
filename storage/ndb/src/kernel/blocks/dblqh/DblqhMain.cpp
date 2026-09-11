@@ -38734,9 +38734,14 @@ void Dblqh::nsl_report_redo_prepare(Signal *signal) {
    * its MByte position. The files are opened one by one for the
    * search (front page, header of the last file, headers of the
    * earlier files) and are OPEN while their pages are read; a part
-   * that has finished the search says so.
+   * that has finished the search says so. While no part is reading
+   * (every unfinished part has an open or close in flight) the LDM
+   * waits for the file system and the line is a waiting line: its
+   * position cannot move until the file system answers, and the
+   * contract lets only a waiting line repeat unchanged.
    */
   char detail[384];
+  bool reading_any = false;
   int pos = BaseString::snprintf(detail, sizeof(detail),
                                  "LDM(%u): reading REDO log page headers",
                                  instance());
@@ -38779,6 +38784,7 @@ void Dblqh::nsl_report_redo_prepare(Signal *signal) {
       filePtr.i = filePtr.p->nextLogFile;
     }
     if (reading != RNIL) {
+      reading_any = true;
       filePtr.i = reading;
       ptrCheckGuard(filePtr, clogFileFileSize, logFileRecord);
       pos += BaseString::snprintf(detail + pos, sizeof(detail) - pos,
@@ -38803,7 +38809,8 @@ void Dblqh::nsl_report_redo_prepare(Signal *signal) {
     }
   }
   NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_REDO_PREPARE, 1,
-                     cstartType, "progress", elapsed, "%s", detail);
+                     cstartType, reading_any ? "progress" : "waiting", elapsed,
+                     "%s", detail);
 }
 
 void Dblqh::nsl_report_progress(Signal *signal) {

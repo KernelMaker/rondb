@@ -668,21 +668,22 @@ void Qmgr::nsl_report_inclusion_wait() {
    */
   char buf[NodeStartLog::BUF_SIZE];
   if (cpresident == getOwnNodeId()) {
-    char nodes[NdbNodeBitmask::TextLength + 1];
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_JOIN, 3,
                        NodeState::ST_ILLEGAL_TYPE, "waiting",
                        (Int64)c_nsl_join_timer.elapsed_sec(),
                        "we are the president, waiting to include the"
                        " co-starting nodes %s (CM_ADD)",
-                       c_start.m_starting_nodes.getText(nodes));
+                       BaseString::getPrettyTextShort(c_start.m_starting_nodes)
+                           .c_str());
   } else if (c_start.m_gsn == GSN_CM_NODEINFOREQ && !c_start.m_nodes.done()) {
-    char nodes[NdbNodeBitmask::TextLength + 1];
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_JOIN, 3,
                        NodeState::ST_ILLEGAL_TYPE, "waiting",
                        (Int64)c_nsl_join_timer.elapsed_sec(),
                        "exchanging node information, waiting for"
                        " CM_NODEINFOCONF from nodes %s",
-                       c_start.m_nodes.getNodeBitmask().getText(nodes));
+                       BaseString::getPrettyTextShort(
+                           c_start.m_nodes.getNodeBitmask())
+                           .c_str());
   } else {
     NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_JOIN, 3,
                        NodeState::ST_ILLEGAL_TYPE, "waiting",

@@ -1188,14 +1188,15 @@ void Suma::check_wait_handover_timeout(Signal *signal) {
                            " waiting for GCI %u to complete",
                            c_nsl_handover_gci);
       } else {
-        char nodes[NdbNodeBitmask::TextLength + 1];
         NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_HANDOVER, 2,
                            m_typeOfStart, "waiting",
                            nsl_handover_sub2_elapsed(),
                            "waiting for the bucket switchover at GCI %u,"
                            " nodes still to confirm: %s",
                            c_nsl_handover_gci,
-                           c_startup.m_handover_nodes.getText(nodes));
+                           BaseString::getPrettyTextShort(
+                               c_startup.m_handover_nodes)
+                               .c_str());
       }
       if (c_nsl_handover_timer.escalate_due()) {
         jam();
@@ -1287,7 +1288,10 @@ void Suma::send_handover_req(Signal *signal, Uint32 type) {
                          nsl_handover_sub2_elapsed(),
                          "handover of the subscription buckets requested from"
                          " nodes %s at GCI %u",
-                         buf, gci);
+                         BaseString::getPrettyTextShort(
+                             c_startup.m_handover_nodes)
+                             .c_str(),
+                         gci);
     }
   }
 }

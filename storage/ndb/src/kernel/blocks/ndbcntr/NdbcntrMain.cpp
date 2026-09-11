@@ -289,15 +289,17 @@ void Ndbcntr::execCONTINUEB(Signal *signal) {
           missing.bitANDC(c_start.m_waiting);
           NdbNodeBitmask absent = c_allDefinedNodes;
           absent.bitANDC(c_clusterNodes);
-          char m[NdbNodeBitmask::TextLength + 1];
-          char a[NdbNodeBitmask::TextLength + 1];
+          const BaseString missing_txt =
+              BaseString::getPrettyTextShort(missing);
+          const BaseString absent_txt = BaseString::getPrettyTextShort(absent);
           NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ADMISSION, 1,
                              ctypeOfStart, "waiting",
                              (Int64)c_nsl_admission_timer.elapsed_sec(),
                              "this node is the master, waiting for nodes %s"
                              " to request a start, data nodes not in the"
                              " cluster: %s",
-                             missing.getText(m), absent.getText(a));
+                             missing_txt.c_str(),
+                             absent.isclear() ? "none" : absent_txt.c_str());
         } else {
           jam();
           NodeStartLog::line(buf, sizeof(buf), NodeStartLog::NSL_ADMISSION, 1,
