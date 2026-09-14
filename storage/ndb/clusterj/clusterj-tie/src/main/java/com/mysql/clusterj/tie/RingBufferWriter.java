@@ -104,7 +104,7 @@ class RingBufferWriter {
         }
 
         /** Unpack an existing meta value. Returns false if the value is
-         *  corrupt (NULL, too short, or unknown version) — the caller must
+         *  corrupt (NULL, too short, or unknown version) - the caller must
          *  fail rather than silently re-initialize, which would reset
          *  count/totalInserts and orphan every existing data row. Mirrors
          *  NdbRingBufferWriter and the SQL handler (NDB error 4357). */

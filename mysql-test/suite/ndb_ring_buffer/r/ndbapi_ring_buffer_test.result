@@ -40,18 +40,18 @@ CREATE DATABASE IF NOT EXISTS test;
   Total rows (with meta): 6
   Meta: count=5 total_inserts=40
   PASS: Concurrent same-prefix inserts
-[Test 18] deleteOldest — basic partial ring
-  PASS: deleteOldest — basic partial ring
-[Test 19] deleteOldest — clamp + idempotent on drained
-  PASS: deleteOldest — clamp + idempotent on drained
-[Test 20] deleteOldest — empty table
-  PASS: deleteOldest — empty table
-[Test 21] deleteOldest — after wrap
-  PASS: deleteOldest — after wrap
-[Test 22] deleteOldest — refill order (no-hole proof)
-  PASS: deleteOldest — refill order (no-hole proof)
-[Test 23] deleteOldest — multi-prefix isolation
-  PASS: deleteOldest — multi-prefix isolation
+[Test 18] deleteOldest - basic partial ring
+  PASS: deleteOldest - basic partial ring
+[Test 19] deleteOldest - clamp + idempotent on drained
+  PASS: deleteOldest - clamp + idempotent on drained
+[Test 20] deleteOldest - empty table
+  PASS: deleteOldest - empty table
+[Test 21] deleteOldest - after wrap
+  PASS: deleteOldest - after wrap
+[Test 22] deleteOldest - refill order (no-hole proof)
+  PASS: deleteOldest - refill order (no-hole proof)
+[Test 23] deleteOldest - multi-prefix isolation
+  PASS: deleteOldest - multi-prefix isolation
 [Test 24] raw-API ring buffer resize rejected
   PASS: raw-API ring buffer resize rejected
 [Test 25] meta-read absorb preserves unrelated op error
@@ -66,10 +66,10 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: add-fragment ALTER on ring buffer table rejected
 [Test 30] corrupt ring_meta rejected
   PASS: corrupt ring_meta rejected
-[Test 31] deleteOldest — maxN=0, auto-flush, ring_size=1
-  PASS: deleteOldest — maxN=0, auto-flush, ring_size=1
-[Test 32] deleteOldest — blob table
-  PASS: deleteOldest — blob table
+[Test 31] deleteOldest - maxN=0, auto-flush, ring_size=1
+  PASS: deleteOldest - maxN=0, auto-flush, ring_size=1
+[Test 32] deleteOldest - blob table
+  PASS: deleteOldest - blob table
 
 === Results ===
 Passed: 32

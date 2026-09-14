@@ -213,7 +213,7 @@ bool show_meta_active(THD *thd, bool is_ring_buffer, bool delete_allowed) {
   if (thdvar_show_meta(thd)) {
     /*
      * The session variable is a read-only diagnostic: a data-changing
-     * statement's scan must not surface meta rows — an UPDATE reaching
+     * statement's scan must not surface meta rows - an UPDATE reaching
      * the meta row would error the whole statement ("Cannot update meta
      * row on ring-buffer table") and a DELETE outside the validated
      * prefix-delete walker (which uses delete_allowed above) must never
@@ -761,7 +761,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
 
       /*
        * A meta row whose ring_meta is NULL, too short, or of an unknown
-       * version is corrupt — fail instead of silently re-initializing.
+       * version is corrupt - fail instead of silently re-initializing.
        * Re-init would reset count/total_inserts and turn every existing
        * data row into a phantom the ring no longer tracks. Mirrors
        * NdbRingBufferWriter (error 4357) and the ClusterJ writer.

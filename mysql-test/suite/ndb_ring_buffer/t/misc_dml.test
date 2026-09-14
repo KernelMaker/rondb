@@ -348,7 +348,7 @@ DROP PROCEDURE test.fill_ring;
 DROP TABLE test.rb_proc;
 
 --echo #
---echo # Case 16: LOAD DATA ... REPLACE — blocked
+--echo # Case 16: LOAD DATA ... REPLACE - blocked
 --echo #
 
 CREATE TABLE test.rb_loadrep (

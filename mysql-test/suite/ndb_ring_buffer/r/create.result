@@ -414,7 +414,7 @@ client_id	row_seq	data
 1	3	c
 DROP TABLE test.t23;
 #
-# Case 24: explicit PARTITION BY — only [LINEAR] KEY is supported
+# Case 24: explicit PARTITION BY - only [LINEAR] KEY is supported
 #
 CREATE TABLE test.t24 (
 client_id INT NOT NULL,

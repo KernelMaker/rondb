@@ -255,7 +255,7 @@ SELECT client_id, ring_idx, event_data FROM test.rb
 --echo # Case 9: concurrent first-insert on a fresh prefix
 --echo #
 
-# con1 inserts the first row for prefix 9 and holds the transaction open —
+# con1 inserts the first row for prefix 9 and holds the transaction open -
 # its uncommitted meta-row insert holds the meta row lock. con2's insert
 # for the same prefix must wait on that lock and continue cleanly after
 # con1 commits (second slot, no duplicate-key error on the hidden meta row).
@@ -281,14 +281,14 @@ SELECT client_id, ring_idx, event_data FROM test.rb
     ORDER BY ring_idx;
 
 ###############################################################################
-# Case 10: Overlapping explicit transactions on ONE prefix — meta totals
+# Case 10: Overlapping explicit transactions on ONE prefix - meta totals
 ###############################################################################
 
 --echo #
 --echo # Case 10: overlapping transactions on one prefix, meta byte-exact
 --echo #
 
-# con1 opens a transaction and inserts the first row for fresh prefix 20 —
+# con1 opens a transaction and inserts the first row for fresh prefix 20 -
 # the uncommitted meta row insert holds the meta lock. con2's autocommit
 # insert for the same prefix queues on that lock. con1 adds a second row in
 # the same transaction and commits; con2 then proceeds. Slot order is

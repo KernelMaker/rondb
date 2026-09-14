@@ -47,7 +47,7 @@ id	ring_idx	data
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both fully replicated and MAX_ROWS_PER_PK'
 #
-# Case 4c: INSERT after the rejected ALTERs — ring intact at size 3
+# Case 4c: INSERT after the rejected ALTERs - ring intact at size 3
 #
 INSERT INTO test.rb_alter (id, data) VALUES (1, 'd');
 SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
@@ -79,7 +79,7 @@ id	ring_idx	val	extra
 1	3	after_alter	0
 DROP TABLE test.rb_preserve;
 #
-# Case 6: REORGANIZE PARTITION / ADD PARTITION — blocked
+# Case 6: REORGANIZE PARTITION / ADD PARTITION - blocked
 #
 CREATE TABLE test.rb_reorg (
 client_id INT NOT NULL,
@@ -154,7 +154,7 @@ client_id	ring_idx	val
 1	2	b
 DROP TABLE test.rb_reorg_i;
 #
-# Case 7: ALTER adding TTL to a ring buffer table — rejected
+# Case 7: ALTER adding TTL to a ring buffer table - rejected
 #
 CREATE TABLE test.rb_ttl (
 client_id INT NOT NULL,

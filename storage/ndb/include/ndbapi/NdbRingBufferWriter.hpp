@@ -71,7 +71,7 @@ class NdbOperation;
  *
  * Error handling: when any method fails (addRow() returns nullptr,
  * flush()/deleteOldest() return -1), inspect getErrorCode()/
- * getErrorMessage() and ROLL BACK the transaction — queued ring
+ * getErrorMessage() and ROLL BACK the transaction - queued ring
  * operations and the meta update may otherwise commit partially applied
  * (e.g. deletes without the matching meta count decrement).  A writer
  * that has reported an error is permanently failed (it is bound to the
@@ -137,7 +137,7 @@ class NdbRingBufferWriter {
    *                     columns ignored.
    * @param maxN         Maximum rows to delete.  If the ring contains
    *                     fewer rows, deletes what's available.  Empty
-   *                     ring is not an error — outActual is set to 0.
+   *                     ring is not an error - outActual is set to 0.
    *                     maxN == 0 is a no-op success that does not touch
    *                     the meta row.
    * @param outActual    Output: number of rows actually deleted.
@@ -147,7 +147,7 @@ class NdbRingBufferWriter {
    *         row overcounting.
    *
    * A pending addRow() batch on this writer is flushed automatically
-   * before the meta row is read — no explicit flush() call is needed.
+   * before the meta row is read - no explicit flush() call is needed.
    *
    * Internally calls execute(NoCommit).  Caller is responsible for
    * committing the transaction.

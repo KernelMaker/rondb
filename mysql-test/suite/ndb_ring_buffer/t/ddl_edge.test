@@ -527,7 +527,7 @@ SELECT id, ring_idx, val FROM test.rb_alter_idx ORDER BY ring_idx;
 DROP TABLE test.rb_alter_idx;
 
 --echo #
---echo # Case 17: OPTIMIZE TABLE — reclaims var parts, no 940
+--echo # Case 17: OPTIMIZE TABLE - reclaims var parts, no 940
 --echo #
 
 CREATE TABLE test.rb_opt (
@@ -555,7 +555,7 @@ SELECT id, ring_idx, LEFT(val, 8) AS v FROM test.rb_opt WHERE id = 1 ORDER BY ri
 DROP TABLE test.rb_opt;
 
 --echo #
---echo # Case 18: STORAGE DISK user column — ring works end-to-end
+--echo # Case 18: STORAGE DISK user column - ring works end-to-end
 --echo #
 
 # PK and internal ring columns are always in-memory; a disk-stored user
