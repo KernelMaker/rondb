@@ -335,7 +335,7 @@ id	ring_idx	val	category
 1	5	elderberry	high
 DROP TABLE test.rb_sel;
 #
-# Case 22: Bulk insert → update → delete → re-insert
+# Case 22: Bulk insert -> update -> delete -> re-insert
 #
 CREATE TABLE test.rb_seq (
 id INT NOT NULL,

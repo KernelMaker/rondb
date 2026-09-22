@@ -146,7 +146,7 @@ SELECT client_id, ring_idx, event_data FROM test.rb
 SHOW CREATE TABLE test.rb;
 
 ###############################################################################
-# Case 5: Writes while a node is down — recovered replica serves them back
+# Case 5: Writes while a node is down - recovered replica serves them back
 ###############################################################################
 
 --echo #

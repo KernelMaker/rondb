@@ -285,7 +285,7 @@ id	ring_idx	val
 DROP PROCEDURE test.fill_ring;
 DROP TABLE test.rb_proc;
 #
-# Case 16: LOAD DATA ... REPLACE — blocked
+# Case 16: LOAD DATA ... REPLACE - blocked
 #
 CREATE TABLE test.rb_loadrep (
 id INT NOT NULL,

@@ -562,7 +562,7 @@ SELECT id, ring_idx, data FROM test.rb_cycle ORDER BY ring_idx;
 DROP TABLE test.rb_cycle;
 
 --echo #
---echo # Case 36: DELETE with LIMIT, ORDER BY, or multi-table form — blocked
+--echo # Case 36: DELETE with LIMIT, ORDER BY, or multi-table form - blocked
 --echo #
 
 CREATE TABLE test.rb_limit (
@@ -579,14 +579,14 @@ INSERT INTO test.rb_limit (id, val) VALUES (1, 'y');
 INSERT INTO test.rb_limit (id, val) VALUES (2, 'z');
 
 # LIMIT can delete a strict subset of a ring; "large enough" cannot be
-# validated at statement level — all LIMIT forms are rejected
+# validated at statement level - all LIMIT forms are rejected
 --error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit WHERE id = 1 LIMIT 100;
 
 --error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit LIMIT 1;
 
-# ORDER BY selects rows before the handler validates — rejected
+# ORDER BY selects rows before the handler validates - rejected
 --error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
 
@@ -594,7 +594,7 @@ DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val LIMIT 1;
 --error ER_ILLEGAL_HA
 DELETE FROM test.rb_limit WHERE id = 1 ORDER BY val;
 
-# Multi-table DELETE restricts the deleted set via the join — rejected
+# Multi-table DELETE restricts the deleted set via the join - rejected
 CREATE TABLE test.plain_join (id INT PRIMARY KEY) ENGINE = NDB;
 INSERT INTO test.plain_join VALUES (1);
 --error ER_ILLEGAL_HA
@@ -622,7 +622,7 @@ SELECT id, ring_idx, val FROM test.rb_limit ORDER BY id, ring_idx;
 DROP TABLE test.rb_limit;
 
 --echo #
---echo # Case 37: DELETE on ring-buffer table with DELETE triggers — blocked
+--echo # Case 37: DELETE on ring-buffer table with DELETE triggers - blocked
 --echo #
 
 CREATE TABLE test.rb_trig (
@@ -655,7 +655,7 @@ SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
 DROP TRIGGER test.rb_trig_ad;
 
 # A BEFORE DELETE trigger keeps the bulk path but would fire for the
-# hidden meta row too — rejected the same way.
+# hidden meta row too - rejected the same way.
 CREATE TRIGGER test.rb_trig_bd BEFORE DELETE ON test.rb_trig
     FOR EACH ROW SET @del_cnt = IFNULL(@del_cnt, 0) + 1;
 
@@ -681,7 +681,7 @@ SELECT id, ring_idx, val FROM test.rb_trig ORDER BY ring_idx;
 DROP TABLE test.rb_trig;
 
 --echo #
---echo # Case 38: UPDATE of primary-key columns — blocked
+--echo # Case 38: UPDATE of primary-key columns - blocked
 --echo #
 
 CREATE TABLE test.rb_pkup (
@@ -715,7 +715,7 @@ SELECT id, ring_idx, val FROM test.rb_pkup ORDER BY id, ring_idx;
 
 # NDB cannot roll back a single statement: the failed UPDATE marks the
 # whole transaction for rollback (see ndbcluster_rollback), so the
-# earlier INSERT is lost too. Generic NDB semantics, pinned here —
+# earlier INSERT is lost too. Generic NDB semantics, pinned here -
 # the SELECT returns no row.
 BEGIN;
 INSERT INTO test.rb_pkup (id, val) VALUES (3, 'txn_survivor');

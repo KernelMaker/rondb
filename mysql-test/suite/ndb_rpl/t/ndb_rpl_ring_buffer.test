@@ -198,7 +198,7 @@ SELECT client_id, ring_idx, event_data FROM test.rb
 
 --connection master
 
-# Check meta rows on master — including the packed meta bytes
+# Check meta rows on master - including the packed meta bytes
 SET ndb_ring_buffer_show_meta = ON;
 SELECT client_id, ring_idx FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
@@ -310,7 +310,7 @@ INSERT INTO test.rb (client_id, event_data) VALUES (1, 'grow_D');
 SELECT client_id, ring_idx, event_data FROM test.rb
     WHERE client_id = 1 ORDER BY ring_idx;
 
-# Wrap at the original size — oldest row (post_trunc_A) overwritten
+# Wrap at the original size - oldest row (post_trunc_A) overwritten
 INSERT INTO test.rb (client_id, event_data) VALUES (1, 'wrap_E');
 
 SELECT client_id, ring_idx, event_data FROM test.rb
@@ -397,7 +397,7 @@ SELECT id, ring_idx, code FROM test.rb_nn_uniq ORDER BY id, ring_idx;
 SELECT id, ring_idx, code FROM test.rb_nn_uniq ORDER BY id, ring_idx;
 
 ###############################################################################
-# Case 15: Promote-to-source — replica ring continues from replicated state
+# Case 15: Promote-to-source - replica ring continues from replicated state
 ###############################################################################
 
 --echo #
@@ -421,7 +421,7 @@ INSERT INTO test.rb_promote (client_id, event_data) VALUES (1, 'p_B');
 --connection slave
 
 # Promote: stop replication, write on the former replica. The inserts must
-# continue from the REPLICATED meta position (slot 3, then wrap to 1) —
+# continue from the REPLICATED meta position (slot 3, then wrap to 1) -
 # not restart the ring.
 --source include/rpl/stop_replica.inc
 
@@ -440,13 +440,13 @@ SET ndb_ring_buffer_show_meta = OFF;
 --source include/rpl/start_replica.inc
 
 ###############################################################################
-# Case 16: PITR pin — mysqlbinlog | mysql replay of ring buffer row events
+# Case 16: PITR pin - mysqlbinlog | mysql replay of ring buffer row events
 # fails loudly (B17/C12). The replayed Write_rows events apply through a
 # regular client session (no applier) in REPLACE/idempotent row-apply mode,
 # so the ring-buffer write intercept rejects them ("REPLACE is not allowed
 # on ring-buffer tables"): ring buffer binlogs are NOT SQL-replayable.
 # Backup/restore of ring buffer tables must use ndb_restore (mysqldump SQL
-# restore is equally impossible — INSERT listing ring_idx is rejected).
+# restore is equally impossible - INSERT listing ring_idx is rejected).
 # The replay session runs with sql_log_bin=0 (standard PITR practice):
 # without it the server re-logs the replayed row event into its own binlog
 # and a downstream replica breaks on the same intercept rejection.
@@ -460,7 +460,7 @@ SET ndb_ring_buffer_show_meta = OFF;
 
 # The replay failure below is reported in the master's error log with the
 # "Replica SQL:" prefix (BINLOG statement application reuses the applier
-# machinery, "source log FIRST") — expected, suppress for the log check.
+# machinery, "source log FIRST") - expected, suppress for the log check.
 --disable_query_log
 call mtr.add_suppression("Could not execute Write_rows event on table pitr.rb_pitr");
 --enable_query_log
@@ -513,7 +513,7 @@ DROP DATABASE pitr;
 SELECT COUNT(*) AS replayed_rows FROM pitr.rb_pitr;
 
 # The replay was not binlogged, so the re-created pitr db exists only on
-# the master — drop it master-locally too.
+# the master - drop it master-locally too.
 SET sql_log_bin = 0;
 DROP DATABASE pitr;
 SET sql_log_bin = 1;

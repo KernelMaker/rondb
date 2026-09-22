@@ -127,7 +127,7 @@ SELECT client_id, ring_idx, HEX(ring_meta) FROM test.rb
 SET ndb_ring_buffer_show_meta = OFF;
 
 --echo #
---echo # Case 11: COUNT(*) invariant — bare COUNT excludes meta rows and equals
+--echo # Case 11: COUNT(*) invariant - bare COUNT excludes meta rows and equals
 --echo #          the sum of per-prefix data counts; show_meta exposes exactly
 --echo #          one meta row per prefix
 --echo #
@@ -172,7 +172,7 @@ SELECT client_id, ring_idx FROM test.rb
 COMMIT;
 
 --echo #
---echo # Case 13: show_meta is read-only — data-changing scans skip meta
+--echo # Case 13: show_meta is read-only - data-changing scans skip meta
 --echo #
 
 SET ndb_ring_buffer_show_meta = ON;

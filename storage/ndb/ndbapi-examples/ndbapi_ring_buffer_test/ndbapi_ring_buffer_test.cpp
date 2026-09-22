@@ -1994,10 +1994,10 @@ static bool insertN(Ndb *ndb, const NdbDictionary::Table *table,
 
 /*
  * Test 18: deleteOldest on a partial (not yet wrapped) ring.
- * Insert 3 rows, deleteOldest(1) — slot 1 must go, slots 2,3 survive.
+ * Insert 3 rows, deleteOldest(1) - slot 1 must go, slots 2,3 survive.
  */
 static bool test_delete_oldest_basic(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 18] deleteOldest — basic partial ring" << std::endl;
+  std::cout << "[Test 18] deleteOldest - basic partial ring" << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t18");
   char ddl[1024];
@@ -2046,18 +2046,18 @@ static bool test_delete_oldest_basic(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t18");
-  TEST_PASS("deleteOldest — basic partial ring");
+  TEST_PASS("deleteOldest - basic partial ring");
   return true;
 }
 
 /*
  * Test 19: deleteOldest clamps to count, then is idempotent on drained ring.
- * Insert 3, deleteOldest(maxN=10) → outActual=3, ring drained.
- * Call deleteOldest again on drained ring → outActual=0, no error.
+ * Insert 3, deleteOldest(maxN=10) -> outActual=3, ring drained.
+ * Call deleteOldest again on drained ring -> outActual=0, no error.
  * Meta row must remain (count=0, slot 0 still present).
  */
 static bool test_delete_oldest_drain_idempotent(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 19] deleteOldest — clamp + idempotent on drained"
+  std::cout << "[Test 19] deleteOldest - clamp + idempotent on drained"
             << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t19");
@@ -2078,7 +2078,7 @@ static bool test_delete_oldest_drain_idempotent(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "x", 3),
               "insert 3 rows");
 
-  // Drain via deleteOldest(maxN=10) — should clamp to 3.
+  // Drain via deleteOldest(maxN=10) - should clamp to 3.
   {
     NdbTransaction *trans = ndb->startTransaction(table);
     NdbRingBufferWriter writer(table, h.record, trans);
@@ -2116,16 +2116,16 @@ static bool test_delete_oldest_drain_idempotent(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t19");
-  TEST_PASS("deleteOldest — clamp + idempotent on drained");
+  TEST_PASS("deleteOldest - clamp + idempotent on drained");
   return true;
 }
 
 /*
  * Test 20: deleteOldest on a never-touched prefix is a no-op success.
- * No meta row exists → readMetaRow returns 626 → outActual=0, no error.
+ * No meta row exists -> readMetaRow returns 626 -> outActual=0, no error.
  */
 static bool test_delete_oldest_empty_table(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 20] deleteOldest — empty table" << std::endl;
+  std::cout << "[Test 20] deleteOldest - empty table" << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t20");
   char ddl[1024];
@@ -2164,20 +2164,20 @@ static bool test_delete_oldest_empty_table(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t20");
-  TEST_PASS("deleteOldest — empty table");
+  TEST_PASS("deleteOldest - empty table");
   return true;
 }
 
 /*
  * Test 21: deleteOldest after the ring has wrapped.
  * ring_size=5, insert 7 rows.  After wrap: count=5, next_pos=3, slot order
- * (oldest→newest) = 3,4,5,1,2 (data: row_2, row_3, row_4, row_5, row_6).
- * deleteOldest(1) → slot 3 (row_2) gone, count=4, next_pos still 3.
- * deleteOldest(2) → slots 4,5 (row_3, row_4) gone.  Survivors: slots 1,2
+ * (oldest->newest) = 3,4,5,1,2 (data: row_2, row_3, row_4, row_5, row_6).
+ * deleteOldest(1) -> slot 3 (row_2) gone, count=4, next_pos still 3.
+ * deleteOldest(2) -> slots 4,5 (row_3, row_4) gone.  Survivors: slots 1,2
  * holding row_5, row_6.
  */
 static bool test_delete_oldest_after_wrap(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 21] deleteOldest — after wrap" << std::endl;
+  std::cout << "[Test 21] deleteOldest - after wrap" << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t21");
   char ddl[1024];
@@ -2210,7 +2210,7 @@ static bool test_delete_oldest_after_wrap(Ndb *ndb, MYSQL *mysql) {
     TEST_ASSERT(rows[4].ring_idx == 5 && rows[4].data == "row_4", "s5=row_4");
   }
 
-  // deleteOldest(1) — slot 3 (row_2, oldest).
+  // deleteOldest(1) - slot 3 (row_2, oldest).
   {
     NdbTransaction *trans = ndb->startTransaction(table);
     NdbRingBufferWriter writer(table, h.record, trans);
@@ -2223,7 +2223,7 @@ static bool test_delete_oldest_after_wrap(Ndb *ndb, MYSQL *mysql) {
     ndb->closeTransaction(trans);
   }
 
-  // deleteOldest(2) — slots 4,5 (row_3, row_4).
+  // deleteOldest(2) - slots 4,5 (row_3, row_4).
   {
     NdbTransaction *trans = ndb->startTransaction(table);
     NdbRingBufferWriter writer(table, h.record, trans);
@@ -2247,18 +2247,18 @@ static bool test_delete_oldest_after_wrap(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t21");
-  TEST_PASS("deleteOldest — after wrap");
+  TEST_PASS("deleteOldest - after wrap");
   return true;
 }
 
 /*
- * Test 22: refill order after deleteOldest — the "no hole" claim.
+ * Test 22: refill order after deleteOldest - the "no hole" claim.
  * ring_size=5.  Fill (5 inserts, count=5, next_pos=1).  deleteOldest(2)
  * removes slots 1,2.  Subsequent inserts must land at slots 1, then 2
  * (next_pos walks forward, freed slots refill in arrival order).
  */
 static bool test_delete_oldest_refill_order(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 22] deleteOldest — refill order (no-hole proof)"
+  std::cout << "[Test 22] deleteOldest - refill order (no-hole proof)"
             << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t22");
@@ -2279,7 +2279,7 @@ static bool test_delete_oldest_refill_order(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "orig", 5),
               "fill ring (5 inserts)");
 
-  // deleteOldest(2) — drops slots 1,2.  Survivors: slots 3,4,5 with
+  // deleteOldest(2) - drops slots 1,2.  Survivors: slots 3,4,5 with
   // orig_2, orig_3, orig_4.
   {
     NdbTransaction *trans = ndb->startTransaction(table);
@@ -2293,7 +2293,7 @@ static bool test_delete_oldest_refill_order(Ndb *ndb, MYSQL *mysql) {
     ndb->closeTransaction(trans);
   }
 
-  // Insert 2 more — should land at slots 1, 2 in that order.
+  // Insert 2 more - should land at slots 1, 2 in that order.
   TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "post", 2),
               "insert 2 post-pop");
 
@@ -2316,7 +2316,7 @@ static bool test_delete_oldest_refill_order(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t22");
-  TEST_PASS("deleteOldest — refill order (no-hole proof)");
+  TEST_PASS("deleteOldest - refill order (no-hole proof)");
   return true;
 }
 
@@ -2326,7 +2326,7 @@ static bool test_delete_oldest_refill_order(Ndb *ndb, MYSQL *mysql) {
  * cid=1 must not touch cid=2 rows.
  */
 static bool test_delete_oldest_multi_prefix(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 23] deleteOldest — multi-prefix isolation" << std::endl;
+  std::cout << "[Test 23] deleteOldest - multi-prefix isolation" << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t23");
   char ddl[1024];
@@ -2375,7 +2375,7 @@ static bool test_delete_oldest_multi_prefix(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t23");
-  TEST_PASS("deleteOldest — multi-prefix isolation");
+  TEST_PASS("deleteOldest - multi-prefix isolation");
   return true;
 }
 
@@ -2391,7 +2391,7 @@ static bool test_delete_oldest_multi_prefix(Ndb *ndb, MYSQL *mysql) {
  * DICT must reject the change (getRingBufferSizeFlag in alterTable_parse);
  * otherwise existing meta rows, which pack ManagedState for the original ring
  * size, would be left inconsistent. Before the DICT fix this alterTable
- * returned 0 (silent online resize) — this test would then fail at the
+ * returned 0 (silent online resize) - this test would then fail at the
  * "must be rejected" assertion.
  */
 static bool test_alter_ring_size_rejected(Ndb *ndb, MYSQL *mysql) {
@@ -2425,7 +2425,7 @@ static bool test_alter_ring_size_rejected(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(dict->getNdbError().code == 741,
               "expected error 741, got " +
                   std::to_string(dict->getNdbError().code));
-  // Diagnostic to stderr (discarded by the MTR wrapper) — keep stdout, which
+  // Diagnostic to stderr (discarded by the MTR wrapper) - keep stdout, which
   // is compared against the .result, free of the variable error code/message.
   std::cerr << "  (rejected as expected: " << dict->getNdbError().code << " "
             << dict->getNdbError().message << ")" << std::endl;
@@ -2528,7 +2528,7 @@ static bool test_meta_absorb_preserves_unrelated_op(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(addOp != nullptr, std::string("addRow: ") + writer.getErrorMessage());
 
   // (c) The unrelated op's failure must still be observable. Do NOT touch
-  //     userOp here — before the fix it has been freed by the scrub.
+  //     userOp here - before the fix it has been freed by the scrub.
   int transErr = trans->getNdbError().code;
   std::cerr << "  (transErr after absorb = " << transErr << ")" << std::endl;
   TEST_ASSERT(transErr != 0,
@@ -2592,7 +2592,7 @@ static bool test_refresh_tuple_blocked(Ndb *ndb, MYSQL *mysql) {
               "expected error 940, got " + std::to_string(err));
   ndb->closeTransaction(trans);
 
-  // The meta row (ring_idx=0) must be rejected the same way — the guard is
+  // The meta row (ring_idx=0) must be rejected the same way - the guard is
   // op-based, so this pins that no row-kind special case sneaks in.
   h.fillRow(rowbuf, 1, "");
   setInt32(rowbuf, ridx, 0);  // ring_idx = 0 (meta row)
@@ -2620,7 +2620,7 @@ static bool test_refresh_tuple_blocked(Ndb *ndb, MYSQL *mysql) {
  * Helper for Tests 27/28: attempt createTable of a deliberately-broken ring
  * buffer definition and require DICT to reject it. Before the fix DICT
  * accepts any ring metadata (col numbers/types/size unvalidated), so the
- * create SUCCEEDS — we then drop the table immediately (NEVER insert into a
+ * create SUCCEEDS - we then drop the table immediately (NEVER insert into a
  * table with corrupt ring metadata) and report the sub-case as failed.
  * Variable diagnostics go to stderr (the MTR wrapper discards it).
  */
@@ -2649,7 +2649,7 @@ static bool expect_create_rejected(NdbDictionary::Dictionary *dict,
  * Test 27 (B14a): DICT must validate ring buffer metadata at create time.
  * The MySQL layer enforces: ring_idx is an INT and the last PK column;
  * ring_meta is a nullable VARBINARY(>=32) non-key column; ring size is
- * 1..2^31-1. The raw NDB API bypasses all of that — before the fix DICT
+ * 1..2^31-1. The raw NDB API bypasses all of that - before the fix DICT
  * copies the three fields unvalidated, so e.g. an out-of-range
  * ring_idx_col_no makes isRingBufferMetaRow() read an arbitrary word of
  * every row. Each sub-case corrupts ONE field of a valid definition and
@@ -2852,7 +2852,7 @@ static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
  * alterTable) reaches DICT directly; reorg copy writes and reorg triggers
  * carry no ring-buffer flag (940 mid-schema-transaction) and the reorg scan
  * would silently drop meta rows. The table is kept EMPTY so that before the
- * fix the alter deterministically SUCCEEDS (nothing to move — with data the
+ * fix the alter deterministically SUCCEEDS (nothing to move - with data the
  * outcome depends on which prefixes hash to moved fragments).
  */
 static bool test_dict_rejects_add_fragment(Ndb *ndb, MYSQL *mysql) {
@@ -2872,7 +2872,7 @@ static bool test_dict_rejects_add_fragment(Ndb *ndb, MYSQL *mysql) {
   const Uint32 old_frags = tab->getFragmentCount();
 
   // Mimic exactly what mysqld's inplace ADD PARTITION sends (explicit
-  // fragment count + PartitionBalance_Specific) — a fragment-count change
+  // fragment count + PartitionBalance_Specific) - a fragment-count change
   // alone is stopped earlier by generic hashmap/balance checks. This is the
   // vector that reached the unguarded reorg machinery in the SQL-layer red
   // (error 940 mid-schema-transaction with enough prefixes to force
@@ -2924,7 +2924,7 @@ static bool test_dict_rejects_add_fragment(Ndb *ndb, MYSQL *mysql) {
  *
  * The corrupt states are created with a raw flagged updateTuple
  * (OO_RING_BUFFER_OP bypasses the DBTUP write guard exactly like the
- * writer's own ops) — the only way such states can arise in practice.
+ * writer's own ops) - the only way such states can arise in practice.
  *
  * Before the fix: addRow succeeds after corruption -> this test FAILS.
  * After the fix:  addRow/deleteOldest fail with 4357 -> this test PASSES.
@@ -2999,7 +2999,7 @@ static bool test_corrupt_meta_rejected(Ndb *ndb, MYSQL *mysql) {
     std::cerr << "  (" << tag << ": op=" << (op ? "non-null" : "null")
               << " code=" << code << " " << writer.getErrorMessage() << ")"
               << std::endl;
-    ndb->closeTransaction(t);  // never commit — abort whatever was queued
+    ndb->closeTransaction(t);  // never commit - abort whatever was queued
     return op == nullptr && code == ERR_CORRUPT_RING_META;
   };
 
@@ -3015,7 +3015,7 @@ static bool test_corrupt_meta_rejected(Ndb *ndb, MYSQL *mysql) {
   TEST_ASSERT(addRowMustFail("bad_ver"),
               "addRow on version-corrupt meta must fail with 4357");
 
-  // deleteOldest goes through the same meta read — must fail identically.
+  // deleteOldest goes through the same meta read - must fail identically.
   {
     NdbTransaction *t = ndb->startTransaction(table);
     TEST_ASSERT(t != nullptr, "startTransaction (deleteOldest)");
@@ -3061,11 +3061,11 @@ static bool test_corrupt_meta_rejected(Ndb *ndb, MYSQL *mysql) {
 }
 
 /*
- * Test 31: deleteOldest edge coverage — maxN==0 no-op, auto-flush of a
+ * Test 31: deleteOldest edge coverage - maxN==0 no-op, auto-flush of a
  * pending addRow batch, and a ring_size=1 table.
  */
 static bool test_delete_oldest_edges(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 31] deleteOldest — maxN=0, auto-flush, ring_size=1"
+  std::cout << "[Test 31] deleteOldest - maxN=0, auto-flush, ring_size=1"
             << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t31");
@@ -3119,7 +3119,7 @@ static bool test_delete_oldest_edges(Ndb *ndb, MYSQL *mysql) {
     TEST_ASSERT(writer.addRow(rowbuf, mask) != nullptr,
                 std::string("addRow: ") + writer.getErrorMessage());
 
-    // NO explicit flush — deleteOldest must flush the batch itself.
+    // NO explicit flush - deleteOldest must flush the batch itself.
     h.fillRow(rowbuf, 1, "");
     Uint32 actual = 0;
     int rc = writer.deleteOldest(rowbuf, 2, &actual);
@@ -3188,7 +3188,7 @@ static bool test_delete_oldest_edges(Ndb *ndb, MYSQL *mysql) {
                 "size-1 ring refilled at slot 1");
   }
 
-  // SQL INSERT into a ring that deleteOldest has operated on — the two
+  // SQL INSERT into a ring that deleteOldest has operated on - the two
   // writers share the same meta formulas; pin that they compose.
   mysql_exec(mysql,
              "INSERT INTO test.rb_t31b (client_id, event_data) "
@@ -3205,18 +3205,18 @@ static bool test_delete_oldest_edges(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf1;
   delete[] mask1;
   mysql_exec(mysql, "DROP TABLE test.rb_t31b");
-  TEST_PASS("deleteOldest — maxN=0, auto-flush, ring_size=1");
+  TEST_PASS("deleteOldest - maxN=0, auto-flush, ring_size=1");
   return true;
 }
 
 /*
  * Test 32: deleteOldest on a table with a TEXT column. NdbRecord
  * deleteTuple links blob handles automatically (NdbTransaction.cpp,
- * RecTableHasBlob), so blob parts are deleted with the row — this pins
+ * RecTableHasBlob), so blob parts are deleted with the row - this pins
  * that the writer's delete path composes with that machinery.
  */
 static bool test_delete_oldest_blob(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 32] deleteOldest — blob table" << std::endl;
+  std::cout << "[Test 32] deleteOldest - blob table" << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t32");
   mysql_exec(mysql,
@@ -3280,7 +3280,7 @@ static bool test_delete_oldest_blob(Ndb *ndb, MYSQL *mysql) {
     ndb->closeTransaction(trans);
   }
 
-  // Delete the 2 oldest (slots 1,2 — including the 500-byte blob row).
+  // Delete the 2 oldest (slots 1,2 - including the 500-byte blob row).
   {
     NdbTransaction *trans = ndb->startTransaction(table);
     TEST_ASSERT(trans != nullptr, "startTransaction");
@@ -3344,7 +3344,7 @@ static bool test_delete_oldest_blob(Ndb *ndb, MYSQL *mysql) {
   delete[] rowbuf;
   delete[] mask;
   mysql_exec(mysql, "DROP TABLE test.rb_t32");
-  TEST_PASS("deleteOldest — blob table");
+  TEST_PASS("deleteOldest - blob table");
   return true;
 }
 

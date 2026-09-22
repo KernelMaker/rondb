@@ -358,7 +358,7 @@ DROP TABLE test.rb_sel;
 ###############################################################################
 
 --echo #
---echo # Case 22: Bulk insert → update → delete → re-insert
+--echo # Case 22: Bulk insert -> update -> delete -> re-insert
 --echo #
 
 CREATE TABLE test.rb_seq (

@@ -159,7 +159,7 @@ region	client_id	ring_idx	event_data
 1	200	1	r1c200_A
 DROP TABLE test.rb_multi;
 #
-# Case 13: INSERT IGNORE with a unique-index duplicate — pinned
+# Case 13: INSERT IGNORE with a unique-index duplicate - pinned
 #
 CREATE TABLE test.rb_ignore (
 id INT NOT NULL,

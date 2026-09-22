@@ -5052,7 +5052,7 @@ bool Dblqh::handleLCPSurfacing(Signal *signal) {
     commit_reorg(tablePtr);
   }
   /* The deferred commit must apply the staged TTL / ring buffer fields
-     exactly like the non-deferred path in execALTER_TAB_REQ does —
+     exactly like the non-deferred path in execALTER_TAB_REQ does -
      otherwise this LDM keeps the stale values until restart. */
   if (AlterTableReq::getTTLSecFlag(req->changeMask) ||
       AlterTableReq::getTTLColFlag(req->changeMask)) {

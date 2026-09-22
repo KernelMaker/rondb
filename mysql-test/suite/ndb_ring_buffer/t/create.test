@@ -249,7 +249,7 @@ CREATE TABLE test.t17 (
   COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
 
 --echo #
---echo # Case 17b: Error — fully replicated and MAX_ROWS_PER_PK mutual exclusion
+--echo # Case 17b: Error - fully replicated and MAX_ROWS_PER_PK mutual exclusion
 --echo #
 
 --error ER_ILLEGAL_HA_CREATE_OPTION
@@ -263,7 +263,7 @@ CREATE TABLE test.t17b (
   COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
 
 --echo #
---echo # Case 17c: Error — fully replicated via server default (ndb_fully_replicated=1)
+--echo # Case 17c: Error - fully replicated via server default (ndb_fully_replicated=1)
 --echo #            and MAX_ROWS_PER_PK mutual exclusion; FULLY_REPLICATED=0 escapes
 --echo #
 
@@ -271,7 +271,7 @@ SET @save_fr = @@global.ndb_fully_replicated;
 SET GLOBAL ndb_fully_replicated = 1;
 
 # Server default makes the table fully replicated even without a
-# FULLY_REPLICATED comment modifier — the combination must still be rejected.
+# FULLY_REPLICATED comment modifier - the combination must still be rejected.
 --error ER_ILLEGAL_HA_CREATE_OPTION
 CREATE TABLE test.t17c (
     client_id INT NOT NULL,
@@ -458,13 +458,13 @@ SELECT client_id, row_seq, data FROM test.t23 ORDER BY row_seq;
 DROP TABLE test.t23;
 
 --echo #
---echo # Case 24: explicit PARTITION BY — only [LINEAR] KEY is supported
+--echo # Case 24: explicit PARTITION BY - only [LINEAR] KEY is supported
 --echo #
 
 # NDB-native KEY partitioning routes every op by key hash, so the ring
 # paths (which never set an explicit partition id) work. User-defined
 # partitioning (HASH by expression / RANGE / LIST / subpartitions) needs
-# OO_PARTITION_ID on every op — without the guard every INSERT failed
+# OO_PARTITION_ID on every op - without the guard every INSERT failed
 # with NDB error 4544 "Wrong partitionInfo type for table".
 
 CREATE TABLE test.t24 (

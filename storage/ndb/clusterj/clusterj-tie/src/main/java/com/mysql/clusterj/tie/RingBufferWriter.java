@@ -104,7 +104,7 @@ class RingBufferWriter {
         }
 
         /** Unpack an existing meta value. Returns false if the value is
-         *  corrupt (NULL, too short, or unknown version) — the caller must
+         *  corrupt (NULL, too short, or unknown version) - the caller must
          *  fail rather than silently re-initialize, which would reset
          *  count/totalInserts and orphan every existing data row. Mirrors
          *  NdbRingBufferWriter and the SQL handler (NDB error 4357). */
@@ -385,7 +385,7 @@ class RingBufferWriter {
         // Execute the pending round. The meta read op itself carries
         // AO_IgnoreError (readOpts), so a missing meta row (626) does not
         // abort the transaction. Use DefaultAbortOption so every other
-        // queued operation keeps its own abort option — an execute-level
+        // queued operation keeps its own abort option - an execute-level
         // AO_IgnoreError would silently swallow their real errors.
         int rc = trans.executeNoCommitDirect(AbortOption.DefaultAbortOption);
         if (rc != 0) {

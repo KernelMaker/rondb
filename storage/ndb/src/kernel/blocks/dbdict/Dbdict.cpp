@@ -1248,7 +1248,7 @@ void Dbdict::packTableIntoPages(SimpleProperties::Writer &w,
   DEB_HASH(("1: dict_tab(%u) HashFunctionFlag: %u",
             tablePtr.p->tableId,
             ((tablePtr.p->m_bits & TableRecord::TR_HashFunction) != 0)));
-  /* Optional properties — the unpack side defaults them to RNIL, so only
+  /* Optional properties - the unpack side defaults them to RNIL, so only
      pack them when set instead of adding 5 words to every table def. */
   if (tablePtr.p->ttlSec != RNIL || tablePtr.p->ttlColumnNo != RNIL) {
     w.add(DictTabInfo::TTLSec, tablePtr.p->ttlSec);
@@ -7041,7 +7041,7 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader &it,
     /* Both ring columns must reference existing columns (an out-of-range
        column number would make TUP's meta-row detection read an arbitrary
        word of every row), and ring_idx must be the last primary key
-       column — the meta-row key layout depends on it. */
+       column - the meta-row key layout depends on it. */
     tabRequire(ringIdxMatches == 1, CreateTableRef::InvalidFormat);
     tabRequire(ringMetaMatches == 1, CreateTableRef::InvalidFormat);
     tabRequire(tableDesc.RingIdxColumnNo == lastKeyAttrId,
@@ -11854,7 +11854,7 @@ void Dbdict::alterTable_toCommitComplete(Signal *signal, SchemaOpPtr op_ptr,
   req->noOfNewAttr = impl_req->noOfNewAttr;
   req->newNoOfCharsets = impl_req->newNoOfCharsets;
   req->newNoOfKeyAttrs = impl_req->newNoOfKeyAttrs;
-  /* Inside SignalLength — don't send them uninitialized. */
+  /* Inside SignalLength - don't send them uninitialized. */
   req->ttlSec = impl_req->ttlSec;
   req->ttlColumnNo = impl_req->ttlColumnNo;
   req->connectPtr = RNIL;
@@ -12335,7 +12335,7 @@ void Dbdict::alterTable_abortToLocal(Signal *signal, SchemaOpPtr op_ptr) {
   req->noOfNewAttr = impl_req->noOfNewAttr;
   req->newNoOfCharsets = impl_req->newNoOfCharsets;
   req->newNoOfKeyAttrs = impl_req->newNoOfKeyAttrs;
-  /* Inside SignalLength — don't send them uninitialized. */
+  /* Inside SignalLength - don't send them uninitialized. */
   req->ttlSec = impl_req->ttlSec;
   req->ttlColumnNo = impl_req->ttlColumnNo;
 

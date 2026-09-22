@@ -213,7 +213,7 @@ bool show_meta_active(THD *thd, bool is_ring_buffer, bool delete_allowed) {
   if (thdvar_show_meta(thd)) {
     /*
      * The session variable is a read-only diagnostic: a data-changing
-     * statement's scan must not surface meta rows — an UPDATE reaching
+     * statement's scan must not surface meta rows - an UPDATE reaching
      * the meta row would error the whole statement ("Cannot update meta
      * row on ring-buffer table") and a DELETE outside the validated
      * prefix-delete walker (which uses delete_allowed above) must never
@@ -319,7 +319,7 @@ const char *validate_columns_mysql(const TABLE *table, const Spec &spec) {
   if (!found_meta) return "Ring meta column not found in table";
 
   /* No NOT NULL blob-backed user columns (meta rows cannot set
-     zero-defaults for blob types → NDB error 839 at runtime). */
+     zero-defaults for blob types -> NDB error 839 at runtime). */
   for (uint i = 0; i < table->s->fields; i++) {
     Field *const field = table->field[i];
     if (!my_strcasecmp(system_charset_info, field->field_name,
@@ -761,7 +761,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
 
       /*
        * A meta row whose ring_meta is NULL, too short, or of an unknown
-       * version is corrupt — fail instead of silently re-initializing.
+       * version is corrupt - fail instead of silently re-initializing.
        * Re-init would reset count/total_inserts and turn every existing
        * data row into a phantom the ring no longer tracks. Mirrors
        * NdbRingBufferWriter (error 4357) and the ClusterJ writer.

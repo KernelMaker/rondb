@@ -26,28 +26,28 @@ INSERT INTO test.rb_alter (id, data) VALUES (1, 'c');
 SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
 
 --echo #
---echo # Case 1: Grow blocked — 3 → 6
+--echo # Case 1: Grow blocked - 3 -> 6
 --echo #
 
 --error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=6@ring_idx@ring_meta";
 
 --echo #
---echo # Case 2: Shrink blocked — 3 → 1
+--echo # Case 2: Shrink blocked - 3 -> 1
 --echo #
 
 --error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=1@ring_idx@ring_meta";
 
 --echo #
---echo # Case 3: Disable blocked — MAX_ROWS_PER_PK=off
+--echo # Case 3: Disable blocked - MAX_ROWS_PER_PK=off
 --echo #
 
 --error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=off";
 
 --echo #
---echo # Case 4: Same size — no-op, no error
+--echo # Case 4: Same size - no-op, no error
 --echo #
 
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
@@ -63,7 +63,7 @@ SELECT id, ring_idx, data FROM test.rb_alter ORDER BY ring_idx;
 ALTER TABLE test.rb_alter COMMENT="NDB_TABLE=FULLY_REPLICATED=1,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 
 --echo #
---echo # Case 4c: INSERT after the rejected ALTERs — ring intact at size 3
+--echo # Case 4c: INSERT after the rejected ALTERs - ring intact at size 3
 --echo #
 
 # The wrap to slot 1 proves the original ring size survived every
@@ -100,7 +100,7 @@ SELECT id, ring_idx, val, extra FROM test.rb_preserve
 DROP TABLE test.rb_preserve;
 
 --echo #
---echo # Case 6: REORGANIZE PARTITION / ADD PARTITION — blocked
+--echo # Case 6: REORGANIZE PARTITION / ADD PARTITION - blocked
 --echo #
 
 # The kernel reorg copy machinery carries no ring-buffer flag, so real
@@ -131,7 +131,7 @@ ALTER TABLE test.rb_reorg ALGORITHM=INPLACE, REORGANIZE PARTITION;
 # Contents unchanged by the rejected statements
 SELECT client_id, ring_idx, val FROM test.rb_reorg ORDER BY client_id, ring_idx;
 
-# Without ALGORITHM the server falls back to COPY — a full rebuild that
+# Without ALGORITHM the server falls back to COPY - a full rebuild that
 # copies data AND meta rows verbatim. That path is safe and stays allowed.
 SET ndb_ring_buffer_show_meta = ON;
 SELECT HEX(ring_meta) FROM test.rb_reorg WHERE client_id = 1 AND ring_idx = 0;
@@ -185,7 +185,7 @@ SELECT client_id, ring_idx, val FROM test.rb_reorg_i ORDER BY ring_idx;
 DROP TABLE test.rb_reorg_i;
 
 --echo #
---echo # Case 7: ALTER adding TTL to a ring buffer table — rejected
+--echo # Case 7: ALTER adding TTL to a ring buffer table - rejected
 --echo #
 
 CREATE TABLE test.rb_ttl (
@@ -222,7 +222,7 @@ DROP TABLE test.rb_ttl;
 
 # Repartitioning to a user-defined scheme is rejected (the COPY alter
 # re-enters CREATE, where non-KEY partitioning on a ring buffer table is
-# refused — without the guard the copy succeeded but the table became
+# refused - without the guard the copy succeeded but the table became
 # write-dead: every INSERT failed with NDB 4544). Repartitioning to KEY
 # is allowed and preserves ring state through the copy.
 

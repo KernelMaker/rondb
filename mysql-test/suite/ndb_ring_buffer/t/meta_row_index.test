@@ -557,7 +557,7 @@ CREATE TABLE test.rb_nn_blob (
 ) ENGINE = NDB,
   COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 
-# JSON NOT NULL → rejected (blob-backed in NDB)
+# JSON NOT NULL -> rejected (blob-backed in NDB)
 --error ER_ILLEGAL_HA_CREATE_OPTION
 CREATE TABLE test.rb_nn_json (
     id INT NOT NULL,
@@ -568,7 +568,7 @@ CREATE TABLE test.rb_nn_json (
 ) ENGINE = NDB,
   COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 
-# GEOMETRY NOT NULL → rejected (blob-backed in NDB)
+# GEOMETRY NOT NULL -> rejected (blob-backed in NDB)
 --error ER_ILLEGAL_HA_CREATE_OPTION
 CREATE TABLE test.rb_nn_geom (
     id INT NOT NULL,

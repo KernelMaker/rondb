@@ -742,7 +742,7 @@ SET ndb_ring_buffer_show_meta = OFF;
 
 DROP TABLE test.rb_stage;
 
-# Recreate with the user column promoted VARCHAR(50) -> TEXT (nullable —
+# Recreate with the user column promoted VARCHAR(50) -> TEXT (nullable -
 # NOT NULL blob columns are rejected on ring buffer tables)
 CREATE TABLE test.rb_stage (
     client_id INT NOT NULL,

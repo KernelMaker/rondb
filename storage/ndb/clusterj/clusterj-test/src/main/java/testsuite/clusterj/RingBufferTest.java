@@ -3049,7 +3049,7 @@ public class RingBufferTest extends AbstractClusterJTest {
     }
 
     /** A SET blob/TEXT column on a ring buffer insert must fail loudly with
-     *  a clear message — the ring write path cannot drive blob handles, so
+     *  a clear message - the ring write path cannot drive blob handles, so
      *  the value would otherwise be silently dropped (or fail with a raw NDB
      *  error). An UNSET blob column must keep working. */
     private void testBlobColumnRejected() {
@@ -3116,7 +3116,7 @@ public class RingBufferTest extends AbstractClusterJTest {
      *  path: the auto-increment block in NdbRecordOperationImpl.insert()
      *  runs before the ring branch, so each unset-id persist gets its own
      *  prefix. (The generic getInsertOperation/endDefinition path has no
-     *  auto-increment support for ANY table — plain or ring — so there is
+     *  auto-increment support for ANY table - plain or ring - so there is
      *  no ring-specific gap there.) */
     private void testAutoIncrementPrefix() {
         tx.begin();

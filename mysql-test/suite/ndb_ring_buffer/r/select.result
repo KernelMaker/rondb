@@ -127,7 +127,7 @@ client_id	ring_idx	HEX(ring_meta)
 3	0	0100000002000000010000000000000001000000000000000000000000000000
 SET ndb_ring_buffer_show_meta = OFF;
 #
-# Case 11: COUNT(*) invariant — bare COUNT excludes meta rows and equals
+# Case 11: COUNT(*) invariant - bare COUNT excludes meta rows and equals
 #          the sum of per-prefix data counts; show_meta exposes exactly
 #          one meta row per prefix
 #
@@ -175,7 +175,7 @@ WHERE client_id = 1 AND ring_idx = 0 LOCK IN SHARE MODE;
 client_id	ring_idx
 COMMIT;
 #
-# Case 13: show_meta is read-only — data-changing scans skip meta
+# Case 13: show_meta is read-only - data-changing scans skip meta
 #
 SET ndb_ring_buffer_show_meta = ON;
 UPDATE test.rb SET event_data = CONCAT(event_data, '_u') WHERE client_id = 1;

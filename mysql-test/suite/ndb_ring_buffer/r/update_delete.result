@@ -481,7 +481,7 @@ id	ring_idx	data
 1	2	new_b
 DROP TABLE test.rb_cycle;
 #
-# Case 36: DELETE with LIMIT, ORDER BY, or multi-table form — blocked
+# Case 36: DELETE with LIMIT, ORDER BY, or multi-table form - blocked
 #
 CREATE TABLE test.rb_limit (
 id INT NOT NULL,
@@ -528,7 +528,7 @@ id	ring_idx	val
 2	1	z
 DROP TABLE test.rb_limit;
 #
-# Case 37: DELETE on ring-buffer table with DELETE triggers — blocked
+# Case 37: DELETE on ring-buffer table with DELETE triggers - blocked
 #
 CREATE TABLE test.rb_trig (
 id INT NOT NULL,
@@ -583,7 +583,7 @@ id	ring_idx	val
 1	1	restart
 DROP TABLE test.rb_trig;
 #
-# Case 38: UPDATE of primary-key columns — blocked
+# Case 38: UPDATE of primary-key columns - blocked
 #
 CREATE TABLE test.rb_pkup (
 id INT NOT NULL,

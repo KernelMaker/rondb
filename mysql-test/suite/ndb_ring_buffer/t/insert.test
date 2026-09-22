@@ -176,7 +176,7 @@ SELECT region, client_id, ring_idx, event_data FROM test.rb_multi
 DROP TABLE test.rb_multi;
 
 --echo #
---echo # Case 13: INSERT IGNORE with a unique-index duplicate — pinned
+--echo # Case 13: INSERT IGNORE with a unique-index duplicate - pinned
 --echo #
 
 # Pins current semantics: IGNORE does NOT downgrade a unique violation

@@ -1164,7 +1164,7 @@ int ha_ndbcluster::records(ha_rows *num_rows) {
 
   /* Ring buffer: stats.records is the physical row count, which includes
      the hidden meta rows (one per PK prefix). Use the base-class scan
-     count instead — the scan passes the kernel meta-row filter. The scan
+     count instead - the scan passes the kernel meta-row filter. The scan
      branch engages because table_flags() clears HA_COUNT_ROWS_INSTANT
      for ring buffer tables. */
   if (m_table != nullptr && m_table->isRingBuffer()) {
@@ -10331,7 +10331,7 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
    * Ring buffer requires NDB-native partitioning: with user-defined
    * partitioning (HASH by expression, RANGE, LIST, or subpartitioning)
    * every operation must carry an explicit partition id, which the ring
-   * buffer write paths do not provide — every INSERT on such a table
+   * buffer write paths do not provide - every INSERT on such a table
    * fails with error 4544 "Wrong partitionInfo type for table". Implicit
    * partitioning and explicit [LINEAR] KEY work and stay allowed. Also
    * covers ALTER ... PARTITION BY, which re-enters here via copy-create.
@@ -10402,7 +10402,7 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
         "FULLY_REPLICATED not supported by current data node versions");
   }
 
-  /* Verify EVERY data node supports ring buffer tables if requested —
+  /* Verify EVERY data node supports ring buffer tables if requested -
      an old data node would treat the table as plain and drop the ring
      flag bits, so writes routed through it would fail with error 940
      or bypass the ring bookkeeping. Covers CREATE and, via the copy

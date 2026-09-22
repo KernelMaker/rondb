@@ -107,7 +107,7 @@ bool delete_where_allowed(const TABLE *table, unsigned ring_idx_field_index,
 
 /**
   Check the DELETE statement shape. The WHERE walker alone cannot see
-  LIMIT, ORDER BY, or the multi-table DELETE form — each of which can
+  LIMIT, ORDER BY, or the multi-table DELETE form - each of which can
   remove a strict subset of a ring and corrupt or orphan the meta row.
 */
 bool delete_statement_shape_allowed(const THD *thd);
