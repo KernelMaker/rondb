@@ -5620,8 +5620,12 @@ int ha_ndbcluster::ndb_update_row(const uchar *old_data, uchar *new_data,
   if (m_table->isRingBuffer() && !thd_ndb->get_applier()) {
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const Uint32 ring_meta_col_no = m_table->getRingMetaColumnNo();
-    Field *ring_idx_field = table->field[ring_idx_col_no];
-    Field *ring_meta_field = table->field[ring_meta_col_no];
+    /* NDB column numbers, mapped to MySQL fields (virtual generated
+       columns shift the numbering) */
+    Field *ring_idx_field =
+        table->field[m_table_map->get_field_for_column(ring_idx_col_no)];
+    Field *ring_meta_field =
+        table->field[m_table_map->get_field_for_column(ring_meta_col_no)];
 
     if (bitmap_is_set(table->write_set, ring_idx_field->field_index())) {
       my_error(ER_ILLEGAL_HA, MYF(0),
@@ -5959,7 +5963,7 @@ bool ha_ndbcluster::start_bulk_delete() {
   if (m_table->isRingBuffer() && !m_ring_buffer_delete_allowed) {
     THD *thd = table->in_use;
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
-    const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
+    const uint ring_idx_fi = m_table_map->get_field_for_column(ring_idx_col_no);
     const Item *where = thd->lex->query_block->where_cond();
     /* DELETE triggers break the meta-row protocol: a BEFORE DELETE
        trigger fires for the hidden meta row the show-meta scan surfaces,
@@ -6123,7 +6127,7 @@ int ha_ndbcluster::ndb_delete_row(const uchar *record,
       return HA_ERR_UNSUPPORTED;
     }
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
-    const uint ring_idx_fi = table->field[ring_idx_col_no]->field_index();
+    const uint ring_idx_fi = m_table_map->get_field_for_column(ring_idx_col_no);
     const Item *where = thd->lex->query_block->where_cond();
     if (ndb_ring_buffer::delete_where_allowed(table, ring_idx_fi, where) &&
         ndb_ring_buffer::delete_statement_shape_allowed(thd)) {
@@ -7538,14 +7542,13 @@ int ha_ndbcluster::end_bulk_insert() {
     const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
     const Uint32 ring_meta_col_no = m_table->getRingMetaColumnNo();
     int rb_err = flush_ring_buffer_batch();
-    bitmap_clear_bit(table->write_set,
-                     table->field[ring_idx_col_no]->field_index());
-    bitmap_clear_bit(table->write_set,
-                     table->field[ring_meta_col_no]->field_index());
-    bitmap_clear_bit(table->read_set,
-                     table->field[ring_idx_col_no]->field_index());
-    bitmap_clear_bit(table->read_set,
-                     table->field[ring_meta_col_no]->field_index());
+    const uint ring_idx_fi = m_table_map->get_field_for_column(ring_idx_col_no);
+    const uint ring_meta_fi =
+        m_table_map->get_field_for_column(ring_meta_col_no);
+    bitmap_clear_bit(table->write_set, ring_idx_fi);
+    bitmap_clear_bit(table->write_set, ring_meta_fi);
+    bitmap_clear_bit(table->read_set, ring_idx_fi);
+    bitmap_clear_bit(table->read_set, ring_meta_fi);
     if (rb_err != 0) {
       set_my_errno(rb_err);
       return rb_err;

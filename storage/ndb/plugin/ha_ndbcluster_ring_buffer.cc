@@ -405,8 +405,12 @@ int ha_ndbcluster::flush_ring_buffer_batch() {
 
   const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
   const Uint32 ring_meta_col_no = m_table->getRingMetaColumnNo();
-  Field *ring_idx_field = table->field[ring_idx_col_no];
-  Field *ring_meta_field = table->field[ring_meta_col_no];
+  /* NDB column numbers; virtual generated columns shift the MySQL field
+     numbering, so map them */
+  Field *ring_idx_field =
+      table->field[m_table_map->get_field_for_column(ring_idx_col_no)];
+  Field *ring_meta_field =
+      table->field[m_table_map->get_field_for_column(ring_meta_col_no)];
 
   const NdbRecord *key_rec =
       m_index[table_share->primary_key].ndb_unique_record_row;
@@ -543,12 +547,12 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
   const Uint32 ring_idx_col_no = m_table->getRingIdxColumnNo();
   const Uint32 ring_meta_col_no = m_table->getRingMetaColumnNo();
 
-  /* Get MySQL Field objects for the ring columns */
-  Field *ring_idx_field = table->field[ring_idx_col_no];
-  Field *ring_meta_field = table->field[ring_meta_col_no];
-
-  /* Check if table has BLOB/TEXT columns that need special handling */
-  const bool uses_blobs = uses_blob_value(table->write_set);
+  /* MySQL Field objects for the ring columns: NDB column numbers, mapped
+     because virtual generated columns shift the MySQL field numbering */
+  Field *ring_idx_field =
+      table->field[m_table_map->get_field_for_column(ring_idx_col_no)];
+  Field *ring_meta_field =
+      table->field[m_table_map->get_field_for_column(ring_meta_col_no)];
 
   /*
    * Block REPLACE and INSERT ON DUPLICATE KEY UPDATE.
@@ -591,12 +595,18 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
   }
 
   /*
-   * Add ring columns to write_set - we are writing them as part of
-   * ring management. The user-specified checks above already verified
-   * these bits were NOT set, so we own them from here on.
+   * A ring insert is a logical insert into the slot at next_pos, but the
+   * data row is written with writeTuple, which DBACC turns into an update
+   * when the slot is occupied. A column absent from the mask would then
+   * keep the overwritten row's value (on a TTL table: its old, possibly
+   * expired TTL value, which hides the new row). Write every stored
+   * column: record[0] holds the user's values and the defaults or NULLs
+   * of the omitted columns. This also covers the ring columns, which the
+   * checks above verified the user did not set.
    */
-  bitmap_set_bit(table->write_set, ring_idx_field->field_index());
-  bitmap_set_bit(table->write_set, ring_meta_field->field_index());
+  bitmap_set_all(table->write_set);
+  /* Blob columns need blob handles on the data operation */
+  const bool uses_blobs = uses_blob_value(table->write_set);
   /* Also add to read_set - we read ring_meta from the meta row to unpack it */
   bitmap_set_bit(table->read_set, ring_idx_field->field_index());
   bitmap_set_bit(table->read_set, ring_meta_field->field_index());
@@ -630,7 +640,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
     KEY *pk_info = table->key_info + table_share->primary_key;
     for (uint i = 0; i < pk_info->user_defined_key_parts; i++) {
       Field *kp_field = pk_info->key_part[i].field;
-      if (kp_field->field_index() == ring_idx_col_no) continue;
+      if (kp_field->field_index() == ring_idx_field->field_index()) continue;
       ptrdiff_t off = kp_field->offset(table->record[0]);
       if (memcmp(record + off, table->record[1] + off,
                  kp_field->pack_length()) != 0) {
@@ -755,7 +765,7 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
       data_slot = 1;
     } else {
       /* Unpack ring_meta from meta_result (record[1]) */
-      Field *meta_field_in_result = table->field[ring_meta_col_no];
+      Field *meta_field_in_result = ring_meta_field;
       ptrdiff_t row_offset = meta_result - table->record[0];
       meta_field_in_result->move_field_offset(row_offset);
 
