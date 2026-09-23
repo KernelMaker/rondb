@@ -32,6 +32,7 @@ import java.util.List;
 
 import com.mysql.clusterj.ClusterJDatastoreException;
 import com.mysql.clusterj.ClusterJUserException;
+import com.mysql.clusterj.ColumnType;
 import com.mysql.clusterj.core.store.Column;
 import com.mysql.clusterj.core.store.Table;
 
@@ -141,6 +142,20 @@ class RingBufferWriter {
     /** NOT NULL, non-blob, non-PK, non-ring columns (need zero-fill in meta row) */
     private final Column[] notNullColumns;
 
+    /** TTL column of a TTL ring buffer table; null when the table has no TTL.
+     *  The meta row carries the type maximum in it (see setTTLColumnMax). */
+    private final Column ttlColumn;
+
+    /** TTL ring buffer table: every column except ring_idx/ring_meta must be
+     *  set in each row's mask (a slot write onto an occupied slot is an
+     *  update; an unset column would keep the overwritten row's value, and a
+     *  replica whose purge removed the slot could not rebuild the row).
+     *  BLOB/TEXT columns are exempt: ClusterJ cannot write them on a ring
+     *  buffer table at all (see NdbRecordOperationImpl), so on a wrap they
+     *  keep the overwritten row's value; use SQL for such tables.
+     *  Empty on a table without TTL. */
+    private final Column[] requiredColumns;
+
     // Internal buffers (all from NdbRecordImpl buffer pool)
     private final ByteBuffer metaRowBuffer;
     private final ByteBuffer keyRowBuffer;
@@ -204,6 +219,21 @@ class RingBufferWriter {
         }
         this.notNullColumns = notNullList.toArray(new Column[0]);
 
+        // TTL column (TTL ring buffer table): filled with the type maximum
+        // in the meta row, nullable or not
+        this.ttlColumn = storeTable.isTTLEnabled() ? storeTable.getTTLColumn() : null;
+        List<Column> requiredList = new ArrayList<Column>();
+        if (ttlColumn != null) {
+            for (String name : allColumnNames) {
+                Column col = storeTable.getColumn(name);
+                int id = col.getColumnId();
+                if (id == ringIdxColumnId || id == ringMetaColumnId) continue;
+                if (col.isLob()) continue;
+                requiredList.add(col);
+            }
+        }
+        this.requiredColumns = requiredList.toArray(new Column[0]);
+
         // Allocate internal buffers
         this.metaRowBuffer = ndbRecordImpl.newBuffer();
         this.keyRowBuffer = ndbRecordImpl.newBuffer();
@@ -222,6 +252,10 @@ class RingBufferWriter {
         // NOT NULL non-blob non-PK columns
         for (Column col : notNullColumns) {
             columnSet(metaMask, col.getColumnId());
+        }
+        // TTL column
+        if (ttlColumn != null) {
+            columnSet(metaMask, ttlColumn.getColumnId());
         }
 
         // Create reusable OperationOptions
@@ -245,11 +279,24 @@ class RingBufferWriter {
      * (and PK prefix) filled in.  ring_idx and ring_meta are set by the writer.
      *
      * @param userRowBuffer NdbRecord buffer with user column values
-     * @param userMask      column mask (user columns only, no ring_idx/ring_meta bits)
+     * @param userMask      column mask (user columns only, no ring_idx/ring_meta bits;
+     *                      must include every other column on a TTL table)
      */
     void addRow(ByteBuffer userRowBuffer, byte[] userMask) {
         if (closed) {
             throw new ClusterJUserException("RingBufferWriter is closed");
+        }
+        // A slot write onto an occupied slot is an update: a column absent
+        // from the mask keeps the overwritten row's value. On a TTL ring
+        // buffer table every column is therefore mandatory: an inherited
+        // expired TTL value would hide the new row, and a replica whose
+        // purge removed the slot could not rebuild the row.
+        for (Column col : requiredColumns) {
+            if (!columnIsSet(userMask, col.getColumnId())) {
+                throw new ClusterJUserException("Ring buffer insert on TTL table "
+                        + storeTable.getName() + " must set every column; column "
+                        + col.getName() + " is not set");
+            }
         }
 
         // Check if PK prefix matches current batch
@@ -305,6 +352,11 @@ class RingBufferWriter {
         // Zero NOT NULL non-blob columns
         for (Column col : notNullColumns) {
             zeroColumn(metaRowBuffer, col);
+        }
+
+        // TTL ring buffer table: meta row TTL column = type maximum
+        if (ttlColumn != null) {
+            setTTLColumnMax(metaRowBuffer, ttlColumn);
         }
 
         metaRowBuffer.position(0);
@@ -538,6 +590,47 @@ class RingBufferWriter {
             buffer.put(offset + i, (byte) 0);
         }
         // For NOT NULL columns, null bit doesn't exist, so no need to clear
+    }
+
+    /**
+     * Write the type maximum into the meta row's TTL column so that the meta
+     * row's entry in an ordered index on that column sorts after every purge
+     * candidate: TIMESTAMP '2038-01-19 03:14:07' UTC, DATETIME
+     * '9999-12-31 23:59:59'. Not needed for correctness (DBTUP never expires a
+     * ring meta row); it only keeps the TTL purge from visiting one wasted
+     * candidate per prefix per round.
+     *
+     * Encoding follows NdbSqlUtil::pack_timestamp2 / pack_datetime2: big-endian
+     * seconds (4 bytes) or packed date-time (5 bytes, sign bit set), followed
+     * by (precision + 1) / 2 big-endian fraction bytes, here zero.
+     */
+    private void setTTLColumnMax(ByteBuffer buffer, Column col) {
+        int columnId = col.getColumnId();
+        int offset = ndbRecordImpl.offsets[columnId];
+        int fracBytes = (col.getPrecision() + 1) / 2;
+        byte[] packed;
+        if (col.getType() == ColumnType.Timestamp2) {
+            // 0x7FFFFFFF seconds since the epoch
+            packed = new byte[] {(byte) 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+        } else {
+            // 9999-12-31 23:59:59: ((9999 * 13 + 12) << 5 | 31) << 17 | (23 << 12 | 59 << 6 | 59),
+            // plus the sign bit (bit 39) for a positive value
+            packed = new byte[] {(byte) 0xFE, (byte) 0xF3, (byte) 0xFF, (byte) 0x7E, (byte) 0xFB};
+        }
+        ndbRecordImpl.resetNull(buffer, col);
+        for (int i = 0; i < packed.length; i++) {
+            buffer.put(offset + i, packed[i]);
+        }
+        for (int i = 0; i < fracBytes; i++) {
+            buffer.put(offset + packed.length + i, (byte) 0);
+        }
+    }
+
+    private static boolean columnIsSet(byte[] mask, int columnId) {
+        int byteOffset = columnId / 8;
+        if (byteOffset >= mask.length) return false;
+        int bitInByte = columnId - (byteOffset * 8);
+        return (mask[byteOffset] & (1 << bitInByte)) != 0;
     }
 
     private static void columnSet(byte[] mask, int columnId) {

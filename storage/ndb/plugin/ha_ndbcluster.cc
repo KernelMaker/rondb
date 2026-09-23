@@ -10312,10 +10312,23 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
     }
   }
 
-  /* Mutual exclusion: TTL and MAX_ROWS_PER_PK */
-  if (found_ttl && found_ring_buffer) {
-    return create.failed_illegal_create_option(
-        "A table cannot be both TTL and MAX_ROWS_PER_PK");
+  /* TTL on a ring buffer table is a creation-time property: the copy
+     path of ALTER may change the TTL seconds but may not enable or
+     disable TTL on an existing ring buffer table (enabling leaves the
+     meta rows written before with a zero TTL column; disabling makes
+     deleteOldest legal on a ring with purged holes). Message <= 64 chars:
+     ER_ILLEGAL_HA_CREATE_OPTION clips the option string. */
+  if (found_ring_buffer && thd_sql_command(thd) == SQLCOM_ALTER_TABLE) {
+    const char *orig_db = thd->lex->query_block->get_table_list()->db;
+    const char *orig_name =
+        thd->lex->query_block->get_table_list()->table_name;
+    Ndb_table_guard old_tab_g(ndb, orig_db, orig_name);
+    const NDBTAB *old_tab = old_tab_g.get_table();
+    if (old_tab && old_tab->isRingBuffer() &&
+        old_tab->isTTLEnabled() != found_ttl) {
+      return create.failed_illegal_create_option(
+          "Cannot enable/disable TTL on a ring table; use DROP+CREATE");
+    }
   }
   Partition_hash_modifier partition_hash;
   const char *partition_hash_error = nullptr;
@@ -10414,6 +10427,14 @@ int ha_ndbcluster::create(const char *path [[maybe_unused]],
       ndbd_support_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
     return create.failed_illegal_create_option(
         "MAX_ROWS_PER_PK not supported by current data node versions");
+  }
+
+  /* TTL on a ring buffer table needs data nodes that never expire the
+     meta row and admit the TTL purge's deletes (see ndb_version.h). */
+  if (found_ring_buffer && found_ttl &&
+      ndbd_support_ttl_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
+    return create.failed_illegal_create_option(
+        "TTL ring buffer not supported by current data node versions");
   }
 
   // Read mysql.ndb_replication settings for this table, if any
@@ -17278,9 +17299,12 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
     }
   }
 
-  /* Mutual exclusion: TTL and MAX_ROWS_PER_PK */
-  if (new_tab->isTTLEnabled() && new_tab->isRingBuffer()) {
-    *reason = "A table cannot be both TTL and MAX_ROWS_PER_PK";
+  /* TTL on a ring buffer table is a creation-time property: the TTL
+     seconds may change, TTL may not be enabled or disabled (see the
+     CREATE path, which the copy fallback re-enters). */
+  if (old_tab->isRingBuffer() &&
+      old_tab->isTTLEnabled() != new_tab->isTTLEnabled()) {
+    *reason = "Cannot enable/disable TTL on a ring table; use DROP+CREATE";
     return true;
   }
 
@@ -17299,6 +17323,11 @@ bool ha_ndbcluster::inplace_parse_comment(NdbDictionary::Table *new_tab,
   if (new_tab->isRingBuffer() &&
       ndbd_support_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
     *reason = "MAX_ROWS_PER_PK not supported by current data node versions";
+    return true;
+  }
+  if (new_tab->isRingBuffer() && new_tab->isTTLEnabled() &&
+      ndbd_support_ttl_ring_buffer(ndb->getMinDbNodeVersion()) == 0) {
+    *reason = "TTL ring buffer not supported by current data node versions";
     return true;
   }
 

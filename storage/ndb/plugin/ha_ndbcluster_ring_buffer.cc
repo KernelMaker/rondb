@@ -37,6 +37,7 @@
 #include <string>
 
 #include "my_dbug.h"
+#include "my_time.h"
 #include "mysql/strings/m_ctype.h"
 #include "sql/item.h"
 #include "sql/item_cmpfunc.h"
@@ -395,6 +396,44 @@ int check_index_columns(THD *thd, const NdbDictionary::Table *ndbtab,
   Writes the cached meta state to NDB using record[1] (which holds the
   PK prefix from the meta read) and executes.
 */
+/*
+  TTL ring buffer table: the meta row's TTL column holds the type maximum
+  (TIMESTAMP '2038-01-19 03:14:07' UTC, DATETIME '9999-12-31 23:59:59'),
+  nullable or not, so that its entry in an ordered index on the TTL column
+  sorts after every purge candidate. Not needed for correctness: DBTUP never
+  expires a ring meta row. Shared by the single-row and the batched meta
+  write. The TTL column is an NDB column number; virtual generated columns
+  shift the MySQL field numbering, so map it through the table map.
+*/
+static void ring_buffer_set_meta_ttl_max(TABLE *table,
+                                         const NdbDictionary::Table *ndbtab,
+                                         Ndb_table_map *table_map,
+                                         ptrdiff_t row_offset,
+                                         MY_BITMAP *meta_mask) {
+  if (!ndbtab->isTTLEnabled()) return;
+  Field *ttl_field =
+      table->field[table_map->get_field_for_column(ndbtab->getTTLColumnNo())];
+  ttl_field->move_field_offset(row_offset);
+  ttl_field->set_notnull();
+  if (ttl_field->real_type() == MYSQL_TYPE_TIMESTAMP2) {
+    const my_timeval tv = {TYPE_TIMESTAMP_MAX_VALUE, 0};
+    ttl_field->store_timestamp(&tv);
+  } else {
+    MYSQL_TIME max_dt;
+    memset(&max_dt, 0, sizeof(max_dt));
+    max_dt.year = 9999;
+    max_dt.month = 12;
+    max_dt.day = 31;
+    max_dt.hour = 23;
+    max_dt.minute = 59;
+    max_dt.second = 59;
+    max_dt.time_type = MYSQL_TIMESTAMP_DATETIME;
+    ttl_field->store_time(&max_dt, 0);
+  }
+  ttl_field->move_field_offset(-row_offset);
+  bitmap_set_bit(meta_mask, ttl_field->field_index());
+}
+
 int ha_ndbcluster::flush_ring_buffer_batch() {
   DBUG_TRACE;
   if (!m_rb_batch_active) return 0;
@@ -487,6 +526,10 @@ int ha_ndbcluster::flush_ring_buffer_batch() {
       bitmap_set_bit(&metaMask, i);
     }
   }
+
+  /* TTL ring: the meta row's TTL column holds the type maximum */
+  ring_buffer_set_meta_ttl_max(table, m_table, m_table_map, nn_offset,
+                               &metaMask);
 
   uchar *meta_mask = m_table_map->get_column_mask(&metaMask);
 
@@ -982,6 +1025,10 @@ int ha_ndbcluster::ndb_ring_buffer_write_row(uchar *record) {
           bitmap_set_bit(&metaMask, i);
         }
       }
+
+      /* TTL ring: the meta row's TTL column holds the type maximum */
+      ring_buffer_set_meta_ttl_max(table, m_table, m_table_map, row_offset,
+                                   &metaMask);
 
       uchar *meta_mask = m_table_map->get_column_mask(&metaMask);
 

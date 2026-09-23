@@ -28,6 +28,7 @@
 #include <cstring>
 
 #include <NdbOperation.hpp>
+#include <NdbSqlUtil.hpp>
 #include <NdbTransaction.hpp>
 
 #include "API.hpp"
@@ -108,6 +109,10 @@ NdbRingBufferWriter::NdbRingBufferWriter(const NdbDictionary::Table *table,
       m_num_pk_prefix_cols(0),
       m_notnull_cols(nullptr),
       m_num_notnull_cols(0),
+      m_has_ttl_col(false),
+      m_ttl_col_is_timestamp(false),
+      m_ttl_col_prec(0),
+      m_required_mask(nullptr),
       m_meta_mask(nullptr),
       m_mask_byte_size(0),
       m_row_size(0),
@@ -121,6 +126,7 @@ NdbRingBufferWriter::NdbRingBufferWriter(const NdbDictionary::Table *table,
       m_error_code(0) {
   memset(&m_ring_idx_info, 0, sizeof(m_ring_idx_info));
   memset(&m_ring_meta_info, 0, sizeof(m_ring_meta_info));
+  memset(&m_ttl_col_info, 0, sizeof(m_ttl_col_info));
   memset(&m_batch_meta, 0, sizeof(m_batch_meta));
   m_error_message[0] = '\0';
 
@@ -159,6 +165,7 @@ NdbRingBufferWriter::~NdbRingBufferWriter() {
   delete[] m_pk_prefix_cols;
   delete[] m_notnull_cols;
   delete[] m_meta_mask;
+  delete[] m_required_mask;
   delete[] m_meta_row_buffer;
   delete[] m_data_row_buffer;
   delete[] m_key_row_buffer;
@@ -286,6 +293,21 @@ int NdbRingBufferWriter::initColumnMetadata() {
     }
   }
 
+  // Only columns present in the NdbRecord were populated: keep the counts
+  // in step with the arrays (a stale first-pass count would make the meta
+  // mask and the meta row buffer read uninitialised ColumnInfo entries).
+  // The PK prefix must be complete: the meta row is keyed by it.
+  if (pk_idx != pk_prefix_count) {
+    m_num_pk_prefix_cols = pk_idx;
+    m_num_notnull_cols = nn_idx;
+    setError(4000,
+             "NdbRingBufferWriter: a primary key column is missing from the "
+             "NdbRecord");
+    return -1;
+  }
+  m_num_pk_prefix_cols = pk_idx;
+  m_num_notnull_cols = nn_idx;
+
   // Build pre-computed meta column mask
   // Mask format: byte array indexed by attrId, bit (attrId & 7) in byte
   // (attrId >> 3)
@@ -315,6 +337,59 @@ int NdbRingBufferWriter::initColumnMetadata() {
   for (Uint32 i = 0; i < m_num_notnull_cols; i++) {
     Uint32 aid = m_notnull_cols[i].attr_id;
     m_meta_mask[aid >> 3] |= (1 << (aid & 7));
+  }
+
+  // TTL table: a slot write onto an occupied slot is an update, so a
+  // column absent from the write keeps the overwritten row's value; for
+  // the TTL column that hides the new row behind an expired value, and
+  // for any column it leaves a replica whose purge removed the slot
+  // unable to rebuild the row. Every column of the table must therefore
+  // be in the NdbRecord, and every column except ring_idx/ring_meta must
+  // be set in each row's mask (checked in addRow against
+  // m_required_mask). The meta row carries the TTL type maximum (see
+  // setTTLColumnMaxInBuffer).
+  if (m_table->isTTLEnabled()) {
+    m_required_mask = new unsigned char[m_mask_byte_size];
+    memset(m_required_mask, 0, m_mask_byte_size);
+    for (int i = 0; i < num_cols; i++) {
+      const NdbDictionary::Column *col = m_table->getColumn(i);
+      if (!col) continue;
+      const Uint32 attr_id = col->getAttrId();
+      if (!findAttrByAttrId(m_ndb_record, attr_id)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "NdbRingBufferWriter: column %s is missing from the "
+                 "NdbRecord; inserts on a TTL ring buffer table must supply "
+                 "every column",
+                 col->getName());
+        setError(4359, msg);
+        return -1;
+      }
+      if (attr_id == ring_idx_attr_id || attr_id == ring_meta_attr_id)
+        continue;
+      m_required_mask[attr_id >> 3] |= (1 << (attr_id & 7));
+    }
+    const NdbDictionary::Column *ttl_col =
+        m_table->getColumn(m_table->getTTLColumnNo());
+    const NdbRecord::Attr *rec_attr =
+        ttl_col ? findAttrByAttrId(m_ndb_record, ttl_col->getAttrId())
+                : nullptr;
+    if (rec_attr &&
+        (ttl_col->getType() == NdbDictionary::Column::Timestamp2 ||
+         ttl_col->getType() == NdbDictionary::Column::Datetime2)) {
+      m_has_ttl_col = true;
+      m_ttl_col_is_timestamp =
+          (ttl_col->getType() == NdbDictionary::Column::Timestamp2);
+      m_ttl_col_prec = ttl_col->getPrecision();
+      m_ttl_col_info.attr_id = rec_attr->attrId;
+      m_ttl_col_info.offset = rec_attr->offset;
+      m_ttl_col_info.max_size = rec_attr->maxSize;
+      m_ttl_col_info.nullbit_byte_offset = rec_attr->nullbit_byte_offset;
+      m_ttl_col_info.nullbit_bit_in_byte = rec_attr->nullbit_bit_in_byte;
+      m_ttl_col_info.flags = rec_attr->flags;
+      const Uint32 aid = rec_attr->attrId;
+      m_meta_mask[aid >> 3] |= (1 << (aid & 7));
+    }
   }
 
   return 0;
@@ -393,6 +468,40 @@ void NdbRingBufferWriter::zeroNotNullColumnsInBuffer(char *buf) const {
     } else {
       memset(buf + ci.offset, 0, ci.max_size);
     }
+  }
+}
+
+/*
+ * Meta row TTL column = type maximum (TIMESTAMP '2038-01-19 03:14:07' UTC,
+ * DATETIME '9999-12-31 23:59:59'), regardless of nullability, so that the
+ * meta row's entry in an ordered index on the TTL column sorts after every
+ * purge candidate. Not needed for correctness: DBTUP never expires a ring
+ * meta row whatever this column holds.
+ */
+void NdbRingBufferWriter::setTTLColumnMaxInBuffer(char *buf) const {
+  if (!m_has_ttl_col) return;
+  const ColumnInfo &ci = m_ttl_col_info;
+  if (ci.flags & NdbRecord::IsNullable) {
+    buf[ci.nullbit_byte_offset] &= ~(1 << ci.nullbit_bit_in_byte);
+  }
+  unsigned char *dst = reinterpret_cast<unsigned char *>(buf + ci.offset);
+  memset(dst, 0, ci.max_size);
+  if (m_ttl_col_is_timestamp) {
+    NdbSqlUtil::Timestamp2 ts;
+    ts.second = 0x7FFFFFFF;
+    ts.fraction = 0;
+    NdbSqlUtil::pack_timestamp2(ts, dst, m_ttl_col_prec);
+  } else {
+    NdbSqlUtil::Datetime2 dt;
+    dt.sign = 1;  // positive
+    dt.year = 9999;
+    dt.month = 12;
+    dt.day = 31;
+    dt.hour = 23;
+    dt.minute = 59;
+    dt.second = 59;
+    dt.fraction = 0;
+    NdbSqlUtil::pack_datetime2(dt, dst, m_ttl_col_prec);
   }
 }
 
@@ -622,6 +731,9 @@ int NdbRingBufferWriter::writeMetaRow() {
   // Zero NOT NULL non-blob user columns in meta buffer
   zeroNotNullColumnsInBuffer(m_meta_row_buffer);
 
+  // TTL ring: the meta row's TTL column holds the type maximum
+  setTTLColumnMaxInBuffer(m_meta_row_buffer);
+
   NdbOperation::OperationOptions meta_opts;
   memset(&meta_opts, 0, sizeof(meta_opts));
   meta_opts.optionsPresent =
@@ -669,6 +781,37 @@ const NdbOperation *NdbRingBufferWriter::addRow(
   if (!rowBuffer || !userMask) {
     setError(4000, "NdbRingBufferWriter::addRow: null argument");
     return nullptr;
+  }
+
+  // TTL ring: every column except ring_idx/ring_meta must be part of
+  // every row written (see m_required_mask). Columns absent from the
+  // mask keep the overwritten slot's value on a wrap: for the TTL column
+  // that hides the new row behind an expired value, for any column it
+  // leaves a replica whose purge removed the slot unable to rebuild the
+  // row.
+  if (m_required_mask) {
+    for (Uint32 b = 0; b < m_mask_byte_size; b++) {
+      const unsigned char missing = m_required_mask[b] & ~userMask[b];
+      if (missing == 0) continue;
+      Uint32 aid = b * 8;
+      while (((missing >> (aid & 7)) & 1) == 0) aid++;
+      const char *name = "?";
+      for (int i = 0; i < m_table->getNoOfColumns(); i++) {
+        const NdbDictionary::Column *col = m_table->getColumn(i);
+        if (col && static_cast<Uint32>(col->getAttrId()) == aid) {
+          name = col->getName();
+          break;
+        }
+      }
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "NdbRingBufferWriter::addRow: column %s is not in the column "
+               "mask; inserts on a TTL ring buffer table must set every "
+               "column",
+               name);
+      setError(4359, msg);
+      return nullptr;
+    }
   }
 
   // Path A: batch hit - same PK prefix as current batch
@@ -760,7 +903,18 @@ int NdbRingBufferWriter::deleteOldest(const char *pkPrefixRow,
     return -1;
   }
 
+  /*
+   * A TTL ring buffer table has no deleteOldest: the TTL purge removes
+   * expired rows in scan order, so the oldest slots may already be empty
+   * and the visible rows no longer form a contiguous span. Consumers use
+   * ring_idx / total_inserts offsets instead.
+   */
   *outActual = 0;
+  if (m_table->isTTLEnabled()) {
+    setError(4358, "NdbRingBufferWriter::deleteOldest: not supported on a "
+                   "ring buffer table with TTL");
+    return -1;
+  }
 
   // maxN == 0 is a pure no-op: don't take the exclusive meta lock (or
   // even flush) for a call that cannot delete anything.
