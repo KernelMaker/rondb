@@ -159,6 +159,10 @@ struct BasicRecordHelper {
   const NdbRecord::Attr *cid_attr;
   const NdbRecord::Attr *data_attr;
   const NdbRecord::Attr *rmeta_attr;
+  // TTL column of the TTL ring test tables (nullptr on the others). A
+  // TTL ring insert must set the TTL column (4359): fillRow() sets it to
+  // NULL (never expires) and newUserMask() includes it.
+  const NdbRecord::Attr *ts_attr;
   Uint32 mask_size;
 
   bool init(const NdbDictionary::Table *table) {
@@ -168,6 +172,7 @@ struct BasicRecordHelper {
     cid_attr = findAttr(record, table, "client_id");
     data_attr = findAttr(record, table, "event_data");
     rmeta_attr = findAttr(record, table, "ring_meta");
+    ts_attr = findAttr(record, table, "ts");
     Uint32 max_attr = 0;
     for (Uint32 i = 0; i < record->noOfColumns; i++)
       if (record->columns[i].attrId > max_attr)
@@ -188,12 +193,13 @@ struct BasicRecordHelper {
     setNull(buf, rmeta_attr);
     clearNull(buf, data_attr);
     setVarchar(buf, data_attr, data);
+    if (ts_attr) setNull(buf, ts_attr);
   }
 
   unsigned char *newUserMask(const NdbDictionary::Table *table) const {
     unsigned char *mask = new unsigned char[mask_size];
-    const char *cols[] = {"client_id", "event_data"};
-    buildMask(table, mask, mask_size, cols, 2);
+    const char *cols[] = {"client_id", "event_data", "ts"};
+    buildMask(table, mask, mask_size, cols, ts_attr ? 3 : 2);
     return mask;
   }
 };
@@ -2765,19 +2771,22 @@ static bool test_dict_validates_ring_metadata(Ndb *ndb, MYSQL *mysql) {
 }
 
 /*
- * Test 28 (B14a): DICT must reject a ring buffer combined with TTL or with
- * fully-replicated. Both exclusions exist only in the MySQL handler; via the
- * raw NDB API a TTL+ring table would filter its own meta row (TTL col = 0 =>
- * "expired") and a fully-replicated ring table would fire copy triggers that
- * carry no ring-buffer flag. The ALTER sub-case covers the other entry:
- * adding TTL to an existing ring table (alterTable re-parses the new
- * definition, so the same DICT check must fire).
+ * Test 28: DICT rules for TTL / fully-replicated + ring buffer tables.
+ * TTL on a ring buffer table is allowed (DBTUP never expires the meta row
+ * and lets the TTL purge's only-expired deletes through the ring write
+ * guard); the SQL CREATE of rb_t28_ttl below proves DICT accepts it. A
+ * fully-replicated ring table stays rejected: its copy triggers carry no
+ * ring-buffer flag. TTL on a ring table is a creation-time property: the
+ * TTL seconds may change, but alterTable may neither enable nor disable TTL
+ * on an existing ring table (741 UnsupportedChange). The MySQL handler
+ * rejects that too; the raw NDB API reaches DICT directly, so DICT must.
  */
 static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
-  std::cout << "[Test 28] DICT rejects TTL/fully-replicated + ring combos"
+  std::cout << "[Test 28] DICT rules for TTL / fully-replicated + ring combos"
             << std::endl;
 
   mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t28");
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t28_ttl");
   mysql_exec(mysql,
              "CREATE TABLE test.rb_t28 ("
              "  client_id INT NOT NULL,"
@@ -2787,22 +2796,31 @@ static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
              "  PRIMARY KEY (client_id, ring_idx)"
              ") ENGINE=NDB,"
              "  COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=5@ring_idx@ring_meta'");
+  mysql_exec(mysql,
+             "CREATE TABLE test.rb_t28_ttl ("
+             "  client_id INT NOT NULL,"
+             "  ring_idx INT NOT NULL DEFAULT 0,"
+             "  ring_meta VARBINARY(64),"
+             "  ts DATETIME,"
+             "  PRIMARY KEY (client_id, ring_idx)"
+             ") ENGINE=NDB,"
+             "  COMMENT='NDB_TABLE=TTL=60@ts,"
+             "MAX_ROWS_PER_PK=5@ring_idx@ring_meta'");
 
   NdbDictionary::Dictionary *dict = ndb->getDictionary();
   dict->invalidateTable("rb_t28");
+  dict->invalidateTable("rb_t28_ttl");
   const NdbDictionary::Table *tab = dict->getTable("rb_t28");
   TEST_ASSERT(tab != nullptr, "getTable");
   TEST_ASSERT(tab->isRingBuffer(), "should be ring buffer");
+  TEST_ASSERT(!tab->isTTLEnabled(), "rb_t28 has no TTL");
+  const NdbDictionary::Table *ttl_tab = dict->getTable("rb_t28_ttl");
+  TEST_ASSERT(ttl_tab != nullptr, "getTable (ttl ring)");
+  TEST_ASSERT(ttl_tab->isRingBuffer() && ttl_tab->isTTLEnabled(),
+              "rb_t28_ttl should be a TTL ring buffer table");
   const int ts_no = tab->getColumn("ts")->getColumnNo();
 
   int failed = 0;
-  {
-    NdbDictionary::Table bad(*tab);
-    bad.setName("rb_t28_bad");
-    bad.setTTLSec(60);
-    bad.setTTLColumnNo(ts_no);
-    if (!expect_create_rejected(dict, bad, "ttl+ring create", 703)) failed++;
-  }
   {
     NdbDictionary::Table bad(*tab);
     bad.setName("rb_t28_bad");
@@ -2812,36 +2830,60 @@ static bool test_dict_rejects_ttl_and_fr_combo(Ndb *ndb, MYSQL *mysql) {
       failed++;
   }
 
-  // ALTER adding TTL to an existing ring buffer table must be rejected too
-  // (alterTable re-parses the new definition through the same DICT checks).
-  // Counted like the create sub-cases so one red run shows every outcome.
+  // Helper: an alterTable that must be rejected with the given code and
+  // must leave the table's TTL state unchanged. Counted like the create
+  // sub-case so one red run shows every outcome.
+  auto expect_alter_rejected = [&](const char *tabname,
+                                   const NdbDictionary::Table *old,
+                                   const NdbDictionary::Table &newTab,
+                                   const char *what, int expected_code,
+                                   bool ttl_after) {
+    int rc = dict->alterTable(*old, newTab);
+    std::cerr << "  (" << what << ": rc=" << rc << " err="
+              << dict->getNdbError().code << " "
+              << dict->getNdbError().message << ")" << std::endl;
+    if (rc == 0) {
+      std::cerr << "  SUB-FAIL(" << what << "): alterTable accepted"
+                << std::endl;
+      failed++;
+      return;
+    }
+    if (dict->getNdbError().code != expected_code) {
+      std::cerr << "  SUB-FAIL(" << what << "): expected error "
+                << expected_code << std::endl;
+      failed++;
+    }
+    dict->invalidateTable(tabname);
+    const NdbDictionary::Table *chk = dict->getTable(tabname);
+    if (chk == nullptr || chk->isTTLEnabled() != ttl_after) {
+      std::cerr << "  SUB-FAIL(" << what << "): TTL state changed after "
+                   "rejected alter" << std::endl;
+      failed++;
+    }
+  };
+
+  // Enabling TTL on an existing ring buffer table: rejected
   {
     NdbDictionary::Table newTab(*tab);
     newTab.setTTLSec(60);
     newTab.setTTLColumnNo(ts_no);
-    int rc = dict->alterTable(*tab, newTab);
-    std::cerr << "  (alter ttl+ring: rc=" << rc << " err="
-              << dict->getNdbError().code << " "
-              << dict->getNdbError().message << ")" << std::endl;
-    if (rc == 0) {
-      std::cerr << "  SUB-FAIL(alter ttl+ring): alterTable accepted TTL on "
-                   "ring table" << std::endl;
-      failed++;
-    } else {
-      dict->invalidateTable("rb_t28");
-      const NdbDictionary::Table *chk = dict->getTable("rb_t28");
-      if (chk == nullptr || chk->isTTLEnabled()) {
-        std::cerr << "  SUB-FAIL(alter ttl+ring): TTL enabled after rejected "
-                     "alter" << std::endl;
-        failed++;
-      }
-    }
+    expect_alter_rejected("rb_t28", tab, newTab, "alter enable ttl on ring",
+                          741, false);
+  }
+  // Disabling TTL on an existing TTL ring buffer table: rejected
+  {
+    NdbDictionary::Table newTab(*ttl_tab);
+    newTab.setTTLSec(RNIL);
+    newTab.setTTLColumnNo(RNIL);
+    expect_alter_rejected("rb_t28_ttl", ttl_tab, newTab,
+                          "alter disable ttl on ring", 741, true);
   }
   TEST_ASSERT(failed == 0, std::to_string(failed) +
-                               " invalid ring combinations were accepted");
+                               " DICT TTL/ring rule sub-cases failed");
 
   mysql_exec(mysql, "DROP TABLE test.rb_t28");
-  TEST_PASS("DICT rejects TTL/fully-replicated + ring combos");
+  mysql_exec(mysql, "DROP TABLE test.rb_t28_ttl");
+  TEST_PASS("DICT rules for TTL / fully-replicated + ring combos");
   return true;
 }
 
@@ -3348,6 +3390,526 @@ static bool test_delete_oldest_blob(Ndb *ndb, MYSQL *mysql) {
   return true;
 }
 
+// ---------------------------------------------------------------
+// TTL ring buffer tables
+// ---------------------------------------------------------------
+
+/*
+ * TTL ring buffer table: ring of %d slots, TTL 3600 s on the nullable
+ * TIMESTAMP column ts. Rows written through BasicRecordHelper leave ts
+ * NULL, which never expires.
+ */
+static const char *CREATE_TTL_RING =
+    "CREATE TABLE test.%s ("
+    "  client_id INT NOT NULL,"
+    "  ring_idx INT NOT NULL DEFAULT 0,"
+    "  ring_meta VARBINARY(64),"
+    "  event_data VARCHAR(100),"
+    "  ts TIMESTAMP NULL,"
+    "  PRIMARY KEY (client_id, ring_idx)"
+    ") ENGINE=NDB,"
+    "  COMMENT='NDB_TABLE=TTL=3600@ts,"
+    "MAX_ROWS_PER_PK=%d@ring_idx@ring_meta'";
+
+/*
+ * SQL helper: first column of the first row of a query, "" if none.
+ */
+static std::string sqlScalar(MYSQL *mysql, const char *sql) {
+  mysql_exec(mysql, sql);
+  MYSQL_RES *res = mysql_store_result(mysql);
+  std::string val;
+  if (res) {
+    MYSQL_ROW r = mysql_fetch_row(res);
+    if (r && r[0]) val = r[0];
+    mysql_free_result(res);
+  }
+  return val;
+}
+
+/*
+ * SQL helper: the meta row's TTL column of one PK prefix, read with
+ * show_meta in UTC. "" if the meta row is not visible.
+ */
+static std::string readMetaTs(MYSQL *mysql, const char *tbl, int cid) {
+  mysql_exec(mysql, "SET time_zone='+00:00'");
+  mysql_exec(mysql, "SET ndb_ring_buffer_show_meta=1");
+  char sql[256];
+  snprintf(sql, sizeof(sql),
+           "SELECT ts FROM test.%s WHERE client_id=%d AND ring_idx=0", tbl,
+           cid);
+  std::string val = sqlScalar(mysql, sql);
+  mysql_exec(mysql, "SET ndb_ring_buffer_show_meta=0");
+  return val;
+}
+
+/*
+ * Test 33: TTL ring buffer table through the writer. The meta row's TTL
+ * column holds the TIMESTAMP maximum (W1: its ordered-index entry sorts
+ * past every purge range); deleteOldest is rejected with 4358 and leaves
+ * the table untouched; the writer keeps working afterwards.
+ */
+static bool test_ttl_ring_writer_and_delete_oldest(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 33] TTL ring - meta TTL column = max, deleteOldest "
+               "rejected"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t33");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_TTL_RING, "rb_t33", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t33");
+  const NdbDictionary::Table *table = dict->getTable("rb_t33");
+  TEST_ASSERT(table != nullptr, "getTable");
+  TEST_ASSERT(table->isRingBuffer() && table->isTTLEnabled(),
+              "should be a TTL ring buffer table");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(table);
+
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 3),
+              "insert 3 rows");
+  auto rows = readDataRows(mysql, "rb_t33", 1);
+  TEST_ASSERT(rows.size() == 3,
+              "expected 3 rows, got " + std::to_string(rows.size()));
+
+  std::string meta_ts = readMetaTs(mysql, "rb_t33", 1);
+  TEST_ASSERT(meta_ts == "2038-01-19 03:14:07",
+              "meta row TTL column should be the TIMESTAMP maximum, got '" +
+                  meta_ts + "'");
+
+  {
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbRingBufferWriter writer(table, h.record, trans);
+    TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+    h.fillRow(rowbuf, 1, "");
+    Uint32 actual = 0xdeadbeef;
+    int rc = writer.deleteOldest(rowbuf, 1, &actual);
+    std::cerr << "  (deleteOldest on TTL ring: rc=" << rc << " err="
+              << writer.getErrorCode() << " " << writer.getErrorMessage()
+              << ")" << std::endl;
+    TEST_ASSERT(rc == -1, "deleteOldest must fail on a TTL ring table");
+    TEST_ASSERT(writer.getErrorCode() == 4358,
+                "expected error 4358, got " +
+                    std::to_string(writer.getErrorCode()));
+    TEST_ASSERT(actual == 0, "outActual must be 0 on rejection");
+    ndb->closeTransaction(trans);
+  }
+  rows = readDataRows(mysql, "rb_t33", 1);
+  TEST_ASSERT(rows.size() == 3, "rows untouched by the rejected call");
+
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "more", 1),
+              "insert after rejected deleteOldest");
+  rows = readDataRows(mysql, "rb_t33", 1);
+  TEST_ASSERT(rows.size() == 4,
+              "expected 4 rows, got " + std::to_string(rows.size()));
+  TEST_ASSERT(metaFieldLE(readMetaHex(mysql, "rb_t33", 1), 16, 8) == 4,
+              "total_inserts should be 4");
+
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t33");
+  TEST_PASS("TTL ring - meta TTL column = max, deleteOldest rejected");
+  return true;
+}
+
+/*
+ * Test 34 (K1): a ring meta row never expires, whatever its TTL column
+ * holds. The meta row's ts is rewritten to the zero TIMESTAMP, which
+ * checkTTL reads as expired on a data row (the state of meta rows written
+ * before the max fill). Read path: show_meta still sees the meta row.
+ * Update path: the next insert continues the ring (total_inserts 2)
+ * instead of re-initialising it - without K1 the writer's meta read got
+ * 626, the re-insert was converted by DBACC into a TTL upsert and the meta
+ * row was silently reset to total_inserts 1.
+ */
+static bool test_ttl_ring_meta_never_expires(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 34] TTL ring - meta row never expires (zero TTL column)"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t34");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_TTL_RING, "rb_t34", 5);
+  mysql_exec(mysql, ddl);
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t34");
+  const NdbDictionary::Table *table = dict->getTable("rb_t34");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  unsigned char *mask = h.newUserMask(table);
+  const NdbRecord::Attr *ridx = findAttr(h.record, table, "ring_idx");
+  const NdbRecord::Attr *ts = findAttr(h.record, table, "ts");
+  TEST_ASSERT(ridx != nullptr && ts != nullptr, "ring_idx / ts attrs");
+
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 1),
+              "insert 1 row");
+  TEST_ASSERT(readMetaTs(mysql, "rb_t34", 1) == "2038-01-19 03:14:07",
+              "meta row TTL column should start at the maximum");
+
+  // Raw update of the meta row (ring_idx = 0) with the ring-buffer flag:
+  // ts := zero TIMESTAMP (4 zero bytes, not NULL).
+  {
+    h.fillRow(rowbuf, 1, "");
+    setInt32(rowbuf, ridx, 0);
+    clearNull(rowbuf, ts);
+    memset(rowbuf + ts->offset, 0, ts->maxSize);
+    unsigned char *ts_mask = new unsigned char[h.mask_size];
+    const char *cols[] = {"ts"};
+    buildMask(table, ts_mask, h.mask_size, cols, 1);
+
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    NdbOperation::OperationOptions opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.optionsPresent = NdbOperation::OperationOptions::OO_RING_BUFFER_OP;
+    const NdbOperation *op = trans->updateTuple(
+        h.record, rowbuf, h.record, rowbuf, ts_mask, &opts, sizeof(opts));
+    TEST_ASSERT(op != nullptr, "updateTuple define (meta ts)");
+    int rc = trans->execute(NdbTransaction::Commit);
+    TEST_ASSERT(rc == 0, std::string("meta ts update: ") +
+                             trans->getNdbError().message);
+    ndb->closeTransaction(trans);
+    delete[] ts_mask;
+  }
+
+  // Read path: the meta row stays visible to show_meta
+  std::string meta_ts = readMetaTs(mysql, "rb_t34", 1);
+  std::cerr << "  (meta ts after zero fill: '" << meta_ts << "')"
+            << std::endl;
+  TEST_ASSERT(!meta_ts.empty(),
+              "meta row with a zero TTL column must stay visible");
+  TEST_ASSERT(meta_ts != "2038-01-19 03:14:07",
+              "meta row TTL column should have been zeroed");
+
+  // Update path: the writer sees the meta row and continues the ring
+  TEST_ASSERT(insertN(ndb, table, h, rowbuf, mask, 1, "row", 1),
+              "insert after zeroing the meta TTL column");
+  std::string hex = readMetaHex(mysql, "rb_t34", 1);
+  TEST_ASSERT(metaFieldLE(hex, 16, 8) == 2,
+              "total_inserts should be 2 (ring continued), got " +
+                  std::to_string(metaFieldLE(hex, 16, 8)));
+  TEST_ASSERT(metaFieldLE(hex, 8, 4) == 2, "count should be 2");
+  auto rows = readDataRows(mysql, "rb_t34", 1);
+  TEST_ASSERT(rows.size() == 2 && rows[1].ring_idx == 2,
+              "second row should sit in slot 2");
+  // The writer's meta update restored the maximum
+  TEST_ASSERT(readMetaTs(mysql, "rb_t34", 1) == "2038-01-19 03:14:07",
+              "meta row TTL column should be back at the maximum");
+
+  delete[] rowbuf;
+  delete[] mask;
+  mysql_exec(mysql, "DROP TABLE test.rb_t34");
+  TEST_PASS("TTL ring - meta row never expires (zero TTL column)");
+  return true;
+}
+
+/*
+ * Test 35 (K2): an only-expired delete (what the TTL purge issues) passes
+ * the ring write guard without the ring-buffer flag, but only for an
+ * expired row: on a live row and on the meta row it is not-found (626),
+ * a plain delete without any flag is still blocked (940), and the pair
+ * only-expired + ignore-TTL is rejected by the API (4360). The meta row is
+ * untouched by the purge-style delete and the ring continues past the
+ * hole.
+ */
+static bool test_ttl_ring_only_expired_delete(Ndb *ndb, MYSQL *mysql) {
+  std::cout << "[Test 35] TTL ring - only-expired delete passes the ring "
+               "write guard"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t35");
+  char ddl[1024];
+  snprintf(ddl, sizeof(ddl), CREATE_TTL_RING, "rb_t35", 5);
+  mysql_exec(mysql, ddl);
+
+  // Slot 1 expired (2 h old, TTL 3600 s), slot 2 live - through the SQL
+  // ring writer.
+  mysql_exec(mysql,
+             "INSERT INTO test.rb_t35 (client_id, event_data, ts) VALUES "
+             "(1, 'old', DATE_SUB(NOW(), INTERVAL 2 HOUR))");
+  mysql_exec(mysql,
+             "INSERT INTO test.rb_t35 (client_id, event_data, ts) VALUES "
+             "(1, 'live', NOW())");
+  auto rows = readDataRows(mysql, "rb_t35", 1);
+  TEST_ASSERT(rows.size() == 1 && rows[0].ring_idx == 2 &&
+                  rows[0].data == "live",
+              "only the live row (slot 2) should be visible");
+  const std::string hex_before = readMetaHex(mysql, "rb_t35", 1);
+  TEST_ASSERT(metaFieldLE(hex_before, 8, 4) == 2 &&
+                  metaFieldLE(hex_before, 16, 8) == 2,
+              "meta count/total_inserts should be 2");
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t35");
+  const NdbDictionary::Table *table = dict->getTable("rb_t35");
+  TEST_ASSERT(table != nullptr, "getTable");
+  BasicRecordHelper h;
+  TEST_ASSERT(h.init(table), "init record helper");
+  char *rowbuf = h.newRow();
+  const NdbRecord::Attr *ridx = findAttr(h.record, table, "ring_idx");
+  TEST_ASSERT(ridx != nullptr, "ring_idx attr");
+
+  NdbOperation::OperationOptions only_expired;
+  memset(&only_expired, 0, sizeof(only_expired));
+  only_expired.optionsPresent =
+      NdbOperation::OperationOptions::OO_TTL_ONLY_EXPIRED;
+
+  // Issue one NdbRecord deleteTuple of (1, slot) and return the error code
+  // (0 on success).
+  auto delete_slot = [&](Uint32 slot,
+                         const NdbOperation::OperationOptions *opts,
+                         const char *what) -> int {
+    h.fillRow(rowbuf, 1, "");
+    setInt32(rowbuf, ridx, slot);
+    NdbTransaction *trans = ndb->startTransaction(table);
+    if (!trans) return -1;
+    const NdbOperation *op =
+        trans->deleteTuple(h.record, rowbuf, h.record, nullptr, nullptr, opts,
+                           opts ? sizeof(*opts) : 0);
+    if (!op) {
+      int e = trans->getNdbError().code;
+      ndb->closeTransaction(trans);
+      return e ? e : -1;
+    }
+    int rc = trans->execute(NdbTransaction::Commit);
+    int err = rc == 0 ? 0 : trans->getNdbError().code;
+    std::cerr << "  (" << what << ": rc=" << rc << " err=" << err << ")"
+              << std::endl;
+    ndb->closeTransaction(trans);
+    return err;
+  };
+
+  // (a) expired slot 1: the purge-style delete passes the guard and deletes
+  int err = delete_slot(1, &only_expired, "only-expired delete, expired row");
+  TEST_ASSERT(err == 0,
+              "only-expired delete of an expired ring row must succeed, got " +
+                  std::to_string(err));
+  // (a2) ... and the row is physically gone
+  err = delete_slot(1, &only_expired, "only-expired delete, deleted row");
+  TEST_ASSERT(err == 626, "second delete of slot 1 should be not-found (626), got " +
+                              std::to_string(err));
+  // (b) live slot 2: out of the only-expired scope -> not found, row stays
+  err = delete_slot(2, &only_expired, "only-expired delete, live row");
+  TEST_ASSERT(err == 626,
+              "only-expired delete of a live row should be 626, got " +
+                  std::to_string(err));
+  // (c) plain delete without any flag: still blocked by the ring guard
+  err = delete_slot(2, nullptr, "plain delete, live row");
+  TEST_ASSERT(err == 940,
+              "plain delete on a ring table should still be 940, got " +
+                  std::to_string(err));
+  // (d) the meta row (ring_idx 0) is live to an only-expired delete as
+  //     well (K1: it never expires): not found, meta row untouched
+  err = delete_slot(0, &only_expired, "only-expired delete, meta row");
+  TEST_ASSERT(err == 626,
+              "only-expired delete of the meta row should be 626, got " +
+                  std::to_string(err));
+  // (e) only-expired combined with ignore-TTL would skip the expiry check
+  //     and the ring write guard: the NDB API rejects the pair (4360) on
+  //     a live row and on the meta row alike
+  NdbOperation::OperationOptions both_flags;
+  memset(&both_flags, 0, sizeof(both_flags));
+  both_flags.optionsPresent =
+      NdbOperation::OperationOptions::OO_TTL_ONLY_EXPIRED |
+      NdbOperation::OperationOptions::OO_TTL_IGNORE;
+  err = delete_slot(2, &both_flags, "only-expired + ignore-TTL, live row");
+  TEST_ASSERT(err == 4360,
+              "only-expired + ignore-TTL delete should be rejected with 4360, "
+              "got " + std::to_string(err));
+  err = delete_slot(0, &both_flags, "only-expired + ignore-TTL, meta row");
+  TEST_ASSERT(err == 4360,
+              "only-expired + ignore-TTL delete of the meta row should be "
+              "rejected with 4360, got " + std::to_string(err));
+
+  rows = readDataRows(mysql, "rb_t35", 1);
+  TEST_ASSERT(rows.size() == 1 && rows[0].ring_idx == 2 &&
+                  rows[0].data == "live",
+              "the live row must survive");
+  TEST_ASSERT(readMetaHex(mysql, "rb_t35", 1) == hex_before,
+              "meta row must be untouched by the purge-style delete");
+
+  // The ring continues past the hole: next insert lands in slot 3
+  mysql_exec(mysql,
+             "INSERT INTO test.rb_t35 (client_id, event_data, ts) VALUES "
+             "(1, 'new', NOW())");
+  rows = readDataRows(mysql, "rb_t35", 1);
+  TEST_ASSERT(rows.size() == 2 && rows[1].ring_idx == 3 &&
+                  rows[1].data == "new",
+              "new row should land in slot 3");
+  std::string hex_after = readMetaHex(mysql, "rb_t35", 1);
+  TEST_ASSERT(metaFieldLE(hex_after, 16, 8) == 3 &&
+                  metaFieldLE(hex_after, 8, 4) == 3,
+              "meta count/total_inserts should be 3 (count is a span)");
+
+  delete[] rowbuf;
+  mysql_exec(mysql, "DROP TABLE test.rb_t35");
+  TEST_PASS("TTL ring - only-expired delete passes the ring write guard");
+  return true;
+}
+
+/*
+ * Test 36: TTL column precision and the every-column rule. The writer
+ * packs the meta row's TIMESTAMP(3) maximum with the column's fraction
+ * bytes ('2038-01-19 03:14:07.000'). A slot write onto an occupied slot is
+ * an update, so a column absent from the write keeps the overwritten
+ * row's value (an expired TTL value hides the new row; a replica whose
+ * purge removed the slot cannot rebuild the row): on a TTL table the
+ * writer rejects an NdbRecord that lacks a column (4359 at construction)
+ * and a row whose mask lacks any column (4359 from addRow), leaving the
+ * table untouched.
+ */
+static bool test_ttl_ring_precision_and_partial_record(Ndb *ndb,
+                                                       MYSQL *mysql) {
+  std::cout << "[Test 36] TTL ring - TIMESTAMP(3) meta maximum, every column "
+               "mandatory"
+            << std::endl;
+
+  mysql_exec(mysql, "DROP TABLE IF EXISTS test.rb_t36");
+  mysql_exec(mysql,
+             "CREATE TABLE test.rb_t36 ("
+             "  client_id INT NOT NULL,"
+             "  ring_idx INT NOT NULL DEFAULT 0,"
+             "  ring_meta VARBINARY(64),"
+             "  event_data VARCHAR(100),"
+             "  ts TIMESTAMP(3) NULL,"
+             "  PRIMARY KEY (client_id, ring_idx)"
+             ") ENGINE=NDB,"
+             "  COMMENT='NDB_TABLE=TTL=3600@ts,"
+             "MAX_ROWS_PER_PK=5@ring_idx@ring_meta'");
+
+  NdbDictionary::Dictionary *dict = ndb->getDictionary();
+  dict->invalidateTable("rb_t36");
+  const NdbDictionary::Table *table = dict->getTable("rb_t36");
+  TEST_ASSERT(table != nullptr, "getTable");
+
+  // (a) default record, all columns: the meta row's TIMESTAMP(3) maximum
+  //     carries the fraction digits
+  {
+    BasicRecordHelper h;
+    TEST_ASSERT(h.init(table), "init record helper");
+    char *rowbuf = h.newRow();
+    unsigned char *mask = h.newUserMask(table);
+    const bool ok = insertN(ndb, table, h, rowbuf, mask, 1, "row", 2);
+    delete[] rowbuf;
+    delete[] mask;
+    TEST_ASSERT(ok, "insert 2 rows");
+    const std::string meta_ts = readMetaTs(mysql, "rb_t36", 1);
+    TEST_ASSERT(meta_ts == "2038-01-19 03:14:07.000",
+                "meta row TIMESTAMP(3) should be the maximum with 3 "
+                "fraction digits, got '" +
+                    meta_ts + "'");
+  }
+
+  // (b) an NdbRecord without the TTL column is rejected by the constructor
+  //     (any missing column would be: the write must carry the whole row)
+  {
+    const char *names[4] = {"client_id", "ring_idx", "ring_meta",
+                            "event_data"};
+    NdbDictionary::RecordSpecification_v1 spec[4];
+    memset(spec, 0, sizeof(spec));
+    Uint32 offset = 0;
+    Uint32 nullbit = 0;
+    const Uint32 null_byte = 1000;  // null bits behind the column data
+    for (int i = 0; i < 4; i++) {
+      const NdbDictionary::Column *c = table->getColumn(names[i]);
+      TEST_ASSERT(c != nullptr, std::string("column ") + names[i]);
+      spec[i].column = c;
+      spec[i].offset = offset;
+      if (c->getNullable()) {
+        spec[i].nullbit_byte_offset = null_byte;
+        spec[i].nullbit_bit_in_byte = nullbit++;
+      }
+      offset += ((c->getSizeInBytesForRecord() + 7) / 8) * 8;
+    }
+    // The v1 specification is selected by its element size
+    NdbRecord *rec = dict->createRecord(
+        table,
+        reinterpret_cast<const NdbDictionary::RecordSpecification *>(spec),
+        4, sizeof(NdbDictionary::RecordSpecification_v1));
+    TEST_ASSERT(rec != nullptr, std::string("createRecord: ") +
+                                    dict->getNdbError().message);
+    TEST_ASSERT(findAttr(rec, table, "ts") == nullptr,
+                "the partial record must not carry the TTL column");
+
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    {
+      NdbRingBufferWriter writer(table, rec, trans);
+      std::cerr << "  (writer on a record without the TTL column: err="
+                << writer.getErrorCode() << " " << writer.getErrorMessage()
+                << ")" << std::endl;
+      TEST_ASSERT(writer.getErrorCode() == 4359,
+                  "a record without the TTL column should fail with 4359, got " +
+                      std::to_string(writer.getErrorCode()));
+    }
+    ndb->closeTransaction(trans);
+    dict->releaseRecord(rec);
+  }
+
+  // (c) the default record, but a row whose mask leaves the TTL column out
+  //     (then one that leaves event_data out): rejected by addRow, nothing
+  //     written
+  {
+    BasicRecordHelper h;
+    TEST_ASSERT(h.init(table), "init record helper");
+    char *rowbuf = h.newRow();
+    unsigned char *mask = new unsigned char[h.mask_size];
+    const char *cols[] = {"client_id", "event_data"};  // no ts
+    buildMask(table, mask, h.mask_size, cols, 2);
+    NdbTransaction *trans = ndb->startTransaction(table);
+    TEST_ASSERT(trans != nullptr, "startTransaction");
+    {
+      NdbRingBufferWriter writer(table, h.record, trans);
+      TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+      h.fillRow(rowbuf, 1, "no_ts");
+      const NdbOperation *op = writer.addRow(rowbuf, mask);
+      std::cerr << "  (addRow without the TTL column in the mask: err="
+                << writer.getErrorCode() << ")" << std::endl;
+      TEST_ASSERT(op == nullptr && writer.getErrorCode() == 4359,
+                  "addRow without the TTL column in the mask should fail with "
+                  "4359, got " +
+                      std::to_string(writer.getErrorCode()));
+    }
+    ndb->closeTransaction(trans);
+    {
+      const char *cols_no_data[] = {"client_id", "ts"};  // no event_data
+      buildMask(table, mask, h.mask_size, cols_no_data, 2);
+      trans = ndb->startTransaction(table);
+      TEST_ASSERT(trans != nullptr, "startTransaction");
+      NdbRingBufferWriter writer(table, h.record, trans);
+      TEST_ASSERT(writer.getErrorCode() == 0, "writer init");
+      h.fillRow(rowbuf, 1, "no_data");
+      const NdbOperation *op = writer.addRow(rowbuf, mask);
+      std::cerr << "  (addRow without event_data in the mask: err="
+                << writer.getErrorCode() << " " << writer.getErrorMessage()
+                << ")" << std::endl;
+      TEST_ASSERT(op == nullptr && writer.getErrorCode() == 4359,
+                  "addRow without event_data in the mask should fail with "
+                  "4359, got " +
+                      std::to_string(writer.getErrorCode()));
+      ndb->closeTransaction(trans);
+    }
+    delete[] rowbuf;
+    delete[] mask;
+    auto rows = readDataRows(mysql, "rb_t36", 1);
+    TEST_ASSERT(rows.size() == 2, "the rejected row must not be written");
+    TEST_ASSERT(metaFieldLE(readMetaHex(mysql, "rb_t36", 1), 16, 8) == 2,
+                "total_inserts must stay 2");
+  }
+
+  mysql_exec(mysql, "DROP TABLE test.rb_t36");
+  TEST_PASS("TTL ring - TIMESTAMP(3) meta maximum, every column mandatory");
+  return true;
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cout << "Usage: ndb_ndbapi_ring_buffer_test <mysql_host> "
@@ -3434,6 +3996,11 @@ int main(int argc, char **argv) {
     test_corrupt_meta_rejected(&ndb, &mysql);
     test_delete_oldest_edges(&ndb, &mysql);
     test_delete_oldest_blob(&ndb, &mysql);
+
+    test_ttl_ring_writer_and_delete_oldest(&ndb, &mysql);
+    test_ttl_ring_meta_never_expires(&ndb, &mysql);
+    test_ttl_ring_only_expired_delete(&ndb, &mysql);
+    test_ttl_ring_precision_and_partial_record(&ndb, &mysql);
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_tests_passed << std::endl;

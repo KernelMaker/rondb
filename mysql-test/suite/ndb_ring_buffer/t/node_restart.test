@@ -194,6 +194,61 @@ SELECT client_id, ring_idx, event_data FROM test.rb
     WHERE client_id = 3 ORDER BY ring_idx;
 
 ###############################################################################
+# Case 6: TTL ring buffer table survives a system restart
+###############################################################################
+
+--echo #
+--echo # Case 6: TTL ring - expired slot and meta row survive a system restart
+--echo #
+
+# The meta row's TIMESTAMP maximum is printed: fix the session time zone.
+SET time_zone = '+00:00';
+CREATE TABLE test.rb_ttl (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    ts TIMESTAMP NULL,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=4@ring_idx@ring_meta";
+
+# Slot 1 expired, slot 2 live, slot 3 far future
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'live_2');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_ADD(NOW(), INTERVAL 1 DAY), 'future_3');
+
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# System restart
+--exec $NDB_MGM -e "ALL RESTART -N" >> $NDB_TOOLS_OUTPUT
+--exec $NDB_WAITER --not-started >> $NDB_TOOLS_OUTPUT
+--exec $NDB_MGM -e "ALL START" >> $NDB_TOOLS_OUTPUT
+--exec $NDB_WAITER >> $NDB_TOOLS_OUTPUT
+
+--source include/ndb_not_readonly.inc
+
+--connection server2
+--source include/ndb_not_readonly.inc
+--connection server1
+
+# Visible set and meta row unchanged
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# The ring continues: slot 4, then the wrap overwrites the expired slot 1
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'live_4');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'wrap_5');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+
+DROP TABLE test.rb_ttl;
+
+###############################################################################
 # Cleanup
 ###############################################################################
 

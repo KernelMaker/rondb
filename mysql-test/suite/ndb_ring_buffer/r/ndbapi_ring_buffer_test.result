@@ -60,8 +60,8 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: refreshTuple on ring buffer table blocked
 [Test 27] DICT validates ring metadata on create
   PASS: DICT validates ring metadata on create
-[Test 28] DICT rejects TTL/fully-replicated + ring combos
-  PASS: DICT rejects TTL/fully-replicated + ring combos
+[Test 28] DICT rules for TTL / fully-replicated + ring combos
+  PASS: DICT rules for TTL / fully-replicated + ring combos
 [Test 29] add-fragment ALTER on ring buffer table rejected
   PASS: add-fragment ALTER on ring buffer table rejected
 [Test 30] corrupt ring_meta rejected
@@ -70,9 +70,17 @@ CREATE DATABASE IF NOT EXISTS test;
   PASS: deleteOldest - maxN=0, auto-flush, ring_size=1
 [Test 32] deleteOldest - blob table
   PASS: deleteOldest - blob table
+[Test 33] TTL ring - meta TTL column = max, deleteOldest rejected
+  PASS: TTL ring - meta TTL column = max, deleteOldest rejected
+[Test 34] TTL ring - meta row never expires (zero TTL column)
+  PASS: TTL ring - meta row never expires (zero TTL column)
+[Test 35] TTL ring - only-expired delete passes the ring write guard
+  PASS: TTL ring - only-expired delete passes the ring write guard
+[Test 36] TTL ring - TIMESTAMP(3) meta maximum, every column mandatory
+  PASS: TTL ring - TIMESTAMP(3) meta maximum, every column mandatory
 
 === Results ===
-Passed: 32
+Passed: 36
 Failed: 0
 #
 # Done

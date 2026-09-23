@@ -30,6 +30,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -48,6 +49,7 @@ import com.mysql.clusterj.query.Predicate;
 import com.mysql.clusterj.query.PredicateOperand;
 
 import testsuite.clusterj.model.RingBufferNotNull;
+import testsuite.clusterj.model.RingBufferTtl;
 import testsuite.clusterj.model.RingBufferSensor;
 
 /**
@@ -125,6 +127,16 @@ public class RingBufferTest extends AbstractClusterJTest {
                     + "PRIMARY KEY (client_id, ring_idx)"
                     + ") ENGINE=ndbcluster"
                     + " COMMENT='NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
+            stmt.execute("DROP TABLE IF EXISTS ring_buffer_ttl");
+            stmt.execute("CREATE TABLE ring_buffer_ttl ("
+                    + "client_id INT NOT NULL,"
+                    + "ring_idx INT NOT NULL DEFAULT 0,"
+                    + "ring_meta VARBINARY(64),"
+                    + "ts TIMESTAMP NULL,"
+                    + "val VARCHAR(50),"
+                    + "PRIMARY KEY (client_id, ring_idx)"
+                    + ") ENGINE=ndbcluster"
+                    + " COMMENT='NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=3@ring_idx@ring_meta'");
             stmt.execute("DROP TABLE IF EXISTS ring_buffer_autoinc");
             stmt.execute("CREATE TABLE ring_buffer_autoinc ("
                     + "id INT NOT NULL AUTO_INCREMENT,"
@@ -221,6 +233,8 @@ public class RingBufferTest extends AbstractClusterJTest {
         testBlobColumnRejected();
         testAutoIncrementPrefix();
         testFlushBatchFailureThenCommit();
+        // TTL ring buffer table: meta row TTL column, expiry, ring continues
+        testTtlRing();
 
         // Concurrent tests (SamePrefix runs last - its normalized state
         // is checked by the SQL diagnostic queries in the .test file)
@@ -1080,6 +1094,119 @@ public class RingBufferTest extends AbstractClusterJTest {
         errorIfNotEqual("NOT NULL wrap: slot 2 score", 88, s2.getScore());
         errorIfNotEqual("NOT NULL wrap: slot 3 name", "charlie", s3.getName());
         errorIfNotEqual("NOT NULL wrap: slot 3 score", 77, s3.getScore());
+        tx.commit();
+    }
+
+    /**
+     * Ring buffer table with TTL (ring_buffer_ttl, MAX_ROWS_PER_PK=3, TTL 1 h
+     * on ts). RingBufferWriter fills the meta row's ts with the TIMESTAMP
+     * maximum (setTTLColumnMax) so that the meta row's entry in an index on
+     * ts sorts past every purge range; an expired row keeps its slot but is
+     * invisible; inserts continue past it.
+     */
+    private void testTtlRing() {
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            stmt.execute("DELETE FROM ring_buffer_ttl");
+            stmt.close();
+        } catch (Throwable t) {
+            // ignore - table might be empty
+        }
+
+        long now = System.currentTimeMillis();
+        // Slot 1 expired two hours ago, slot 2 live
+        tx.begin();
+        RingBufferTtl r1 = session.newInstance(RingBufferTtl.class);
+        r1.setClientId(1);
+        r1.setTs(new Timestamp(now - 2L * 3600L * 1000L));
+        r1.setVal("expired");
+        session.makePersistent(r1);
+        RingBufferTtl r2 = session.newInstance(RingBufferTtl.class);
+        r2.setClientId(1);
+        r2.setTs(new Timestamp(now));
+        r2.setVal("live");
+        session.makePersistent(r2);
+        tx.commit();
+
+        // SQL view: one visible row (slot 2); meta row ts = TIMESTAMP maximum
+        try {
+            getConnection();
+            Statement stmt = connection.createStatement();
+            stmt.execute("SET time_zone = '+00:00'");
+            ResultSet rs = stmt.executeQuery(
+                    "SELECT ring_idx, val FROM ring_buffer_ttl"
+                    + " WHERE client_id = 1 AND ring_idx > 0 ORDER BY ring_idx");
+            int visible = 0;
+            while (rs.next()) {
+                visible++;
+                errorIfNotEqual("TTL ring: visible slot", 2, rs.getInt("ring_idx"));
+                errorIfNotEqual("TTL ring: visible val", "live", rs.getString("val"));
+            }
+            rs.close();
+            errorIfNotEqual("TTL ring: one visible row", 1, visible);
+
+            stmt.execute("SET ndb_ring_buffer_show_meta = 1");
+            rs = stmt.executeQuery(
+                    "SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:%i:%s') AS ts_str"
+                    + " FROM ring_buffer_ttl WHERE client_id = 1 AND ring_idx = 0");
+            if (rs.next()) {
+                errorIfNotEqual("TTL ring meta: ts = TIMESTAMP maximum",
+                        "2038-01-19 03:14:07", rs.getString("ts_str"));
+            } else {
+                error("TTL ring: meta row not found");
+            }
+            rs.close();
+            stmt.execute("SET ndb_ring_buffer_show_meta = 0");
+            stmt.close();
+        } catch (Exception ex) {
+            error("TTL ring SQL check failed: " + ex.getMessage());
+        }
+
+        // The ring continues in slot 3; the expired slot 1 is invisible
+        tx.begin();
+        RingBufferTtl r3 = session.newInstance(RingBufferTtl.class);
+        r3.setClientId(1);
+        r3.setTs(new Timestamp(now));
+        r3.setVal("live3");
+        session.makePersistent(r3);
+        tx.commit();
+
+        tx.begin();
+        RingBufferTtl s1 = session.find(RingBufferTtl.class, new Object[]{1, 1});
+        RingBufferTtl s2 = session.find(RingBufferTtl.class, new Object[]{1, 2});
+        RingBufferTtl s3 = session.find(RingBufferTtl.class, new Object[]{1, 3});
+        errorIfNotEqual("TTL ring: expired slot 1 invisible", true, s1 == null);
+        errorIfNotEqual("TTL ring: slot 2 val", "live", s2 == null ? null : s2.getVal());
+        errorIfNotEqual("TTL ring: slot 3 val", "live3", s3 == null ? null : s3.getVal());
+        tx.commit();
+
+        // A TTL ring insert must set every column: a slot write onto an
+        // occupied slot is an update, an inherited expired TTL value would
+        // hide the new row, and a replica whose purge removed the slot could
+        // not rebuild it. Rejected before anything is written.
+        boolean rejected = false;
+        tx.begin();
+        try {
+            RingBufferTtl noTs = session.newInstance(RingBufferTtl.class);
+            noTs.setClientId(1);
+            noTs.setVal("no_ts");
+            session.makePersistent(noTs);
+            tx.commit();
+        } catch (ClusterJException ex) {
+            rejected = ex.getMessage() != null
+                    && ex.getMessage().contains("must set every column");
+            if (tx.isActive()) {
+                tx.rollback();
+            }
+        }
+        errorIfNotEqual("TTL ring: insert without the TTL column rejected", true, rejected);
+        tx.begin();
+        RingBufferTtl s3b = session.find(RingBufferTtl.class, new Object[]{1, 3});
+        RingBufferTtl s4 = session.find(RingBufferTtl.class, new Object[]{1, 4});
+        errorIfNotEqual("TTL ring: slot 3 unchanged after the rejected insert", "live3",
+                s3b == null ? null : s3b.getVal());
+        errorIfNotEqual("TTL ring: no slot 4 after the rejected insert", true, s4 == null);
         tx.commit();
     }
 
@@ -3246,6 +3373,7 @@ public class RingBufferTest extends AbstractClusterJTest {
             getConnection();
             Statement stmt = connection.createStatement();
             stmt.execute("DELETE FROM ring_buffer_sensor");
+            stmt.execute("DELETE FROM ring_buffer_ttl");
             stmt.close();
         } catch (Throwable t) {
             // ignore - table might be empty

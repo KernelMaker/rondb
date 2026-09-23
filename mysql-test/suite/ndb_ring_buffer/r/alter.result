@@ -154,7 +154,7 @@ client_id	ring_idx	val
 1	2	b
 DROP TABLE test.rb_reorg_i;
 #
-# Case 7: ALTER adding TTL to a ring buffer table - rejected
+# Case 7: TTL on a ring buffer table is a creation-time property
 #
 CREATE TABLE test.rb_ttl (
 client_id INT NOT NULL,
@@ -167,9 +167,11 @@ PRIMARY KEY (client_id, ring_idx)
 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
 INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'a');
 ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta,TTL=3600@created_at";
-ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both TTL and MAX_ROWS_PER_PK'
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Cannot enable/disable TTL on a ring table; use DROP+CREATE'
 ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=TTL=3600@created_at";
-ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both TTL and MAX_ROWS_PER_PK'
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Cannot enable/disable TTL on a ring table; use DROP+CREATE'
+ALTER TABLE test.rb_ttl ALGORITHM=INPLACE, COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta,TTL=3600@created_at";
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: Cannot enable/disable TTL on a ring table; use DROP+CREATE. Try ALGORITHM=COPY.
 SHOW CREATE TABLE test.rb_ttl;
 Table	Create Table
 rb_ttl	CREATE TABLE `rb_ttl` (
@@ -186,6 +188,48 @@ client_id	ring_idx	val
 1	1	a
 1	2	b
 DROP TABLE test.rb_ttl;
+CREATE TABLE test.rb_ttl2 (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+created_at TIMESTAMP NULL,
+val VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=TTL=3600@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_ttl2 (client_id, created_at, val) VALUES (1, NOW(), 'a');
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=TTL=7200@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+SHOW CREATE TABLE test.rb_ttl2;
+Table	Create Table
+rb_ttl2	CREATE TABLE `rb_ttl2` (
+  `client_id` int NOT NULL,
+  `ring_idx` int NOT NULL DEFAULT '0',
+  `ring_meta` varbinary(64) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `val` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`client_id`,`ring_idx`)
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=TTL=7200@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta'
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=TTL=OFF,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Cannot enable/disable TTL on a ring table; use DROP+CREATE'
+ALTER TABLE test.rb_ttl2 ALGORITHM=INPLACE, COMMENT="NDB_TABLE=TTL=OFF,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: Cannot enable/disable TTL on a ring table; use DROP+CREATE. Try ALGORITHM=COPY.
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+SHOW CREATE TABLE test.rb_ttl2;
+Table	Create Table
+rb_ttl2	CREATE TABLE `rb_ttl2` (
+  `client_id` int NOT NULL,
+  `ring_idx` int NOT NULL DEFAULT '0',
+  `ring_meta` varbinary(64) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `val` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`client_id`,`ring_idx`)
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=TTL=7200@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta'
+INSERT INTO test.rb_ttl2 (client_id, created_at, val) VALUES (1, NOW(), 'b');
+SELECT client_id, ring_idx, val FROM test.rb_ttl2 ORDER BY ring_idx;
+client_id	ring_idx	val
+1	1	a
+1	2	b
+DROP TABLE test.rb_ttl2;
 #
 # Case 8: repartition via ALTER ... PARTITION BY
 #

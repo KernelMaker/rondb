@@ -185,9 +185,12 @@ SELECT client_id, ring_idx, val FROM test.rb_reorg_i ORDER BY ring_idx;
 DROP TABLE test.rb_reorg_i;
 
 --echo #
---echo # Case 7: ALTER adding TTL to a ring buffer table - rejected
+--echo # Case 7: TTL on a ring buffer table is a creation-time property
 --echo #
 
+# Enabling TTL on an existing ring buffer table is rejected (meta rows
+# written so far carry a zero TTL column); the message goes through
+# ER_ILLEGAL_HA_CREATE_OPTION on the copy path.
 CREATE TABLE test.rb_ttl (
     client_id INT NOT NULL,
     ring_idx INT NOT NULL DEFAULT 0,
@@ -205,9 +208,13 @@ INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'a');
 ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta,TTL=3600@created_at";
 
 # TTL replacing the ring comment (comment re-injection keeps the ring
-# modifier alive, so this is still TTL+ring)
+# modifier alive, so this still enables TTL on a ring table)
 --error ER_ILLEGAL_HA_CREATE_OPTION
 ALTER TABLE test.rb_ttl COMMENT="NDB_TABLE=TTL=3600@created_at";
+
+# The inplace path rejects it with its own reason
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_ttl ALGORITHM=INPLACE, COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta,TTL=3600@created_at";
 
 # Comment unchanged, table still writable
 SHOW CREATE TABLE test.rb_ttl;
@@ -215,6 +222,40 @@ INSERT INTO test.rb_ttl (client_id, val) VALUES (1, 'b');
 SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
 
 DROP TABLE test.rb_ttl;
+
+# On a TTL ring buffer table the TTL seconds may change, TTL cannot be
+# disabled (deleteOldest would become legal on a ring with purged holes).
+CREATE TABLE test.rb_ttl2 (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    created_at TIMESTAMP NULL,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=3600@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+INSERT INTO test.rb_ttl2 (client_id, created_at, val) VALUES (1, NOW(), 'a');
+
+# TTL seconds change: allowed
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=TTL=7200@created_at,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+SHOW CREATE TABLE test.rb_ttl2;
+
+# TTL=OFF: rejected on both paths
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=TTL=OFF,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE test.rb_ttl2 ALGORITHM=INPLACE, COMMENT="NDB_TABLE=TTL=OFF,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+# A comment without the TTL modifier keeps it (re-injection): no change
+ALTER TABLE test.rb_ttl2 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+SHOW CREATE TABLE test.rb_ttl2;
+
+# Data untouched, ring continues
+INSERT INTO test.rb_ttl2 (client_id, created_at, val) VALUES (1, NOW(), 'b');
+SELECT client_id, ring_idx, val FROM test.rb_ttl2 ORDER BY ring_idx;
+
+DROP TABLE test.rb_ttl2;
 
 --echo #
 --echo # Case 8: repartition via ALTER ... PARTITION BY

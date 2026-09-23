@@ -377,9 +377,105 @@ SET sql_log_bin = 0;
 DROP DATABASE pitr;
 SET sql_log_bin = 1;
 #
+# Case 14: TTL ring buffer table - DDL, visibility and meta row replicate
+#
+SET time_zone = '+00:00';
+CREATE TABLE test.rb_ttl (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+ts TIMESTAMP NULL,
+val VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'live_2');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_ADD(NOW(), INTERVAL 1 DAY), 'future_3');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+client_id	ring_idx	val
+1	2	live_2
+1	3	future_3
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+client_id	ring_idx	ts	HEX(ring_meta)
+1	0	2038-01-19 03:14:07	0100000001000000030000000000000003000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+SET time_zone = '+00:00';
+SHOW CREATE TABLE test.rb_ttl;
+Table	Create Table
+rb_ttl	CREATE TABLE `rb_ttl` (
+  `client_id` int NOT NULL,
+  `ring_idx` int NOT NULL DEFAULT '0',
+  `ring_meta` varbinary(64) DEFAULT NULL,
+  `ts` timestamp NULL DEFAULT NULL,
+  `val` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`client_id`,`ring_idx`)
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=3@ring_idx@ring_meta'
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+client_id	ring_idx	val
+1	2	live_2
+1	3	future_3
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+client_id	ring_idx	ts	HEX(ring_meta)
+1	0	2038-01-19 03:14:07	0100000001000000030000000000000003000000000000000000000000000000
+SET ndb_ring_buffer_show_meta = OFF;
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'wrap_4');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+client_id	ring_idx	val
+1	1	wrap_4
+1	2	live_2
+1	3	future_3
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+client_id	ring_idx	val
+1	1	wrap_4
+1	2	live_2
+1	3	future_3
+#
+# Case 17: a wrap is logged as a write even with ndb_log_update_as_write = 0
+#
+SET GLOBAL ndb_log_update_as_write = 0;
+CREATE TABLE test.rb_uaw (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+ts TIMESTAMP NULL,
+val VARCHAR(50),
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=1@ring_idx@ring_meta";
+INSERT INTO test.rb_uaw (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+SET SESSION sql_log_bin = 0;
+SET SESSION ttl_expired_rows_visible_in_delete = 1;
+DELETE FROM test.rb_uaw WHERE client_id = 1;
+SET SESSION ttl_expired_rows_visible_in_delete = 0;
+SET SESSION sql_log_bin = 1;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT COUNT(*) AS replica_rows_after_purge FROM test.rb_uaw;
+replica_rows_after_purge
+0
+SET ndb_ring_buffer_show_meta = OFF;
+INSERT INTO test.rb_uaw (client_id, ts, val) VALUES (1, NOW(), 'wrap_2');
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, val, HEX(ring_meta) FROM test.rb_uaw ORDER BY ring_idx;
+client_id	ring_idx	val	HEX(ring_meta)
+1	0	NULL	0100000001000000010000000000000002000000000000000000000000000000
+1	1	wrap_2	NULL
+SET ndb_ring_buffer_show_meta = OFF;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, val, HEX(ring_meta) FROM test.rb_uaw ORDER BY ring_idx;
+client_id	ring_idx	val	HEX(ring_meta)
+1	0	NULL	0100000001000000010000000000000002000000000000000000000000000000
+1	1	wrap_2	NULL
+SET ndb_ring_buffer_show_meta = OFF;
+DROP TABLE test.rb_uaw;
+SET GLOBAL ndb_log_update_as_write = 1;
+#
 # Cleanup
 #
 DROP TABLE test.rb;
+DROP TABLE test.rb_ttl;
 DROP TABLE test.rb_bulk;
 DROP TABLE test.rb_nn_uniq;
 DROP TABLE test.rb_promote;

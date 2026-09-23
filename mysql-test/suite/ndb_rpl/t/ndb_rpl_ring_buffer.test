@@ -521,6 +521,117 @@ SET sql_log_bin = 1;
 --connection master
 
 ###############################################################################
+# Case 14: TTL ring buffer table replicates
+###############################################################################
+
+--echo #
+--echo # Case 14: TTL ring buffer table - DDL, visibility and meta row replicate
+--echo #
+
+--connection master
+SET time_zone = '+00:00';
+CREATE TABLE test.rb_ttl (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    ts TIMESTAMP NULL,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+# Slot 1 expired, slots 2 and 3 live. The expired row replicates as a
+# physical row and is invisible on both sides; the meta row (TTL column =
+# TIMESTAMP maximum) replicates byte-identical.
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'live_2');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_ADD(NOW(), INTERVAL 1 DAY), 'future_3');
+
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+--sync_slave_with_master
+--connection slave
+SET time_zone = '+00:00';
+SHOW CREATE TABLE test.rb_ttl;
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# The ring wraps over the expired slot on the master; the replica follows
+--connection master
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'wrap_4');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+
+--sync_slave_with_master
+--connection slave
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+--connection master
+
+###############################################################################
+# Case 17: ring writes are logged as writes even with ndb_log_update_as_write=0
+###############################################################################
+
+--echo #
+--echo # Case 17: a wrap is logged as a write even with ndb_log_update_as_write = 0
+--echo #
+
+# A wrap writes an occupied slot with writeTuple, which the data nodes turn
+# into an update, so the change event is an UPDATE. With
+# ndb_log_update_as_write = 0 the injector would log it as an update row
+# event; a replica whose TTL purge already removed the expired slot would
+# drop the missing-key update (idempotent apply) and lose the new row while
+# the meta row advances. Ring buffer tables are therefore logged as write
+# row events regardless of the setting. The replica-side purge is simulated
+# with a local, unlogged delete of the expired slot (with its meta row).
+--connection master
+SET GLOBAL ndb_log_update_as_write = 0;
+CREATE TABLE test.rb_uaw (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    ts TIMESTAMP NULL,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=1@ring_idx@ring_meta";
+INSERT INTO test.rb_uaw (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+--sync_slave_with_master
+
+--connection slave
+SET SESSION sql_log_bin = 0;
+SET SESSION ttl_expired_rows_visible_in_delete = 1;
+DELETE FROM test.rb_uaw WHERE client_id = 1;
+SET SESSION ttl_expired_rows_visible_in_delete = 0;
+SET SESSION sql_log_bin = 1;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT COUNT(*) AS replica_rows_after_purge FROM test.rb_uaw;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# The wrap on the source (slot 1 and the meta row are updates there)
+--connection master
+INSERT INTO test.rb_uaw (client_id, ts, val) VALUES (1, NOW(), 'wrap_2');
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, val, HEX(ring_meta) FROM test.rb_uaw ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = OFF;
+--sync_slave_with_master
+
+# The replica re-created both rows from the write row events
+--connection slave
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, val, HEX(ring_meta) FROM test.rb_uaw ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = OFF;
+
+--connection master
+DROP TABLE test.rb_uaw;
+SET GLOBAL ndb_log_update_as_write = 1;
+--sync_slave_with_master
+--connection master
+
+###############################################################################
 # Cleanup
 ###############################################################################
 
@@ -530,6 +641,7 @@ SET sql_log_bin = 1;
 
 --connection master
 DROP TABLE test.rb;
+DROP TABLE test.rb_ttl;
 DROP TABLE test.rb_bulk;
 DROP TABLE test.rb_nn_uniq;
 DROP TABLE test.rb_promote;

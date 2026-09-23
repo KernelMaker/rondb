@@ -769,6 +769,85 @@ SELECT client_id, ring_idx, val FROM test.rb_stage
 
 DROP TABLE test.rb_stage;
 
+###############################################################################
+# Case 12: TTL ring buffer table - meta row and expired slot survive restore
+###############################################################################
+
+--echo #
+--echo # Case 12: TTL ring buffer table - meta row and expired slot survive backup/restore
+--echo #
+
+# The meta row's TIMESTAMP maximum is printed: fix the session time zone.
+SET time_zone = '+00:00';
+CREATE TABLE test.rb_ttl (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    ts TIMESTAMP NULL,
+    val VARCHAR(50),
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=3600@ts,MAX_ROWS_PER_PK=3@ring_idx@ring_meta";
+
+# Slot 1 expired, slots 2 and 3 live; ring full (next_pos wrapped to 1)
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_SUB(NOW(), INTERVAL 2 HOUR), 'expired_1');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'live_2');
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, DATE_ADD(NOW(), INTERVAL 1 DAY), 'future_3');
+
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+--source include/ndb_backup.inc
+
+DROP TABLE test.rb_ttl;
+
+--source common/rpl/ndb_restore_source.inc
+
+--let $max_wait = 60
+SET GLOBAL ndb_metadata_sync = true;
+--let $metadata_sync_value = `SELECT @@ndb_metadata_sync`
+while ($metadata_sync_value != 0)
+{
+  --sleep 0.5
+  --dec $max_wait
+  if ($max_wait == 0)
+  {
+    --die Timed out waiting for metadata changes to be synced
+  }
+  --let $metadata_sync_value = `SELECT @@ndb_metadata_sync`
+}
+
+--connection server2
+--let $max_wait = 60
+SET GLOBAL ndb_metadata_sync = true;
+--let $metadata_sync_value = `SELECT @@ndb_metadata_sync`
+while ($metadata_sync_value != 0)
+{
+  --sleep 0.5
+  --dec $max_wait
+  if ($max_wait == 0)
+  {
+    --die Timed out waiting for metadata changes to be synced
+  }
+  --let $metadata_sync_value = `SELECT @@ndb_metadata_sync`
+}
+--connection server1
+
+# Comment, visible set and meta row preserved
+SHOW CREATE TABLE test.rb_ttl;
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+SET ndb_ring_buffer_show_meta = ON;
+SELECT client_id, ring_idx, ts, HEX(ring_meta) FROM test.rb_ttl WHERE ring_idx = 0;
+SET ndb_ring_buffer_show_meta = OFF;
+
+# The ring continues from the restored position over the expired slot
+INSERT INTO test.rb_ttl (client_id, ts, val) VALUES (1, NOW(), 'wrap_4');
+SELECT client_id, ring_idx, val FROM test.rb_ttl ORDER BY ring_idx;
+
+DROP TABLE test.rb_ttl;
+
 --echo #
 --echo # Cleanup
 --echo #

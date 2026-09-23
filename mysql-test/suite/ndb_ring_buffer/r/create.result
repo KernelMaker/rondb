@@ -227,7 +227,7 @@ PRIMARY KEY (client_id, ring_idx)
 COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=400@ring_idx@nonexistent";
 ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'Ring meta column not found in table'
 #
-# Case 17: Error - TTL and MAX_ROWS_PER_PK mutual exclusion
+# Case 17: TTL and MAX_ROWS_PER_PK combined - success
 #
 CREATE TABLE test.t17 (
 client_id INT NOT NULL,
@@ -237,7 +237,25 @@ ts TIMESTAMP,
 PRIMARY KEY (client_id, ring_idx)
 ) ENGINE = NDB,
 COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
-ERROR HY000: Table storage engine 'ndbcluster' does not support the create option 'A table cannot be both TTL and MAX_ROWS_PER_PK'
+SHOW CREATE TABLE test.t17;
+Table	Create Table
+t17	CREATE TABLE `t17` (
+  `client_id` int NOT NULL,
+  `ring_idx` int NOT NULL DEFAULT '0',
+  `ring_meta` varbinary(64) DEFAULT NULL,
+  `ts` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`client_id`,`ring_idx`)
+) ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta'
+DROP TABLE test.t17;
+CREATE TABLE test.t17_dt (
+client_id INT NOT NULL,
+ring_idx INT NOT NULL DEFAULT 0,
+ring_meta VARBINARY(64),
+ts DATETIME,
+PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+DROP TABLE test.t17_dt;
 #
 # Case 17b: Error - fully replicated and MAX_ROWS_PER_PK mutual exclusion
 #

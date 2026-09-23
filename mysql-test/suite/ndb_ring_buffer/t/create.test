@@ -2,7 +2,7 @@
 #
 # Tests for MAX_ROWS_PER_PK CREATE TABLE DDL parsing and metadata plumbing.
 # Validates COMMENT syntax, column constraints, SHOW CREATE TABLE round-trip,
-# mutual exclusion with TTL, and DROP TABLE.
+# combination with TTL, and DROP TABLE.
 
 --source include/have_ndb.inc
 
@@ -235,10 +235,11 @@ CREATE TABLE test.t16 (
   COMMENT="NDB_TABLE=MAX_ROWS_PER_PK=400@ring_idx@nonexistent";
 
 --echo #
---echo # Case 17: Error - TTL and MAX_ROWS_PER_PK mutual exclusion
+--echo # Case 17: TTL and MAX_ROWS_PER_PK combined - success
 --echo #
 
---error ER_ILLEGAL_HA_CREATE_OPTION
+# A TTL ring buffer table: the TTL purge reclaims expired rows, the ring
+# meta row never expires. DML semantics are covered by ttl_ring_buffer.test.
 CREATE TABLE test.t17 (
     client_id INT NOT NULL,
     ring_idx INT NOT NULL DEFAULT 0,
@@ -247,6 +248,21 @@ CREATE TABLE test.t17 (
     PRIMARY KEY (client_id, ring_idx)
 ) ENGINE = NDB,
   COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+
+SHOW CREATE TABLE test.t17;
+DROP TABLE test.t17;
+
+# DATETIME TTL column works the same way
+CREATE TABLE test.t17_dt (
+    client_id INT NOT NULL,
+    ring_idx INT NOT NULL DEFAULT 0,
+    ring_meta VARBINARY(64),
+    ts DATETIME,
+    PRIMARY KEY (client_id, ring_idx)
+) ENGINE = NDB,
+  COMMENT="NDB_TABLE=TTL=60@ts,MAX_ROWS_PER_PK=400@ring_idx@ring_meta";
+
+DROP TABLE test.t17_dt;
 
 --echo #
 --echo # Case 17b: Error - fully replicated and MAX_ROWS_PER_PK mutual exclusion
