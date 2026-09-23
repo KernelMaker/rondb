@@ -4615,6 +4615,17 @@ public:
         Roptype != ZUPDATE && Roptype != ZDELETE &&
         Roptype != ZREFRESH) return false;
     if (regOperPtr->ring_buffer_op) return false;
+    /*
+     * An only-expired delete (the TTL purge reclaiming an expired row)
+     * passes without ring_buffer_op. The flag is inherited from the
+     * only-expired scan whose lock the delete takes over, and
+     * handleDeleteReq rejects such a delete on a live row, so it can only
+     * remove an expired data row; that never breaks a ring invariant
+     * (Ring_meta.count is a span of occupied slots, not an exact count).
+     * The NDB API rejects only-expired combined with ignore-TTL (4360), so
+     * an only-expired delete cannot skip the expiry check.
+     */
+    if (Roptype == ZDELETE && regOperPtr->ttl_only_expired) return false;
     return !is_replica_applier;
   }
 

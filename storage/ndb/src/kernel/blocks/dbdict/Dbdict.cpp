@@ -6485,11 +6485,9 @@ void Dbdict::handleTabInfoInit(Signal *signal, SchemaTransPtr &trans_ptr,
     tabRequire(c_tableDesc.RingIdxColumnNo != RNIL &&
                    c_tableDesc.RingMetaColumnNo != RNIL,
                CreateTableRef::InvalidFormat);
-    /* TTL and ring buffer are mutually exclusive: the meta row's TTL
-       column would read as 0 = expired and be filtered/purged. */
-    tabRequire(!(c_tableDesc.TTLSec != RNIL &&
-                 c_tableDesc.TTLColumnNo != RNIL),
-               CreateTableRef::InvalidFormat);
+    /* TTL and ring buffer may be combined: DBTUP treats the meta row as
+       never expiring (checkTTL is skipped for it) and lets the TTL purge's
+       only-expired deletes through the ring write guard. */
     /* Fully-replicated copy triggers carry no ring-buffer flag. */
     tabRequire((tablePtr.p->m_bits & TableRecord::TR_FullyReplicated) == 0,
                CreateTableRef::InvalidFormat);
@@ -10019,6 +10017,24 @@ void Dbdict::alterTable_parse(Signal *signal, bool master, SchemaOpPtr op_ptr,
   impl_req->ringBufferSize = newTablePtr.p->ringBufferSize;
   impl_req->ringIdxColumnNo = newTablePtr.p->ringIdxColNo;
   impl_req->ringMetaColumnNo = newTablePtr.p->ringMetaColNo;
+  if (tablePtr.p->ringBufferSize != RNIL) {
+    jam();
+    /* TTL on a ring buffer table is a creation-time property: the TTL
+       seconds may change, but TTL cannot be enabled or disabled on an
+       existing ring buffer table (enabling leaves meta rows written before
+       with a zero TTL column, disabling makes deleteOldest legal on a ring
+       with purged holes). The MySQL handler rejects this too; the raw NDB
+       API (setTTLSec + alterTable) reaches DICT directly. */
+    const bool old_ttl = (tablePtr.p->ttlSec != RNIL &&
+                          tablePtr.p->ttlColumnNo != RNIL);
+    const bool new_ttl = (impl_req->ttlSec != RNIL &&
+                          impl_req->ttlColumnNo != RNIL);
+    if (old_ttl != new_ttl) {
+      jam();
+      setError(error, AlterTableRef::UnsupportedChange, __LINE__);
+      return;
+    }
+  }
   g_eventLogger->info("[DICT], alterTable_parse(), AlterTableReq on Table "
                        "%u, [%u, %u]",
                        impl_req->tableId,
